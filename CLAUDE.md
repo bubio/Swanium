@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-The Cargo workspace skeleton exists (Phase 0 of `docs/dev/DevelopmentPlan.md`). All crates currently compile but are stubs except `crates/common` (error/config/logging skeleton). CPU, memory, PPU, APU, DMA, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap and current target phase.
+Phase 1 of `docs/dev/DevelopmentPlan.md` is in progress. `crates/core/src/cpu` implements the V30MZ register file, flags, ModRM decoding, and a representative instruction subset (MOV, ADD/OR/ADC/SBB/AND/SUB/XOR/CMP and their immediate/group forms, INC/DEC, PUSH/POP, JMP/Jcc/CALL/RET, flag instructions, NOP/HLT) against a `MemoryBus` trait, using a test-only flat-memory implementation. Unimplemented opcodes panic via `unimplemented!` with the opcode value — this is expected and will shrink as Phase 1 continues. Memory map, interrupts, timers, DMA, PPU, APU, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap.
 
 Read `docs/dev/Blueprint.md` (vision/architecture) and `docs/dev/DevelopmentPlan.md` (phased roadmap, cycle-accuracy design notes, RetroAchievements-compatibility constraints, test strategy) before making non-trivial changes.
 

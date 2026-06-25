@@ -13,3 +13,10 @@ members = [
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[workspace.lints.rust]
+future-incompatible = "warn"
+nonstandard_style = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = 10 }
