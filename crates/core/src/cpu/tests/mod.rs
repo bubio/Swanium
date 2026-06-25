@@ -1,6 +1,7 @@
 use super::{Cpu, MemoryBus};
 
 mod alu;
+mod bit_ops;
 mod ctrl_flow;
 mod mov_stack;
 

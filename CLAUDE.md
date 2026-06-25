@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 of `docs/dev/DevelopmentPlan.md` is in progress. `crates/core/src/cpu` implements the V30MZ register file, flags, ModRM decoding, and a representative instruction subset (MOV, ADD/OR/ADC/SBB/AND/SUB/XOR/CMP and their immediate/group forms, INC/DEC, PUSH/POP, JMP/Jcc/CALL/RET, flag instructions, NOP/HLT) against a `MemoryBus` trait, using a test-only flat-memory implementation. Unimplemented opcodes panic via `unimplemented!` with the opcode value — this is expected and will shrink as Phase 1 continues. Memory map, interrupts, timers, DMA, PPU, APU, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap.
+Phase 1 of `docs/dev/DevelopmentPlan.md` is in progress. `crates/core/src/cpu` implements the V30MZ register file, flags, ModRM decoding, and a broad instruction subset against a `MemoryBus` trait, using a test-only flat-memory implementation:
+
+- Data movement: MOV, XCHG, PUSH/POP, LAHF/SAHF/PUSHF/POPF, XLAT, CBW/CWD.
+- Arithmetic/logic: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP/TEST and their immediate/group forms, INC/DEC, NOT/NEG, MUL/IMUL/DIV/IDIV (group F6/F7), shift/rotate group (D0-D3).
+- Control flow: JMP/Jcc/CALL/RET, LOOP/LOOPE/LOOPNE/JCXZ, flag instructions, NOP/HLT.
+
+Still unimplemented (panics via `unimplemented!` with a message): segment override prefixes, string instructions (MOVS/CMPS/SCAS/LODS/STOS) and REP, IN/OUT port I/O, INT/IRET (DIV/IDIV by zero or overflow also defer to this — real hardware raises INT0), far jumps/calls, AAA/AAS/AAM/AAD (BCD — flagged as a V30MZ-vs-8086 risk area pending hardware verification), and segment register MOV/PUSH/POP. Memory map, interrupt controller, timers, DMA, PPU, APU, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap.
+
+The workspace has lint configuration in the root `Cargo.toml` (`[workspace.lints]`), inherited by each crate via `[lints]\nworkspace = true` — plain `cargo clippy` enforces `-D warnings`-equivalent behavior without needing the explicit flag.
 
 Read `docs/dev/Blueprint.md` (vision/architecture) and `docs/dev/DevelopmentPlan.md` (phased roadmap, cycle-accuracy design notes, RetroAchievements-compatibility constraints, test strategy) before making non-trivial changes.
 

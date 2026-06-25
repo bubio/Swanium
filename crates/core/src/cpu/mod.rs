@@ -6,6 +6,7 @@
 //! instruction decoder/executor.
 
 mod alu_ops;
+mod bit_ops;
 mod bus;
 mod ctrl_ops;
 mod decode;
@@ -20,6 +21,7 @@ pub use flags::Flags;
 pub use registers::Registers;
 
 use alu_ops::alu_op_from_reg_field;
+use bit_ops::shift_op_from_reg_field;
 use bus::linear_address;
 use decode::{decode_modrm, RegMem};
 
@@ -279,6 +281,303 @@ impl Cpu {
                 self.regs.ip = self.pop16(bus);
                 self.regs.sp = self.regs.sp.wrapping_add(extra);
                 17
+            }
+            0xE0 => {
+                // LOOPNE/LOOPNZ
+                let rel = self.fetch_u8(bus) as i8;
+                self.regs.cx = self.regs.cx.wrapping_sub(1);
+                if self.regs.cx != 0 && !self.flags.zero {
+                    self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
+                    19
+                } else {
+                    5
+                }
+            }
+            0xE1 => {
+                // LOOPE/LOOPZ
+                let rel = self.fetch_u8(bus) as i8;
+                self.regs.cx = self.regs.cx.wrapping_sub(1);
+                if self.regs.cx != 0 && self.flags.zero {
+                    self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
+                    18
+                } else {
+                    6
+                }
+            }
+            0xE2 => {
+                // LOOP
+                let rel = self.fetch_u8(bus) as i8;
+                self.regs.cx = self.regs.cx.wrapping_sub(1);
+                if self.regs.cx != 0 {
+                    self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
+                    17
+                } else {
+                    5
+                }
+            }
+            0xE3 => {
+                // JCXZ
+                let rel = self.fetch_u8(bus) as i8;
+                if self.regs.cx == 0 {
+                    self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
+                    18
+                } else {
+                    6
+                }
+            }
+
+            // XCHG
+            0x86 => {
+                let m = decode_modrm(self, bus);
+                let a = self.read_rm8(bus, &m.rm);
+                let b = self.regs.get_reg8(m.reg);
+                self.write_rm8(bus, &m.rm, b);
+                self.regs.set_reg8(m.reg, a);
+                Self::cycles_for(&m.rm, 2)
+            }
+            0x87 => {
+                let m = decode_modrm(self, bus);
+                let a = self.read_rm16(bus, &m.rm);
+                let b = self.regs.get_reg16(m.reg);
+                self.write_rm16(bus, &m.rm, b);
+                self.regs.set_reg16(m.reg, a);
+                Self::cycles_for(&m.rm, 2)
+            }
+            0x91..=0x97 => {
+                let i = opcode & 0x07;
+                let a = self.regs.ax;
+                let b = self.regs.get_reg16(i);
+                self.regs.ax = b;
+                self.regs.set_reg16(i, a);
+                3
+            }
+
+            // TEST
+            0x84 => {
+                let m = decode_modrm(self, bus);
+                let a = self.read_rm8(bus, &m.rm);
+                let b = self.regs.get_reg8(m.reg);
+                self.test_u8(a, b);
+                Self::cycles_for(&m.rm, 1)
+            }
+            0x85 => {
+                let m = decode_modrm(self, bus);
+                let a = self.read_rm16(bus, &m.rm);
+                let b = self.regs.get_reg16(m.reg);
+                self.test_u16(a, b);
+                Self::cycles_for(&m.rm, 1)
+            }
+            0xA8 => {
+                let imm = self.fetch_u8(bus);
+                let a = self.regs.get_reg8(0);
+                self.test_u8(a, imm);
+                4
+            }
+            0xA9 => {
+                let imm = self.fetch_u16(bus);
+                self.test_u16(self.regs.ax, imm);
+                4
+            }
+
+            // Sign extension / flags transfer
+            0x98 => {
+                // CBW
+                self.regs.ax = (self.regs.ax as u8 as i8 as i16) as u16;
+                2
+            }
+            0x99 => {
+                // CWD
+                self.regs.dx = if self.regs.ax & 0x8000 != 0 { 0xFFFF } else { 0 };
+                5
+            }
+            0x9C => {
+                // PUSHF
+                let v = self.flags.to_u16();
+                self.push16(bus, v);
+                10
+            }
+            0x9D => {
+                // POPF
+                let v = self.pop16(bus);
+                self.flags = Flags::from_u16(v);
+                8
+            }
+            0x9E => {
+                // SAHF
+                let ah = self.regs.get_reg8(4);
+                let high = self.flags.to_u16() & 0xFF00;
+                self.flags = Flags::from_u16(high | ah as u16);
+                4
+            }
+            0x9F => {
+                // LAHF
+                self.regs.set_reg8(4, (self.flags.to_u16() & 0xFF) as u8);
+                4
+            }
+
+            // XLAT: AL = [DS:BX+AL]
+            0xD7 => {
+                let offset = self.regs.bx.wrapping_add(self.regs.get_reg8(0) as u16);
+                let addr = linear_address(self.regs.ds, offset);
+                let v = bus.read_u8(addr);
+                self.regs.set_reg8(0, v);
+                11
+            }
+
+            // Shift/rotate group
+            0xD0 => {
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let a = self.read_rm8(bus, &m.rm);
+                let r = self.shift_u8(op, a, 1);
+                self.write_rm8(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 2)
+            }
+            0xD1 => {
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let a = self.read_rm16(bus, &m.rm);
+                let r = self.shift_u16(op, a, 1);
+                self.write_rm16(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 2)
+            }
+            0xD2 => {
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let count = self.regs.get_reg8(1);
+                let a = self.read_rm8(bus, &m.rm);
+                let r = self.shift_u8(op, a, count);
+                self.write_rm8(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 8)
+            }
+            0xD3 => {
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let count = self.regs.get_reg8(1);
+                let a = self.read_rm16(bus, &m.rm);
+                let r = self.shift_u16(op, a, count);
+                self.write_rm16(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 8)
+            }
+
+            // Group F6/F7: TEST/NOT/NEG/MUL/IMUL/DIV/IDIV
+            0xF6 => {
+                let m = decode_modrm(self, bus);
+                match m.reg & 0b111 {
+                    0 | 1 => {
+                        let imm = self.fetch_u8(bus);
+                        let a = self.read_rm8(bus, &m.rm);
+                        self.test_u8(a, imm);
+                        Self::cycles_for(&m.rm, 4)
+                    }
+                    2 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        self.write_rm8(bus, &m.rm, !a);
+                        Self::cycles_for(&m.rm, 2)
+                    }
+                    3 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        let r = self.sub_u8(0, a, 0);
+                        self.write_rm8(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 2)
+                    }
+                    4 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        let al = self.regs.get_reg8(0);
+                        self.regs.ax = self.mul_u8(al, a);
+                        Self::cycles_for(&m.rm, 70)
+                    }
+                    5 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        let al = self.regs.get_reg8(0);
+                        self.regs.ax = self.imul_u8(al, a);
+                        Self::cycles_for(&m.rm, 80)
+                    }
+                    6 => {
+                        let divisor = self.read_rm8(bus, &m.rm);
+                        let dividend = self.regs.ax;
+                        let (quotient, remainder) = Cpu::div_u8(dividend, divisor)
+                            .unwrap_or_else(|| unimplemented!(
+                                "DIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
+                            ));
+                        self.regs.set_reg8(0, quotient);
+                        self.regs.set_reg8(4, remainder);
+                        Self::cycles_for(&m.rm, 80)
+                    }
+                    7 => {
+                        let divisor = self.read_rm8(bus, &m.rm) as i8;
+                        let dividend = self.regs.ax as i16;
+                        let (quotient, remainder) = Cpu::idiv_u8(dividend, divisor)
+                            .unwrap_or_else(|| unimplemented!(
+                                "IDIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
+                            ));
+                        self.regs.set_reg8(0, quotient as u8);
+                        self.regs.set_reg8(4, remainder as u8);
+                        Self::cycles_for(&m.rm, 100)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            0xF7 => {
+                let m = decode_modrm(self, bus);
+                match m.reg & 0b111 {
+                    0 | 1 => {
+                        let imm = self.fetch_u16(bus);
+                        let a = self.read_rm16(bus, &m.rm);
+                        self.test_u16(a, imm);
+                        Self::cycles_for(&m.rm, 4)
+                    }
+                    2 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        self.write_rm16(bus, &m.rm, !a);
+                        Self::cycles_for(&m.rm, 2)
+                    }
+                    3 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        let r = self.sub_u16(0, a, 0);
+                        self.write_rm16(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 2)
+                    }
+                    4 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        let ax = self.regs.ax;
+                        let product = self.mul_u16(ax, a);
+                        self.regs.ax = product as u16;
+                        self.regs.dx = (product >> 16) as u16;
+                        Self::cycles_for(&m.rm, 118)
+                    }
+                    5 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        let ax = self.regs.ax;
+                        let product = self.imul_u16(ax, a);
+                        self.regs.ax = product as u16;
+                        self.regs.dx = (product >> 16) as u16;
+                        Self::cycles_for(&m.rm, 128)
+                    }
+                    6 => {
+                        let divisor = self.read_rm16(bus, &m.rm);
+                        let dividend = ((self.regs.dx as u32) << 16) | self.regs.ax as u32;
+                        let (quotient, remainder) = Cpu::div_u16(dividend, divisor)
+                            .unwrap_or_else(|| unimplemented!(
+                                "DIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
+                            ));
+                        self.regs.ax = quotient;
+                        self.regs.dx = remainder;
+                        Self::cycles_for(&m.rm, 144)
+                    }
+                    7 => {
+                        let divisor = self.read_rm16(bus, &m.rm) as i16;
+                        let dividend = (((self.regs.dx as u32) << 16) | self.regs.ax as u32) as i32;
+                        let (quotient, remainder) = Cpu::idiv_u16(dividend, divisor)
+                            .unwrap_or_else(|| unimplemented!(
+                                "IDIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
+                            ));
+                        self.regs.ax = quotient as u16;
+                        self.regs.dx = remainder as u16;
+                        Self::cycles_for(&m.rm, 184)
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             // Misc / flag instructions
