@@ -30,7 +30,7 @@
 
 ## ローカル参考実装
 
--   `/Users/seiji/dev/_Emu/Original/WonderCrab` — Rust製のWonderSwanエミュレータ
+-   `~/dev/_Emu/Original/WonderCrab` — Rust製のWonderSwanエミュレータ
     （exerciseプロジェクト）。精度・パフォーマンスは限定的だが、以下のモジュール構成は
     Swaniumのサブシステム分割の参考になる:
     -   `src/bus`（io_bus: eeprom/keypad, mem_bus）
