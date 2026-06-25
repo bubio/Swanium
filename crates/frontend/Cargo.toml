@@ -1,0 +1,12 @@
+[package]
+name = "frontend"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+swanium-core = { path = "../core" }
+video = { path = "../video" }
+audio = { path = "../audio" }
+input = { path = "../input" }
