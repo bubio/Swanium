@@ -34,6 +34,13 @@ pub struct Cpu {
     pub regs: Registers,
     pub flags: Flags,
     pub halted: bool,
+    /// Set by a segment-override prefix opcode (0x26/2E/36/3E); used by
+    /// the immediately following instruction's effective-address calculation,
+    /// then cleared by `step`.
+    pub seg_override: Option<u16>,
+    /// Set by a REP/REPE/REPNE prefix (0xF3/0xF2); consumed by the
+    /// immediately following string instruction, then cleared by `step`.
+    pub rep_prefix: Option<u8>,
 }
 
 impl Cpu {
@@ -120,7 +127,12 @@ impl Cpu {
             return 1;
         }
         let opcode = self.fetch_u8(bus);
-        self.execute(opcode, bus)
+        let cycles = self.execute(opcode, bus);
+        // Prefix fields are consumed within the instruction; clear any residual
+        // state so a stale override cannot bleed into the next instruction.
+        self.seg_override = None;
+        self.rep_prefix = None;
+        cycles
     }
 
     fn execute<B: MemoryBus>(&mut self, opcode: u8, bus: &mut B) -> u32 {
@@ -615,9 +627,330 @@ impl Cpu {
                 2
             }
 
-            // INC/DEC r/m (group FE/FF, sub-forms 0/1 only; the remaining
-            // FF sub-forms — CALL/JMP/PUSH r/m — are deferred to a later
-            // phase).
+            // ── Segment-override prefixes ─────────────────────────────────
+            // Set seg_override, then decode and execute the next opcode so
+            // that decode_modrm (and string instructions) use the override.
+            0x26 => {
+                self.seg_override = Some(self.regs.es);
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+            0x2E => {
+                self.seg_override = Some(self.regs.cs);
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+            0x36 => {
+                self.seg_override = Some(self.regs.ss);
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+            0x3E => {
+                self.seg_override = Some(self.regs.ds);
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+
+            // ── REP / REPNE prefixes ──────────────────────────────────────
+            0xF2 | 0xF3 => {
+                self.rep_prefix = Some(opcode);
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+
+            // ── Segment register PUSH / POP ───────────────────────────────
+            0x06 => {
+                let v = self.regs.es;
+                self.push16(bus, v);
+                10
+            }
+            0x07 => {
+                self.regs.es = self.pop16(bus);
+                8
+            }
+            0x0E => {
+                let v = self.regs.cs;
+                self.push16(bus, v);
+                10
+            }
+            0x16 => {
+                let v = self.regs.ss;
+                self.push16(bus, v);
+                10
+            }
+            0x17 => {
+                self.regs.ss = self.pop16(bus);
+                8
+            }
+            0x1E => {
+                let v = self.regs.ds;
+                self.push16(bus, v);
+                10
+            }
+            0x1F => {
+                self.regs.ds = self.pop16(bus);
+                8
+            }
+
+            // ── BCD adjustment ────────────────────────────────────────────
+            // V30MZ vs 8086 differences in AAA/AAS/AAM/AAD are a documented
+            // risk area; see "リスクと不確実性への対処方針" in
+            // docs/dev/DevelopmentPlan.md. The 8086 behaviour is implemented
+            // here as a starting point and will be corrected when hardware
+            // test results become available.
+            0x27 => {
+                // DAA: Decimal Adjust AL after Addition
+                let al = self.regs.ax as u8;
+                let mut result = al;
+                let mut cf = false;
+                if (al & 0xF) > 9 || self.flags.aux_carry {
+                    result = result.wrapping_add(6);
+                    self.flags.aux_carry = true;
+                } else {
+                    self.flags.aux_carry = false;
+                }
+                if al > 0x99 || self.flags.carry {
+                    result = result.wrapping_add(0x60);
+                    cf = true;
+                }
+                self.flags.carry = cf;
+                self.regs.ax = (self.regs.ax & 0xFF00) | result as u16;
+                self.set_zsp8(result);
+                4
+            }
+            0x2F => {
+                // DAS: Decimal Adjust AL after Subtraction
+                let al = self.regs.ax as u8;
+                let mut result = al;
+                let mut cf = false;
+                if (al & 0xF) > 9 || self.flags.aux_carry {
+                    result = result.wrapping_sub(6);
+                    self.flags.aux_carry = true;
+                } else {
+                    self.flags.aux_carry = false;
+                }
+                if al > 0x99 || self.flags.carry {
+                    result = result.wrapping_sub(0x60);
+                    cf = true;
+                }
+                self.flags.carry = cf;
+                self.regs.ax = (self.regs.ax & 0xFF00) | result as u16;
+                self.set_zsp8(result);
+                4
+            }
+            0x37 => {
+                // AAA: ASCII Adjust after Addition
+                let al = self.regs.ax as u8;
+                let ah = (self.regs.ax >> 8) as u8;
+                if (al & 0xF) > 9 || self.flags.aux_carry {
+                    let new_al = al.wrapping_add(6) & 0x0F;
+                    let new_ah = ah.wrapping_add(1);
+                    self.regs.ax = (new_ah as u16) << 8 | new_al as u16;
+                    self.flags.aux_carry = true;
+                    self.flags.carry = true;
+                } else {
+                    self.regs.ax = (ah as u16) << 8 | (al as u16 & 0x0F);
+                    self.flags.aux_carry = false;
+                    self.flags.carry = false;
+                }
+                8
+            }
+            0x3F => {
+                // AAS: ASCII Adjust after Subtraction
+                let al = self.regs.ax as u8;
+                let ah = (self.regs.ax >> 8) as u8;
+                if (al & 0xF) > 9 || self.flags.aux_carry {
+                    let new_al = al.wrapping_sub(6) & 0x0F;
+                    let new_ah = ah.wrapping_sub(1);
+                    self.regs.ax = (new_ah as u16) << 8 | new_al as u16;
+                    self.flags.aux_carry = true;
+                    self.flags.carry = true;
+                } else {
+                    self.regs.ax = (ah as u16) << 8 | (al as u16 & 0x0F);
+                    self.flags.aux_carry = false;
+                    self.flags.carry = false;
+                }
+                8
+            }
+            0xD4 => {
+                // AAM imm8: AH = AL / imm8; AL = AL mod imm8
+                let base = self.fetch_u8(bus);
+                if base == 0 {
+                    unimplemented!(
+                        "AAM divide by zero must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
+                    );
+                }
+                let al = self.regs.ax as u8;
+                let new_ah = al / base;
+                let new_al = al % base;
+                self.regs.ax = (new_ah as u16) << 8 | new_al as u16;
+                self.set_zsp8(new_al);
+                83
+            }
+            0xD5 => {
+                // AAD imm8: AL = AH * imm8 + AL; AH = 0
+                let base = self.fetch_u8(bus);
+                let al = self.regs.ax as u8;
+                let ah = (self.regs.ax >> 8) as u8;
+                let result = ah.wrapping_mul(base).wrapping_add(al);
+                self.regs.ax = result as u16;
+                self.set_zsp8(result);
+                60
+            }
+
+            // ── MOV: memory direct (0xA0–0xA3) ───────────────────────────
+            0xA0 => {
+                let offset = self.fetch_u16(bus);
+                let seg = self.seg_override.unwrap_or(self.regs.ds);
+                let v = bus.read_u8(linear_address(seg, offset));
+                self.regs.set_reg8(0, v);
+                10
+            }
+            0xA1 => {
+                let offset = self.fetch_u16(bus);
+                let seg = self.seg_override.unwrap_or(self.regs.ds);
+                let v = bus.read_u16(linear_address(seg, offset));
+                self.regs.ax = v;
+                10
+            }
+            0xA2 => {
+                let offset = self.fetch_u16(bus);
+                let seg = self.seg_override.unwrap_or(self.regs.ds);
+                let v = self.regs.get_reg8(0);
+                bus.write_u8(linear_address(seg, offset), v);
+                11
+            }
+            0xA3 => {
+                let offset = self.fetch_u16(bus);
+                let seg = self.seg_override.unwrap_or(self.regs.ds);
+                let v = self.regs.ax;
+                bus.write_u16(linear_address(seg, offset), v);
+                11
+            }
+
+            // ── Segment register MOV ──────────────────────────────────────
+            0x8C => {
+                // MOV r/m16, Sreg
+                let m = decode_modrm(self, bus);
+                let v = self.regs.get_sreg(m.reg);
+                self.write_rm16(bus, &m.rm, v);
+                Self::cycles_for(&m.rm, 2)
+            }
+            0x8E => {
+                // MOV Sreg, r/m16
+                let m = decode_modrm(self, bus);
+                let v = self.read_rm16(bus, &m.rm);
+                self.regs.set_sreg(m.reg, v);
+                Self::cycles_for(&m.rm, 2)
+            }
+
+            // ── LEA ───────────────────────────────────────────────────────
+            0x8D => {
+                // LEA reg16, m: load 16-bit effective address (no memory
+                // access, no segment applied). decode_modrm applies the
+                // segment and returns a 20-bit physical address, which is
+                // wrong for LEA — use the dedicated lea_decode helper instead.
+                let (reg, ea) = self.lea_decode(bus);
+                self.regs.set_reg16(reg, ea);
+                2
+            }
+
+            // ── LES / LDS ─────────────────────────────────────────────────
+            0xC4 => {
+                // LES reg16, m32
+                let m = decode_modrm(self, bus);
+                let addr = match m.rm {
+                    RegMem::Mem(a) => a,
+                    RegMem::Reg(_) => {
+                        unimplemented!("LES requires a memory operand")
+                    }
+                };
+                let off = bus.read_u16(addr);
+                let seg = bus.read_u16(addr.wrapping_add(2));
+                self.regs.set_reg16(m.reg, off);
+                self.regs.es = seg;
+                16
+            }
+            0xC5 => {
+                // LDS reg16, m32
+                let m = decode_modrm(self, bus);
+                let addr = match m.rm {
+                    RegMem::Mem(a) => a,
+                    RegMem::Reg(_) => {
+                        unimplemented!("LDS requires a memory operand")
+                    }
+                };
+                let off = bus.read_u16(addr);
+                let seg = bus.read_u16(addr.wrapping_add(2));
+                self.regs.set_reg16(m.reg, off);
+                self.regs.ds = seg;
+                16
+            }
+
+            // ── ENTER / LEAVE ─────────────────────────────────────────────
+            0xC8 => {
+                // ENTER size, level — only level 0 implemented (the common
+                // case; nested frame construction would be rare on WonderSwan)
+                let size = self.fetch_u16(bus);
+                let level = self.fetch_u8(bus) & 0x1F;
+                if level != 0 {
+                    unimplemented!("ENTER with nesting level {level} not yet implemented (Phase 1)");
+                }
+                let bp = self.regs.bp;
+                self.push16(bus, bp);
+                self.regs.bp = self.regs.sp;
+                self.regs.sp = self.regs.sp.wrapping_sub(size);
+                25
+            }
+            0xC9 => {
+                // LEAVE: SP = BP; POP BP
+                self.regs.sp = self.regs.bp;
+                self.regs.bp = self.pop16(bus);
+                8
+            }
+
+            // ── Far CALL / JMP / RET ──────────────────────────────────────
+            0x9A => {
+                // CALL far ptr16:16 — push CS:IP, jump to new_cs:new_ip
+                let new_ip = self.fetch_u16(bus);
+                let new_cs = self.fetch_u16(bus);
+                let ret_cs = self.regs.cs;
+                let ret_ip = self.regs.ip;
+                self.push16(bus, ret_cs);
+                self.push16(bus, ret_ip);
+                self.regs.ip = new_ip;
+                self.regs.cs = new_cs;
+                23
+            }
+            0xCA => {
+                // RET far imm16
+                let extra = self.fetch_u16(bus);
+                self.regs.ip = self.pop16(bus);
+                self.regs.cs = self.pop16(bus);
+                self.regs.sp = self.regs.sp.wrapping_add(extra);
+                25
+            }
+            0xCB => {
+                // RET far
+                self.regs.ip = self.pop16(bus);
+                self.regs.cs = self.pop16(bus);
+                22
+            }
+            0xEA => {
+                // JMP far ptr16:16
+                let new_ip = self.fetch_u16(bus);
+                let new_cs = self.fetch_u16(bus);
+                self.regs.ip = new_ip;
+                self.regs.cs = new_cs;
+                15
+            }
+
+            // ── String instructions (MOVS/CMPS/STOS/LODS/SCAS) ───────────
+            0xA4 | 0xA5 | 0xA6 | 0xA7 | 0xAA | 0xAB | 0xAC | 0xAD | 0xAE | 0xAF => {
+                self.exec_string_op(bus, opcode)
+            }
+
+            // ── INC/DEC r/m (group FE/FF) ─────────────────────────────────
             0xFE => {
                 let m = decode_modrm(self, bus);
                 let a = self.read_rm8(bus, &m.rm);
@@ -631,20 +964,237 @@ impl Cpu {
             }
             0xFF => {
                 let m = decode_modrm(self, bus);
-                let a = self.read_rm16(bus, &m.rm);
-                let r = match m.reg & 0b111 {
-                    0 => self.inc_u16(a),
-                    1 => self.dec_u16(a),
-                    other => unimplemented!("opcode 0xFF reg field {other} not yet implemented"),
-                };
-                self.write_rm16(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 1)
+                match m.reg & 0b111 {
+                    0 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        let r = self.inc_u16(a);
+                        self.write_rm16(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 1)
+                    }
+                    1 => {
+                        let a = self.read_rm16(bus, &m.rm);
+                        let r = self.dec_u16(a);
+                        self.write_rm16(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 1)
+                    }
+                    2 => {
+                        // CALL near indirect
+                        let target = self.read_rm16(bus, &m.rm);
+                        let ret_ip = self.regs.ip;
+                        self.push16(bus, ret_ip);
+                        self.regs.ip = target;
+                        Self::cycles_for(&m.rm, 16)
+                    }
+                    3 => {
+                        // CALL far indirect: [rm] = ip, [rm+2] = cs
+                        let addr = match m.rm {
+                            RegMem::Mem(a) => a,
+                            RegMem::Reg(_) => {
+                                unimplemented!("CALL far indirect requires memory operand")
+                            }
+                        };
+                        let new_ip = bus.read_u16(addr);
+                        let new_cs = bus.read_u16(addr.wrapping_add(2));
+                        let ret_cs = self.regs.cs;
+                        let ret_ip = self.regs.ip;
+                        self.push16(bus, ret_cs);
+                        self.push16(bus, ret_ip);
+                        self.regs.ip = new_ip;
+                        self.regs.cs = new_cs;
+                        37
+                    }
+                    4 => {
+                        // JMP near indirect
+                        let target = self.read_rm16(bus, &m.rm);
+                        self.regs.ip = target;
+                        Self::cycles_for(&m.rm, 9)
+                    }
+                    5 => {
+                        // JMP far indirect: [rm] = ip, [rm+2] = cs
+                        let addr = match m.rm {
+                            RegMem::Mem(a) => a,
+                            RegMem::Reg(_) => {
+                                unimplemented!("JMP far indirect requires memory operand")
+                            }
+                        };
+                        let new_ip = bus.read_u16(addr);
+                        let new_cs = bus.read_u16(addr.wrapping_add(2));
+                        self.regs.ip = new_ip;
+                        self.regs.cs = new_cs;
+                        24
+                    }
+                    6 => {
+                        // PUSH r/m16
+                        let v = self.read_rm16(bus, &m.rm);
+                        self.push16(bus, v);
+                        Self::cycles_for(&m.rm, 10)
+                    }
+                    other => {
+                        unimplemented!("opcode 0xFF reg field {other} is not defined on 8086")
+                    }
+                }
             }
 
             _ => unimplemented!(
                 "opcode {:#04X} is not yet implemented (Phase 1 covers a representative subset; see docs/dev/DevelopmentPlan.md)",
                 opcode
             ),
+        }
+    }
+
+    /// Decodes a ModRM byte and returns `(reg, 16-bit-EA-offset)` without
+    /// applying any segment register. This is the correct path for LEA, which
+    /// stores the raw offset rather than reading from or writing to memory.
+    fn lea_decode<B: MemoryBus>(&mut self, bus: &mut B) -> (u8, u16) {
+        let byte = self.fetch_u8(bus);
+        let md = byte >> 6;
+        let reg = (byte >> 3) & 0b111;
+        let rm = byte & 0b111;
+
+        if md == 0b11 {
+            // Undefined behaviour for register operand; return the register
+            // value as a best-effort (no real program should do this).
+            return (reg, self.regs.get_reg16(rm));
+        }
+
+        if md == 0b00 && rm == 0b110 {
+            let disp = self.fetch_u16(bus);
+            return (reg, disp);
+        }
+
+        let base: u16 = match rm {
+            0b000 => self.regs.bx.wrapping_add(self.regs.si),
+            0b001 => self.regs.bx.wrapping_add(self.regs.di),
+            0b010 => self.regs.bp.wrapping_add(self.regs.si),
+            0b011 => self.regs.bp.wrapping_add(self.regs.di),
+            0b100 => self.regs.si,
+            0b101 => self.regs.di,
+            0b110 => self.regs.bp,
+            0b111 => self.regs.bx,
+            _ => unreachable!(),
+        };
+
+        let disp: u16 = match md {
+            0b00 => 0,
+            0b01 => self.fetch_u8(bus) as i8 as i16 as u16,
+            0b10 => self.fetch_u16(bus),
+            _ => unreachable!(),
+        };
+
+        (reg, base.wrapping_add(disp))
+    }
+
+    /// Executes one string instruction opcode, with REP/REPE/REPNE looping
+    /// if `self.rep_prefix` is set. Returns the total cycle count.
+    fn exec_string_op<B: MemoryBus>(&mut self, bus: &mut B, op: u8) -> u32 {
+        let src_seg = self.seg_override.unwrap_or(self.regs.ds);
+        let base_cycles: u32 = match op {
+            0xA4 | 0xA5 => 8,
+            0xA6 | 0xA7 => 22,
+            0xAA | 0xAB => 7,
+            0xAC | 0xAD => 12,
+            0xAE | 0xAF => 15,
+            _ => unreachable!(),
+        };
+
+        let Some(rep) = self.rep_prefix else {
+            self.string_step(bus, op, src_seg);
+            return base_cycles;
+        };
+
+        // REP loop: execute while CX != 0, with optional ZF check for
+        // REPE (0xF3) and REPNE (0xF2) on CMPS/SCAS.
+        let mut count = self.regs.cx;
+        let mut total = 0u32;
+        while count != 0 {
+            self.string_step(bus, op, src_seg);
+            count -= 1;
+            self.regs.cx = count;
+            total += base_cycles;
+            let check_zf = matches!(op, 0xA6 | 0xA7 | 0xAE | 0xAF);
+            if check_zf {
+                if rep == 0xF3 && !self.flags.zero {
+                    break;
+                }
+                if rep == 0xF2 && self.flags.zero {
+                    break;
+                }
+            }
+        }
+        total
+    }
+
+    /// Performs one iteration of a string instruction, updating SI/DI
+    /// according to the direction flag.
+    fn string_step<B: MemoryBus>(&mut self, bus: &mut B, op: u8, src_seg: u16) {
+        let wide = op & 1 != 0;
+        let step: u16 = if wide { 2 } else { 1 };
+        let delta: u16 = if self.flags.direction {
+            step.wrapping_neg()
+        } else {
+            step
+        };
+
+        match op {
+            0xA4 => {
+                let v = bus.read_u8(linear_address(src_seg, self.regs.si));
+                bus.write_u8(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xA5 => {
+                let v = bus.read_u16(linear_address(src_seg, self.regs.si));
+                bus.write_u16(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xA6 => {
+                let a = bus.read_u8(linear_address(src_seg, self.regs.si));
+                let b = bus.read_u8(linear_address(self.regs.es, self.regs.di));
+                self.sub_u8(a, b, 0);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xA7 => {
+                let a = bus.read_u16(linear_address(src_seg, self.regs.si));
+                let b = bus.read_u16(linear_address(self.regs.es, self.regs.di));
+                self.sub_u16(a, b, 0);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xAA => {
+                let v = self.regs.get_reg8(0);
+                bus.write_u8(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xAB => {
+                let v = self.regs.ax;
+                bus.write_u16(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xAC => {
+                let v = bus.read_u8(linear_address(src_seg, self.regs.si));
+                self.regs.set_reg8(0, v);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+            }
+            0xAD => {
+                let v = bus.read_u16(linear_address(src_seg, self.regs.si));
+                self.regs.ax = v;
+                self.regs.si = self.regs.si.wrapping_add(delta);
+            }
+            0xAE => {
+                let a = self.regs.get_reg8(0);
+                let b = bus.read_u8(linear_address(self.regs.es, self.regs.di));
+                self.sub_u8(a, b, 0);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0xAF => {
+                let a = self.regs.ax;
+                let b = bus.read_u16(linear_address(self.regs.es, self.regs.di));
+                self.sub_u16(a, b, 0);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            _ => unreachable!(),
         }
     }
 

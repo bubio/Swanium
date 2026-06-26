@@ -4,6 +4,7 @@ mod alu;
 mod bit_ops;
 mod ctrl_flow;
 mod mov_stack;
+mod segment_string;
 
 /// Flat 1 MiB memory used only for Phase 1 CPU unit tests. Phase 2 replaces
 /// this with the real WonderSwan memory map (RAM/I/O/cartridge dispatch);

@@ -79,4 +79,25 @@ impl Registers {
             _ => unreachable!(),
         }
     }
+
+    /// Segment register index encoding: 0=ES, 1=CS, 2=SS, 3=DS.
+    pub fn get_sreg(&self, index: u8) -> u16 {
+        match index & 0b11 {
+            0 => self.es,
+            1 => self.cs,
+            2 => self.ss,
+            3 => self.ds,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn set_sreg(&mut self, index: u8, value: u16) {
+        match index & 0b11 {
+            0 => self.es = value,
+            1 => self.cs = value,
+            2 => self.ss = value,
+            3 => self.ds = value,
+            _ => unreachable!(),
+        }
+    }
 }

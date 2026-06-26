@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 of `docs/dev/DevelopmentPlan.md` is in progress. `crates/core/src/cpu` implements the V30MZ register file, flags, ModRM decoding, and a broad instruction subset against a `MemoryBus` trait, using a test-only flat-memory implementation:
+Phase 1 of `docs/dev/DevelopmentPlan.md` is substantially complete (80 unit tests). `crates/core/src/cpu` implements the V30MZ register file, flags, ModRM decoding, and a near-complete 8086-compatible instruction set against a `MemoryBus` trait, using a test-only flat-memory implementation:
 
-- Data movement: MOV, XCHG, PUSH/POP, LAHF/SAHF/PUSHF/POPF, XLAT, CBW/CWD.
-- Arithmetic/logic: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP/TEST and their immediate/group forms, INC/DEC, NOT/NEG, MUL/IMUL/DIV/IDIV (group F6/F7), shift/rotate group (D0-D3).
-- Control flow: JMP/Jcc/CALL/RET, LOOP/LOOPE/LOOPNE/JCXZ, flag instructions, NOP/HLT.
+- Data movement: MOV (all forms incl. segment registers and memory-direct 0xA0–0xA3), XCHG, PUSH/POP (incl. segment register forms), LAHF/SAHF/PUSHF/POPF, XLAT, CBW/CWD, LEA, LES, LDS.
+- Arithmetic/logic: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP/TEST and their immediate/group forms, INC/DEC, NOT/NEG, MUL/IMUL/DIV/IDIV (group F6/F7), shift/rotate group (D0-D3), BCD instructions DAA/DAS/AAA/AAS/AAM/AAD.
+- Control flow: JMP (near/far)/Jcc/CALL (near/far)/RET (near/far), LOOP/LOOPE/LOOPNE/JCXZ, flag instructions, NOP/HLT, ENTER/LEAVE, indirect CALL/JMP/PUSH via Group FF.
+- String instructions: MOVS/CMPS/SCAS/LODS/STOS (byte and word, 0xA4–0xAF) with REP/REPE/REPNE (0xF2/0xF3).
+- Prefixes: segment override (0x26 ES:, 0x2E CS:, 0x36 SS:, 0x3E DS:) stored in `Cpu::seg_override`; REP stored in `Cpu::rep_prefix`.
 
-Still unimplemented (panics via `unimplemented!` with a message): segment override prefixes, string instructions (MOVS/CMPS/SCAS/LODS/STOS) and REP, IN/OUT port I/O, INT/IRET (DIV/IDIV by zero or overflow also defer to this — real hardware raises INT0), far jumps/calls, AAA/AAS/AAM/AAD (BCD — flagged as a V30MZ-vs-8086 risk area pending hardware verification), and segment register MOV/PUSH/POP. Memory map, interrupt controller, timers, DMA, PPU, APU, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap.
+Still deferred (panics via `unimplemented!`): IN/OUT port I/O (needs Phase 2 I/O bus), INT/IRET (needs interrupt controller — DIV/IDIV/AAM by zero also defer here), ENTER with nesting level > 0. Memory map, interrupt controller, timers, DMA, PPU, APU, and cartridge logic are not yet implemented — see `docs/dev/DevelopmentPlan.md` for the phase-by-phase roadmap.
 
 The workspace has lint configuration in the root `Cargo.toml` (`[workspace.lints]`), inherited by each crate via `[lints]\nworkspace = true` — plain `cargo clippy` enforces `-D warnings`-equivalent behavior without needing the explicit flag.
 

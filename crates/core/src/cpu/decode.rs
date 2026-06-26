@@ -16,10 +16,10 @@ pub struct ModRm {
 }
 
 /// Decodes a ModRM byte (and any trailing displacement) using the 8086/V30
-/// 16-bit addressing modes. Segment override prefixes are not yet supported
-/// (see Phase 2 of docs/dev/DevelopmentPlan.md); the default segment is SS
-/// for BP-based forms and DS otherwise, per the standard 8086 effective
-/// address table.
+/// 16-bit addressing modes. If `cpu.seg_override` is set (by a preceding
+/// segment-override prefix opcode), that segment is used instead of the
+/// default DS/SS. The default segment is SS for BP-based forms and DS
+/// otherwise, per the standard 8086 effective address table.
 pub fn decode_modrm<B: MemoryBus>(cpu: &mut Cpu, bus: &mut B) -> ModRm {
     let byte = cpu.fetch_u8(bus);
     let md = byte >> 6;
@@ -34,11 +34,12 @@ pub fn decode_modrm<B: MemoryBus>(cpu: &mut Cpu, bus: &mut B) -> ModRm {
     }
 
     if md == 0b00 && rm == 0b110 {
-        // Direct address: disp16, no base register, default segment DS.
+        // Direct address: disp16, no base register.
         let disp = cpu.fetch_u16(bus);
+        let seg = cpu.seg_override.unwrap_or(cpu.regs.ds);
         return ModRm {
             reg,
-            rm: RegMem::Mem(linear_address(cpu.regs.ds, disp)),
+            rm: RegMem::Mem(linear_address(seg, disp)),
         };
     }
 
@@ -62,7 +63,8 @@ pub fn decode_modrm<B: MemoryBus>(cpu: &mut Cpu, bus: &mut B) -> ModRm {
     };
 
     let offset = base.wrapping_add(disp);
-    let segment = if uses_bp { cpu.regs.ss } else { cpu.regs.ds };
+    let default_seg = if uses_bp { cpu.regs.ss } else { cpu.regs.ds };
+    let segment = cpu.seg_override.unwrap_or(default_seg);
     ModRm {
         reg,
         rm: RegMem::Mem(linear_address(segment, offset)),
