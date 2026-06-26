@@ -4,7 +4,7 @@ use crate::cpu::{Cpu, MemoryBus};
 // ── Memory map ───────────────────────────────────────────────────────────────
 
 #[test]
-fn test_wram_read_write() {
+fn wram_read_write() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_u8(0x0000, 0xAB);
     bus.write_u8(0x03FF, 0xCD);
@@ -15,7 +15,7 @@ fn test_wram_read_write() {
 }
 
 #[test]
-fn test_wram_word_roundtrip() {
+fn wram_word_roundtrip() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_u16(0x0100, 0xBEEF);
     assert_eq!(bus.read_u16(0x0100), 0xBEEF);
@@ -25,7 +25,7 @@ fn test_wram_word_roundtrip() {
 }
 
 #[test]
-fn test_open_bus_mono() {
+fn open_bus_returns_0x90_in_unmapped_range() {
     let bus = Bus::new(vec![0u8; 0x10000]);
     // 0x04000-0x0FFFF is open bus on mono
     assert_eq!(bus.read_u8(0x04000), 0x90);
@@ -33,7 +33,7 @@ fn test_open_bus_mono() {
 }
 
 #[test]
-fn test_rom_ex_boot_vector() {
+fn rom_ex_maps_to_last_rom_bytes_at_power_on() {
     // Last 16 bytes of a 64 KiB ROM should be visible at 0xFFFF0-0xFFFFF
     // when linear_off = 0xFF (power-on default).
     let mut rom = vec![0u8; 0x10000];
@@ -45,7 +45,7 @@ fn test_rom_ex_boot_vector() {
 }
 
 #[test]
-fn test_sram_read_write() {
+fn sram_read_write() {
     let rom = vec![0u8; 0x10000];
     let sram = vec![0u8; 0x10000];
     let mut bus = Bus::with_sram(rom, sram);
@@ -55,7 +55,7 @@ fn test_sram_read_write() {
 }
 
 #[test]
-fn test_rom_bank_switch() {
+fn rom_bank0_register_controls_0x20000_window() {
     // ROM bank 0 (I/O port 0xC2) controls what appears at 0x20000-0x2FFFF.
     let mut rom = vec![0u8; 0x30000]; // 192 KiB ROM
                                       // Bank 0 (bank_reg=0) → offset 0x00000-0x0FFFF
@@ -81,8 +81,7 @@ fn test_rom_bank_switch() {
 }
 
 #[test]
-fn test_rom_write_ignored() {
-    // Writes to ROM areas should be silently ignored.
+fn writes_to_rom_are_silently_ignored() {
     let mut bus = Bus::new(vec![0xAA; 0x10000]);
     bus.write_u8(0xFFFF0, 0x00);
     assert_eq!(bus.read_u8(0xFFFF0), 0xAA);
@@ -91,7 +90,7 @@ fn test_rom_write_ignored() {
 // ── I/O port basics ──────────────────────────────────────────────────────────
 
 #[test]
-fn test_io_port_raw_write_read() {
+fn io_port_raw_write_reads_back() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Port 0x00 (DISP_CTRL) – no special handling, raw R/W
     bus.write_io(0x00, 0x42);
@@ -99,7 +98,7 @@ fn test_io_port_raw_write_read() {
 }
 
 #[test]
-fn test_io_int_enable_vblank_always_set() {
+fn int_enable_vblank_bit_is_always_set() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Writing with bit 6 clear should still return bit 6 set on read
     bus.write_io(0xB2, 0b0000_0001);
@@ -107,7 +106,7 @@ fn test_io_int_enable_vblank_always_set() {
 }
 
 #[test]
-fn test_io_int_cause_clear() {
+fn int_cause_clear_port_clears_selected_bits() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.request_irq(IrqSource::VBlank);
     bus.request_irq(IrqSource::HBlankTimer);
@@ -120,7 +119,7 @@ fn test_io_int_cause_clear() {
 }
 
 #[test]
-fn test_io_gdma_ctrl_self_clears_on_read() {
+fn gdma_ctrl_self_clears_on_read() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Write 0xC0 (enable + direction bits) directly via shadow
     bus.write_io(0x48, 0xC0);
@@ -134,21 +133,20 @@ fn test_io_gdma_ctrl_self_clears_on_read() {
 // ── Interrupt controller ─────────────────────────────────────────────────────
 
 #[test]
-fn test_pending_irq_none_when_disabled() {
+fn pending_irq_is_none_at_startup() {
     let bus = Bus::new(vec![0u8; 0x10000]);
-    // No pending IRQs at startup
     assert!(bus.pending_irq().is_none());
 }
 
 #[test]
-fn test_pending_irq_vblank_not_pending_until_event() {
+fn vblank_irq_not_pending_before_on_vblank() {
     let bus = Bus::new(vec![0u8; 0x10000]);
     // VBlank is enabled but not yet pending
     assert!(bus.pending_irq().is_none());
 }
 
 #[test]
-fn test_pending_irq_fires_after_vblank_event() {
+fn vblank_irq_fires_after_on_vblank() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.on_vblank();
     // VBlank (bit 6) should now be pending
@@ -159,7 +157,7 @@ fn test_pending_irq_fires_after_vblank_event() {
 }
 
 #[test]
-fn test_pending_irq_respects_int_enable() {
+fn pending_irq_only_returns_enabled_sources() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Enable only GDMA (bit 3)
     bus.write_io(0xB2, 1 << IrqSource::GdmaComplete as u8);
@@ -171,7 +169,7 @@ fn test_pending_irq_respects_int_enable() {
 }
 
 #[test]
-fn test_int_base_register() {
+fn int_base_offsets_vector_number() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Set INT_BASE to 8 via raw port write (port 0xB0)
     bus.write_io(0xB0, 8);
@@ -182,7 +180,7 @@ fn test_int_base_register() {
 }
 
 #[test]
-fn test_priority_highest_bit_wins() {
+fn highest_priority_bit_wins_when_multiple_pending() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Enable all interrupts
     bus.write_io(0xB2, 0xFF);
@@ -197,7 +195,7 @@ fn test_priority_highest_bit_wins() {
 // ── Timer ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_hblank_timer_fires_at_period() {
+fn hblank_timer_fires_when_counter_reaches_zero() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Enable all interrupts
     bus.write_io(0xB2, 0xFF);
@@ -218,7 +216,7 @@ fn test_hblank_timer_fires_at_period() {
 }
 
 #[test]
-fn test_hblank_timer_auto_reload() {
+fn hblank_timer_reloads_counter_when_auto_reload_set() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0xB2, 0xFF);
     // HBlank timer with auto-reload (bits 0 and 1)
@@ -240,7 +238,7 @@ fn test_hblank_timer_auto_reload() {
 }
 
 #[test]
-fn test_vblank_timer_fires_at_period() {
+fn vblank_timer_fires_when_counter_reaches_zero() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0xB2, 0xFF);
     // Enable VBlank timer (bit 2) without auto-reload
@@ -261,7 +259,7 @@ fn test_vblank_timer_fires_at_period() {
 // ── GDMA ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_gdma_basic_transfer() {
+fn gdma_transfers_bytes_from_rom_to_wram() {
     // Transfer 4 bytes from ROM linear range to WRAM.
     // ROM: linear_off=0xFF → last 16 bytes of 64 KiB ROM are at 0xFFFF0-0xFFFFF.
     // For simplicity, place source data at ROM offset 0xFFF0 (last 16 bytes).
@@ -303,7 +301,7 @@ fn test_gdma_basic_transfer() {
 }
 
 #[test]
-fn test_gdma_not_active_without_enable_bit() {
+fn gdma_does_not_transfer_without_enable_bit() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.wram[0x10] = 0xAB;
     // Do NOT set the enable bit in port 0x48
@@ -313,7 +311,7 @@ fn test_gdma_not_active_without_enable_bit() {
 }
 
 #[test]
-fn test_gdma_clears_enable_after_transfer() {
+fn gdma_clears_enable_bit_after_transfer() {
     let rom = vec![0xFFu8; 0x10000];
     let mut bus = Bus::new(rom);
     bus.write_io(0x44, 0x00);
@@ -329,7 +327,7 @@ fn test_gdma_clears_enable_after_transfer() {
 // ── CPU INT / IRET / IN / OUT (integration tests via Bus) ───────────────────
 
 #[test]
-fn test_cpu_int_instruction_jumps_to_vector() {
+fn int_instruction_jumps_to_ivt_vector() {
     // Set up IVT: INT 0x10 → CS:IP = 0x0000:0x0200
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Vector 0x10 is at physical 0x40 (= 0x10 * 4)
@@ -351,7 +349,7 @@ fn test_cpu_int_instruction_jumps_to_vector() {
 }
 
 #[test]
-fn test_cpu_iret_restores_state() {
+fn iret_restores_ip_cs_and_flags() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Set up IVT: INT 5 → 0x0000:0x0300
     let ivt_addr = 5 * 4;
@@ -381,7 +379,7 @@ fn test_cpu_iret_restores_state() {
 }
 
 #[test]
-fn test_cpu_into_no_overflow() {
+fn into_does_not_trigger_when_overflow_clear() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.wram[0x0100] = 0xCE; // INTO
     let mut cpu = Cpu::new();
@@ -394,7 +392,7 @@ fn test_cpu_into_no_overflow() {
 }
 
 #[test]
-fn test_cpu_in_out_port() {
+fn in_out_imm_port_reads_and_writes_io() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Code: OUT 0xA0, AL  (0xE6 0xA0); IN AL, 0xA0  (0xE4 0xA0)
     bus.wram[0x0100] = 0xE6;
@@ -412,7 +410,7 @@ fn test_cpu_in_out_port() {
 }
 
 #[test]
-fn test_cpu_in_out_dx() {
+fn in_out_dx_uses_dx_as_port_number() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Code: OUT DX, AL  (0xEE); IN AL, DX  (0xEC)
     bus.wram[0x0100] = 0xEE;
@@ -429,7 +427,7 @@ fn test_cpu_in_out_dx() {
 }
 
 #[test]
-fn test_cpu_handle_irq_via_bus() {
+fn cpu_handle_irq_reads_ivt_from_wram() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // IVT: vector 6 (VBlank) → 0x0000:0x0400
     bus.wram[6 * 4] = 0x00;

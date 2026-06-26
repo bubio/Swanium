@@ -50,9 +50,9 @@ pub enum IrqSource {
 /// | 0x40000–0xFFFFF     | Cartridge ROM linear range            |
 pub struct Bus {
     /// 64 KiB work RAM (only first 16 KiB accessible on WonderSwan mono).
-    wram: Box<[u8; 0x10000]>,
+    wram: Box<[u8]>,
     /// Cartridge ROM, SRAM, and bank-switch registers.
-    pub cart: Cartridge,
+    cart: Cartridge,
     /// Shadow of all 256 I/O port registers.
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
@@ -63,7 +63,7 @@ impl Bus {
     /// Create a bus with the given ROM bytes (and no SRAM).
     pub fn new(rom: Vec<u8>) -> Self {
         let mut bus = Self {
-            wram: Box::new([0u8; 0x10000]),
+            wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, Vec::new()),
             ports: [0u8; 0x100],
         };
@@ -75,12 +75,22 @@ impl Bus {
     /// Create a bus with the given ROM and SRAM bytes.
     pub fn with_sram(rom: Vec<u8>, sram: Vec<u8>) -> Self {
         let mut bus = Self {
-            wram: Box::new([0u8; 0x10000]),
+            wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, sram),
             ports: [0u8; 0x100],
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
+    }
+
+    /// Returns a shared reference to the cartridge (ROM, SRAM, bank registers).
+    pub fn cart(&self) -> &Cartridge {
+        &self.cart
+    }
+
+    /// Returns a mutable reference to the cartridge.
+    pub fn cart_mut(&mut self) -> &mut Cartridge {
+        &mut self.cart
     }
 
     // ── Interrupt controller ──────────────────────────────────────────────

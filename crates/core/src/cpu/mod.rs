@@ -44,10 +44,12 @@ pub struct Cpu {
 }
 
 impl Cpu {
+    /// Returns a CPU in its power-on state (all registers zero, not halted).
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Resets all CPU state and positions the instruction pointer at `cs:ip`.
     pub fn reset(&mut self, cs: u16, ip: u16) {
         *self = Cpu::default();
         self.regs.cs = cs;

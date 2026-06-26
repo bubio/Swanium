@@ -417,3 +417,41 @@ tests/
     最適化する」方針を取る。**精度を犠牲にした高速化は採用しない。**
 -   **ライセンス・著作権の懸念**: 公開テストROM、商用ROMのテストフィクスチャ利用について、
     配布可能性を個別に確認し、リポジトリには配布不可なバイナリを含めない運用を徹底する。
+
+------------------------------------------------------------------------
+
+# 10. Rust ベストプラクティス 残作業
+
+Phase 1/2 のコードレビュー（Apollo Rust Best Practices Handbook 準拠）で識別された、
+後フェーズで対応予定の改善項目を記録する。
+
+## 10.1 テスト: 1テスト1アサーション原則 (Ch. 5.1)
+
+現状、`bus/tests.rs` 内の一部テストが複数のプロパティを1テスト内でアサートしており、
+失敗時の診断が困難になる可能性がある。理想的には1テストにつき1アサーションとすること。
+
+対象テスト（複数アサーションが残っているもの）:
+
+| テスト名 | アサーション数 | 内容 |
+|---|---|---|
+| `wram_word_roundtrip` | 3 | round-trip・lo byte・hi byte |
+| `iret_restores_ip_cs_and_flags` | 3 | IP・CS・IF |
+| `int_instruction_jumps_to_ivt_vector` | 3 | IP・CS・IF |
+| `cpu_handle_irq_reads_ivt_from_wram` | 3 | IP・IF・halted |
+| `gdma_transfers_bytes_from_rom_to_wram` | 5 | 4バイト + IRQ cause |
+
+**対応フェーズ**: Phase 3 着手前（テストインフラ整備時）に `rstest` パラメトリックテストまたは
+個別テスト分割で対応する。
+
+## 10.2 ドキュメント: 公開 API 全体への `///` doc コメント (Ch. 8.7)
+
+現状、`Registers` のアクセサメソッド群（`get_reg8`・`set_reg8`・`get_reg16`・`set_reg16` 等）、
+および `Cartridge` の一部メソッドに `///` doc コメントがない。
+将来 `#![deny(missing_docs)]` を有効化する際の事前作業として以下を対応する:
+
+-   `Registers` の全 `pub` メソッドへの `///` 追加
+-   `Cpu` の `pub(crate)` に格上げ候補となるヘルパーへの doc 付与
+-   `MemoryBus` トレイトのデフォルト実装メソッドへの `# Panics` セクション追加
+
+**対応フェーズ**: Phase 6（カートリッジ/公開 API 安定化）時に `#![deny(missing_docs)]` を
+追加するとともに一括対応する。
