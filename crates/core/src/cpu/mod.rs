@@ -118,6 +118,30 @@ impl Cpu {
         }
     }
 
+    /// Dispatch a hardware (or software-triggered) interrupt with `vector`.
+    ///
+    /// Saves FLAGS / CS / IP to the stack, clears IF and TF, then jumps to
+    /// the far pointer stored in the interrupt vector table at physical
+    /// address `vector * 4` (standard 8086 IVT layout in WRAM).
+    ///
+    /// The caller is responsible for checking `self.flags.interrupt` before
+    /// calling this for maskable hardware IRQs.  This method always executes
+    /// (used for NMI, software INT, and divide-by-zero as well).
+    pub fn handle_irq<B: MemoryBus>(&mut self, bus: &mut B, vector: u8) {
+        let flags = self.flags.to_u16();
+        self.push16(bus, flags);
+        let cs = self.regs.cs;
+        let ip = self.regs.ip;
+        self.push16(bus, cs);
+        self.push16(bus, ip);
+        self.flags.interrupt = false;
+        self.flags.trap = false;
+        let vec_addr = (vector as u32) * 4;
+        self.regs.ip = bus.read_u16(vec_addr);
+        self.regs.cs = bus.read_u16(vec_addr + 2);
+        self.halted = false;
+    }
+
     /// Executes a single instruction and returns the number of clock cycles
     /// it consumed. Phase 1 models cycle cost per *instruction*; a future
     /// phase may decompose this into a true per-clock `step_cycle()` once
@@ -508,24 +532,26 @@ impl Cpu {
                     6 => {
                         let divisor = self.read_rm8(bus, &m.rm);
                         let dividend = self.regs.ax;
-                        let (quotient, remainder) = Cpu::div_u8(dividend, divisor)
-                            .unwrap_or_else(|| unimplemented!(
-                                "DIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
-                            ));
+                        let cycles = Self::cycles_for(&m.rm, 80);
+                        let Some((quotient, remainder)) = Cpu::div_u8(dividend, divisor) else {
+                            self.handle_irq(bus, 0); // INT 0: divide overflow
+                            return cycles;
+                        };
                         self.regs.set_reg8(0, quotient);
                         self.regs.set_reg8(4, remainder);
-                        Self::cycles_for(&m.rm, 80)
+                        cycles
                     }
                     7 => {
                         let divisor = self.read_rm8(bus, &m.rm) as i8;
                         let dividend = self.regs.ax as i16;
-                        let (quotient, remainder) = Cpu::idiv_u8(dividend, divisor)
-                            .unwrap_or_else(|| unimplemented!(
-                                "IDIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
-                            ));
+                        let cycles = Self::cycles_for(&m.rm, 100);
+                        let Some((quotient, remainder)) = Cpu::idiv_u8(dividend, divisor) else {
+                            self.handle_irq(bus, 0); // INT 0: divide overflow
+                            return cycles;
+                        };
                         self.regs.set_reg8(0, quotient as u8);
                         self.regs.set_reg8(4, remainder as u8);
-                        Self::cycles_for(&m.rm, 100)
+                        cycles
                     }
                     _ => unreachable!(),
                 }
@@ -569,24 +595,26 @@ impl Cpu {
                     6 => {
                         let divisor = self.read_rm16(bus, &m.rm);
                         let dividend = ((self.regs.dx as u32) << 16) | self.regs.ax as u32;
-                        let (quotient, remainder) = Cpu::div_u16(dividend, divisor)
-                            .unwrap_or_else(|| unimplemented!(
-                                "DIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
-                            ));
+                        let cycles = Self::cycles_for(&m.rm, 144);
+                        let Some((quotient, remainder)) = Cpu::div_u16(dividend, divisor) else {
+                            self.handle_irq(bus, 0); // INT 0: divide overflow
+                            return cycles;
+                        };
                         self.regs.ax = quotient;
                         self.regs.dx = remainder;
-                        Self::cycles_for(&m.rm, 144)
+                        cycles
                     }
                     7 => {
                         let divisor = self.read_rm16(bus, &m.rm) as i16;
                         let dividend = (((self.regs.dx as u32) << 16) | self.regs.ax as u32) as i32;
-                        let (quotient, remainder) = Cpu::idiv_u16(dividend, divisor)
-                            .unwrap_or_else(|| unimplemented!(
-                                "IDIV by zero or quotient overflow must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
-                            ));
+                        let cycles = Self::cycles_for(&m.rm, 184);
+                        let Some((quotient, remainder)) = Cpu::idiv_u16(dividend, divisor) else {
+                            self.handle_irq(bus, 0); // INT 0: divide overflow
+                            return cycles;
+                        };
                         self.regs.ax = quotient as u16;
                         self.regs.dx = remainder as u16;
-                        Self::cycles_for(&m.rm, 184)
+                        cycles
                     }
                     _ => unreachable!(),
                 }
@@ -776,9 +804,8 @@ impl Cpu {
                 // AAM imm8: AH = AL / imm8; AL = AL mod imm8
                 let base = self.fetch_u8(bus);
                 if base == 0 {
-                    unimplemented!(
-                        "AAM divide by zero must raise INT0; deferred to Phase 2 (see docs/dev/DevelopmentPlan.md)"
-                    );
+                    self.handle_irq(bus, 0); // INT 0: divide overflow
+                    return 83;
                 }
                 let al = self.regs.ax as u8;
                 let new_ah = al / base;
@@ -1033,6 +1060,93 @@ impl Cpu {
                         unimplemented!("opcode 0xFF reg field {other} is not defined on 8086")
                     }
                 }
+            }
+
+            // ── INT / IRET / INTO ─────────────────────────────────────────
+            0xCD => {
+                // INT n: software interrupt
+                let n = self.fetch_u8(bus);
+                self.handle_irq(bus, n);
+                51
+            }
+            0xCE => {
+                // INTO: INT 4 if overflow flag is set
+                if self.flags.overflow {
+                    self.handle_irq(bus, 4);
+                    53
+                } else {
+                    4
+                }
+            }
+            0xCF => {
+                // IRET: restore IP, CS, FLAGS from stack
+                self.regs.ip = self.pop16(bus);
+                self.regs.cs = self.pop16(bus);
+                let flags = self.pop16(bus);
+                self.flags = Flags::from_u16(flags);
+                32
+            }
+
+            // ── IN / OUT port I/O ─────────────────────────────────────────
+            0xE4 => {
+                // IN AL, imm8
+                let port = self.fetch_u8(bus);
+                let v = bus.read_io(port);
+                self.regs.set_reg8(0, v);
+                10
+            }
+            0xE5 => {
+                // IN AX, imm8
+                let port = self.fetch_u8(bus);
+                let lo = bus.read_io(port) as u16;
+                let hi = bus.read_io(port.wrapping_add(1)) as u16;
+                self.regs.ax = lo | (hi << 8);
+                10
+            }
+            0xE6 => {
+                // OUT imm8, AL
+                let port = self.fetch_u8(bus);
+                let v = self.regs.get_reg8(0);
+                bus.write_io(port, v);
+                10
+            }
+            0xE7 => {
+                // OUT imm8, AX
+                let port = self.fetch_u8(bus);
+                let v = self.regs.ax;
+                bus.write_io(port, v as u8);
+                bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
+                10
+            }
+            0xEC => {
+                // IN AL, DX
+                let port = self.regs.dx as u8;
+                let v = bus.read_io(port);
+                self.regs.set_reg8(0, v);
+                8
+            }
+            0xED => {
+                // IN AX, DX
+                let port = self.regs.dx as u8;
+                let lo = bus.read_io(port) as u16;
+                let hi = bus.read_io(port.wrapping_add(1)) as u16;
+                self.regs.ax = lo | (hi << 8);
+                8
+            }
+            0xEE => {
+                // OUT DX, AL
+                let port = self.regs.dx as u8;
+                let v = self.regs.get_reg8(0);
+                bus.write_io(port, v);
+                8
+            }
+            0xEF => {
+                // OUT DX, AX
+                let port = self.regs.dx as u8;
+                let v = self.regs.ax;
+                bus.write_io(port, v as u8);
+                bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
+                8
             }
 
             _ => unimplemented!(

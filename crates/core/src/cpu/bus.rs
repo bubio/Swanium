@@ -1,7 +1,10 @@
-/// Abstraction over the 20-bit (1 MiB) WonderSwan address space.
+/// Abstraction over the 20-bit (1 MiB) WonderSwan address space and
+/// the 8-bit I/O port space (0x00–0xFF).
 ///
-/// Phase 2 (see docs/dev/DevelopmentPlan.md) replaces test-only flat-memory
-/// implementations with the real memory map (RAM, I/O ports, cartridge ROM).
+/// Phase 2 (see docs/dev/DevelopmentPlan.md) provides the real WonderSwan
+/// `Bus` implementation. The default `read_io`/`write_io` return open-bus
+/// (0xFF) / no-op so that the Phase 1 flat-memory test stub requires no
+/// changes.
 pub trait MemoryBus {
     fn read_u8(&self, addr: u32) -> u8;
     fn write_u8(&mut self, addr: u32, value: u8);
@@ -15,6 +18,18 @@ pub trait MemoryBus {
     fn write_u16(&mut self, addr: u32, value: u16) {
         self.write_u8(addr, value as u8);
         self.write_u8(addr.wrapping_add(1), (value >> 8) as u8);
+    }
+
+    /// Read from an 8-bit I/O port. May have side effects on real hardware
+    /// (e.g. INT_CAUSE clears edge-triggered bits on read). Default: open bus.
+    fn read_io(&mut self, port: u8) -> u8 {
+        let _ = port;
+        0xFF
+    }
+
+    /// Write to an 8-bit I/O port. Default: no-op.
+    fn write_io(&mut self, port: u8, value: u8) {
+        let _ = (port, value);
     }
 }
 

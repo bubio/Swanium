@@ -142,14 +142,33 @@ fn div_rm8_computes_quotient_and_remainder() {
 }
 
 #[test]
-#[should_panic(expected = "INT0")]
-fn div_rm8_by_zero_panics_pending_int0_support() {
-    let _ = run_with(
-        |cpu| {
-            cpu.regs.ax = 0x000A;
-            cpu.regs.cx = 0x0000;
-        },
-        &[0xF6, 0xF1],
+fn div_rm8_by_zero_dispatches_int0() {
+    // Phase 2: div-by-zero now calls handle_irq(bus, 0) instead of panicking.
+    // With FlatMemory the code bytes at address 0x0000 also serve as the IVT
+    // entry for vector 0, so we only verify that the CPU does not panic and
+    // that FLAGS / CS / IP were saved to the stack (proving handle_irq ran).
+    use super::super::{Cpu, MemoryBus};
+    use super::FlatMemory;
+
+    let mut mem = FlatMemory::new();
+    // INT 0 vector placeholder at 0x00–0x03 (will be whatever bytes are there)
+    // Code: DIV CX  (F6 F1)  at 0x0200 so it doesn't collide with the IVT.
+    mem.load(0x0200, &[0xF6, 0xF1]);
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0x0200);
+    cpu.regs.sp = 0x3FFE;
+    cpu.regs.ax = 0x000A;
+    cpu.regs.cx = 0x0000; // divisor = 0 → triggers INT 0
+
+    // Must not panic; handle_irq saves FLAGS/CS/IP to the stack.
+    // handle_irq push order: FLAGS (→ 0x3FFC), CS (→ 0x3FFA), IP (→ 0x3FF8).
+    cpu.step(&mut mem);
+
+    // IP on the stack must be 0x0202 (past the 2-byte DIV CX instruction).
+    let stack_ip = mem.read_u16(0x3FF8);
+    assert_eq!(
+        stack_ip, 0x0202,
+        "handle_irq must push the post-DIV IP onto the stack"
     );
 }
 
