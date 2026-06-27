@@ -254,6 +254,205 @@ fn rep_movsb_copies_bytes_within_wram() {
     assert_eq!(bus.read_u8(0x00023), 0x00); // not overwritten
 }
 
+// ── Carry / borrow propagation ────────────────────────────────────────────────
+
+#[test]
+fn adc_includes_carry_from_previous_overflow() {
+    // ADD 0xFFFF + 1 → AX=0, CF=1; then ADC AX, 2 → AX=0+2+1=3.
+    //
+    //   0: B8 FF FF   MOV AX, 0xFFFF
+    //   3: BB 01 00   MOV BX, 1
+    //   6: 01 D8      ADD AX, BX      CF=1, AX=0
+    //   8: BB 02 00   MOV BX, 2
+    //  11: 11 D8      ADC AX, BX      AX = 0+2+CF(1) = 3
+    //  13: A3 00 00   MOV [0x0000], AX
+    //  16: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB8, 0xFF, 0xFF, // MOV AX, 0xFFFF
+        0xBB, 0x01, 0x00, // MOV BX, 1
+        0x01, 0xD8,       // ADD AX, BX   → AX=0, CF=1
+        0xBB, 0x02, 0x00, // MOV BX, 2
+        0x11, 0xD8,       // ADC AX, BX   → AX = 0+2+1 = 3
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 3);
+}
+
+#[test]
+fn sbb_subtracts_borrow_from_previous_underflow() {
+    // SUB 0 - 1 → AX=0xFFFF, CF=1; then SBB AX, DX(=0) → AX=0xFFFF-0-CF(1)=0xFFFE.
+    // DX is zeroed BEFORE the SUB so that no instruction between SUB and SBB
+    // touches CF (XOR would clear CF).
+    //
+    //   0: 31 C0      XOR AX, AX      AX=0, CF=0
+    //   2: BB 01 00   MOV BX, 1
+    //   5: 31 D2      XOR DX, DX      DX=0, CF=0  (before SUB sets CF)
+    //   7: 29 D8      SUB AX, BX      AX=0xFFFF, CF=1
+    //   9: 19 D0      SBB AX, DX      AX = 0xFFFF-0-CF(1) = 0xFFFE
+    //  11: A3 00 00   MOV [0x0000], AX
+    //  14: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0x31, 0xC0,       // XOR AX, AX
+        0xBB, 0x01, 0x00, // MOV BX, 1
+        0x31, 0xD2,       // XOR DX, DX  (zero DX before SUB sets CF)
+        0x29, 0xD8,       // SUB AX, BX  → AX=0xFFFF, CF=1
+        0x19, 0xD0,       // SBB AX, DX  → AX=0xFFFF-0-CF(1)=0xFFFE
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 0xFFFE);
+}
+
+// ── Bitwise / logical ─────────────────────────────────────────────────────────
+
+#[test]
+fn neg_produces_twos_complement() {
+    // NEG AX: AX = -5 (two's complement) = 0xFFFB.
+    //
+    //   0: B8 05 00   MOV AX, 5
+    //   3: F7 D8      NEG AX          AX = 0xFFFB
+    //   5: A3 00 00   MOV [0x0000], AX
+    //   8: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB8, 0x05, 0x00, // MOV AX, 5
+        0xF7, 0xD8,       // NEG AX
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 0xFFFBu16);
+}
+
+#[test]
+fn and_preserves_common_bits_only() {
+    // 0x0FFF & 0xF0F0 = 0x00F0.
+    //
+    //   0: B8 FF 0F   MOV AX, 0x0FFF
+    //   3: BB F0 F0   MOV BX, 0xF0F0
+    //   6: 21 D8      AND AX, BX
+    //   8: A3 00 00   MOV [0x0000], AX
+    //  11: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB8, 0xFF, 0x0F, // MOV AX, 0x0FFF
+        0xBB, 0xF0, 0xF0, // MOV BX, 0xF0F0
+        0x21, 0xD8,       // AND AX, BX
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 0x00F0);
+}
+
+// ── CMP ───────────────────────────────────────────────────────────────────────
+
+#[test]
+fn cmp_does_not_modify_destination_register() {
+    // CMP AX, BX flags the subtraction but must leave AX unchanged.
+    //
+    //   0: B8 2A 00   MOV AX, 42
+    //   3: BB 2A 00   MOV BX, 42
+    //   6: 3B C3      CMP AX, BX      flags set; AX unchanged
+    //   8: A3 00 00   MOV [0x0000], AX
+    //  11: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB8, 0x2A, 0x00, // MOV AX, 42
+        0xBB, 0x2A, 0x00, // MOV BX, 42
+        0x3B, 0xC3,       // CMP AX, BX
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 42);
+}
+
+// ── CALL / RET ────────────────────────────────────────────────────────────────
+
+#[test]
+fn call_near_jumps_to_subroutine_and_ret_returns_to_caller() {
+    // CALL rel16 pushes the return address and jumps to the subroutine.
+    // The subroutine loads AX=0xCDAB and returns.
+    //
+    // ROM layout (IP from offset 0):
+    //   0: E8 04 00   CALL +4  → push 3, jump to 7
+    //   3: A3 00 00   MOV [0x0000], AX   (executed after RET)
+    //   6: F4         HLT
+    //   7: B8 AB CD   MOV AX, 0xCDAB
+    //  10: C3         RET  → pop 3, jump to 3
+    #[rustfmt::skip]
+    let code = [
+        0xE8, 0x04, 0x00, // CALL +4   (next IP=3, target=3+4=7)
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+        0xB8, 0xAB, 0xCD, // MOV AX, 0xCDAB
+        0xC3,             // RET
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 0xCDAB);
+}
+
+// ── Segment registers ─────────────────────────────────────────────────────────
+
+#[test]
+fn mov_sreg_round_trips_value() {
+    // MOV DS, AX loads DS; MOV AX, DS reads it back.
+    // DS is restored to 0 before the final write so MOV [0x0000], AX uses DS=0.
+    //
+    //   0: B8 AB CD   MOV AX, 0xCDAB
+    //   3: 8E D8      MOV DS, AX          DS = 0xCDAB
+    //   5: 8C D8      MOV AX, DS          AX = DS = 0xCDAB
+    //   7: 31 D2      XOR DX, DX          DX = 0
+    //   9: 8E DA      MOV DS, DX          DS = 0  (restore for write)
+    //  11: A3 00 00   MOV [0x0000], AX
+    //  14: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB8, 0xAB, 0xCD, // MOV AX, 0xCDAB
+        0x8E, 0xD8,       // MOV DS, AX
+        0x8C, 0xD8,       // MOV AX, DS
+        0x31, 0xD2,       // XOR DX, DX
+        0x8E, 0xDA,       // MOV DS, DX
+        0xA3, 0x00, 0x00, // MOV [0x0000], AX
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u16(0x00000), 0xCDAB);
+}
+
+// ── BCD adjustment ────────────────────────────────────────────────────────────
+
+#[test]
+fn daa_adjusts_bcd_addition_to_packed_decimal() {
+    // BCD addition: 8 + 4 = 0x0C (binary); DAA corrects it to 0x12 (BCD).
+    // DAA adds 6 to AL when the lower nibble exceeds 9 (or AF is set).
+    //   0x0C + 6 = 0x12, which is BCD for decimal 12. ✓
+    //
+    //   0: B0 08      MOV AL, 8
+    //   2: B3 04      MOV BL, 4
+    //   4: 00 D8      ADD AL, BL      AL=0x0C (binary)
+    //   6: 27         DAA             AL=0x12 (BCD)
+    //   7: A2 00 00   MOV [0x0000], AL
+    //  10: F4         HLT
+    #[rustfmt::skip]
+    let code = [
+        0xB0, 0x08,       // MOV AL, 8
+        0xB3, 0x04,       // MOV BL, 4
+        0x00, 0xD8,       // ADD AL, BL
+        0x27,             // DAA
+        0xA2, 0x00, 0x00, // MOV [0x0000], AL
+        0xF4,             // HLT
+    ];
+    let (_, bus) = run_code(&code, 1_000);
+    assert_eq!(bus.read_u8(0x00000), 0x12);
+}
+
 // ── Halt ─────────────────────────────────────────────────────────────────────
 
 #[test]

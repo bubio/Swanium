@@ -1,3 +1,7 @@
-*
-!.gitkeep
-!.gitignore
+# Public test ROMs are NOT committed to this repository.
+# Download them separately and place them here.
+# See tests/README.md for URLs and placement instructions.
+*.ws
+*.wsc
+*.rom
+*.bin
