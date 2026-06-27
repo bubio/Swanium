@@ -75,8 +75,11 @@ const SPRITE_SIZE: usize = 8;
 const SPRITE_TABLE_LEN: usize = 128;
 
 /// Decoded view of the display-control register (I/O port 0x00).
+///
+/// Internal to the `ppu` module (and its tests); not part of the crate's
+/// public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplayControl {
+pub(crate) struct DisplayControl {
     /// Screen 1 (background layer 1) enabled.
     pub scr1_enabled: bool,
     /// Screen 2 (background layer 2) enabled.
@@ -96,7 +99,7 @@ impl DisplayControl {
     ///
     /// `ports` is the 256-entry I/O port shadow (`Bus` port array); only
     /// index [`DISP_CTRL`] is read.
-    pub fn from_ports(ports: &[u8]) -> Self {
+    pub(crate) fn from_ports(ports: &[u8]) -> Self {
         let v = ports[DISP_CTRL];
         Self {
             scr1_enabled: v & DISP_SCR1_ENABLE != 0,
@@ -214,9 +217,9 @@ enum BgLayer {
     Scr2,
 }
 
-/// A decoded 16-bit tile-map entry.
+/// A decoded 16-bit tile-map entry (internal to the `ppu` module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TileMapEntry {
+pub(crate) struct TileMapEntry {
     /// Tile number (9 bits on monochrome, 0–511).
     pub tile_idx: u16,
     /// Palette index (4 bits, 0–15); consumed by the palette resolver.
@@ -229,7 +232,7 @@ pub struct TileMapEntry {
 
 impl TileMapEntry {
     /// Decode a tile-map entry from its little-endian 16-bit word.
-    pub fn decode(word: u16) -> Self {
+    pub(crate) fn decode(word: u16) -> Self {
         Self {
             tile_idx: word & 0x01FF,
             palette: ((word >> 9) & 0x0F) as u8,
@@ -251,7 +254,7 @@ struct BgSample {
 /// `tile_idx` selects the 16-byte tile at [`TILE_DATA_BASE`]; `(tx, ty)` are
 /// the in-tile pixel coordinates (0–7). Each row is two bytes: plane 0 (low
 /// bit) then plane 1 (high bit), MSB = leftmost pixel.
-pub fn tile_pixel(wram: &[u8], tile_idx: u16, tx: usize, ty: usize) -> u8 {
+pub(crate) fn tile_pixel(wram: &[u8], tile_idx: u16, tx: usize, ty: usize) -> u8 {
     let addr = TILE_DATA_BASE + tile_idx as usize * TILE_BYTES + ty * 2;
     let plane0 = wram[addr];
     let plane1 = wram[addr + 1];
@@ -313,9 +316,10 @@ fn sample_background(
     }
 }
 
-/// A decoded 4-byte sprite attribute-table entry.
+/// A decoded 4-byte sprite attribute-table entry (internal to the `ppu`
+/// module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpriteEntry {
+pub(crate) struct SpriteEntry {
     /// Tile number (9 bits, 0–511).
     pub tile_idx: u16,
     /// Palette index (3 bits, 0–7); offset by 8 to select palettes 8–15.
@@ -338,7 +342,7 @@ pub struct SpriteEntry {
 impl SpriteEntry {
     /// Decode the 4-byte sprite entry at `addr` in WRAM. The first two bytes
     /// are the little-endian attribute word; byte 2 is Y, byte 3 is X.
-    pub fn decode(wram: &[u8], addr: usize) -> Self {
+    pub(crate) fn decode(wram: &[u8], addr: usize) -> Self {
         let word = u16::from_le_bytes([wram[addr], wram[addr + 1]]);
         Self {
             tile_idx: word & 0x01FF,

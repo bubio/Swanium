@@ -233,9 +233,25 @@ video               audio                input
 -   `render_scanline<R: PaletteResolver>` はジェネリックresolver引数を取り、`Bus::render_scanline`
     が `MonoPaletteResolver` を渡す。Phase 8でColor resolverに差し替え可能。
 -   合成順（背→前）: SCR1 → スプライト(priority 0) → SCR2 → スプライト(priority 1)。
--   スプライト1スキャンライン上限（実機32枚）・背景色レジスタは未実装（後続最適化/課題）。
 -   スプライトウィンドウのinside/outside意味は実機未確認（コードコメントで明記）。
+-   PPU内部型（`tile_pixel`/`SpriteEntry`/`TileMapEntry`/`DisplayControl`）は `pub(crate)`。
+    crate公開APIは `Ppu`/`SCREEN_WIDTH`/`SCREEN_HEIGHT`/`PaletteResolver`/`MonoPaletteResolver` のみ。
 -   テスト数: PPUユニット 61 + Bus統合 6 + `ppu_render.rs` 7 = Phase 4で +74。
+
+**Phase 4 後続課題（DevelopmentPlan §9 リスク管理に紐づく最適化・精度項目）**
+1.  **スプライト描画の最適化**: 現状 `render_scanline` はピクセル `x` ごとに priority 0/1 で
+    `sample_sprite` を2回呼び、毎回OAM全128件をデコードする（約 224×2×128 デコード/ライン）。
+    スキャンライン開始時にOAMを1度走査して該当スプライトを収集する方式へ変更する。
+    cycle-accuracy方針上、PPUをドット単位駆動へ移行する際に併せて実施するのが自然。
+2.  **スプライト1スキャンライン上限**: 実機は1ラインあたり最大32スプライト。現状は上限なし。
+    上記1の収集方式と同時に上限処理（オーバーフロー）を実装する。
+3.  **背景色レジスタ**: 全レイヤー透明時の背景色（DISP_CTRL上位ビット/専用レジスタ）が未実装。
+    現状は描画なし=shade 0 固定。
+4.  **`in_window` の引数整理**: ウィンドウ矩形ポート4つを個別引数で渡している。可読性向上のため
+    `WindowRect` 構造体等にまとめることを検討（軽微）。
+
+**対応フェーズ**: 1・2 はPPUドット単位駆動へのリファクタ時（cycle-accuracy強化フェーズ）。
+3・4 は任意タイミング（Phase 7のフロントエンド実プレイ前に1・2・3を推奨）。
 
 ---
 
