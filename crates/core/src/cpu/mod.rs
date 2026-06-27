@@ -1151,6 +1151,103 @@ impl Cpu {
                 8
             }
 
+            // ── 80186 / V30 instruction-set additions ────────────────────────
+            0x60 => {
+                // PUSHA: push AX, CX, DX, BX, the original SP, BP, SI, DI.
+                let sp = self.regs.sp;
+                self.push16(bus, self.regs.ax);
+                self.push16(bus, self.regs.cx);
+                self.push16(bus, self.regs.dx);
+                self.push16(bus, self.regs.bx);
+                self.push16(bus, sp);
+                self.push16(bus, self.regs.bp);
+                self.push16(bus, self.regs.si);
+                self.push16(bus, self.regs.di);
+                36
+            }
+            0x61 => {
+                // POPA: pop DI, SI, BP, (discarded SP slot), BX, DX, CX, AX.
+                self.regs.di = self.pop16(bus);
+                self.regs.si = self.pop16(bus);
+                self.regs.bp = self.pop16(bus);
+                let _ = self.pop16(bus);
+                self.regs.bx = self.pop16(bus);
+                self.regs.dx = self.pop16(bus);
+                self.regs.cx = self.pop16(bus);
+                self.regs.ax = self.pop16(bus);
+                36
+            }
+            0x62 => {
+                // BOUND r16, m16&16: INT 5 if the index is outside [lower, upper].
+                let m = decode_modrm(self, bus);
+                if let RegMem::Mem(addr) = m.rm {
+                    let index = self.regs.get_reg16(m.reg) as i16;
+                    let lower = bus.read_u16(addr) as i16;
+                    let upper = bus.read_u16(addr.wrapping_add(2)) as i16;
+                    if index < lower || index > upper {
+                        self.handle_irq(bus, 5); // INT 5: BOUND range exceeded
+                    }
+                }
+                13
+            }
+            0x68 => {
+                // PUSH imm16
+                let v = self.fetch_u16(bus);
+                self.push16(bus, v);
+                4
+            }
+            0x69 => {
+                // IMUL r16, r/m16, imm16
+                let m = decode_modrm(self, bus);
+                let src = self.read_rm16(bus, &m.rm);
+                let imm = self.fetch_u16(bus);
+                let product = self.imul_u16(src, imm);
+                self.regs.set_reg16(m.reg, product as u16);
+                Self::cycles_for(&m.rm, 30)
+            }
+            0x6A => {
+                // PUSH imm8 (sign-extended to 16 bits)
+                let v = self.fetch_u8(bus) as i8 as i16 as u16;
+                self.push16(bus, v);
+                4
+            }
+            0x6B => {
+                // IMUL r16, r/m16, imm8 (imm sign-extended)
+                let m = decode_modrm(self, bus);
+                let src = self.read_rm16(bus, &m.rm);
+                let imm = self.fetch_u8(bus) as i8 as i16 as u16;
+                let product = self.imul_u16(src, imm);
+                self.regs.set_reg16(m.reg, product as u16);
+                Self::cycles_for(&m.rm, 30)
+            }
+            0xC0 => {
+                // Shift/rotate r/m8, imm8
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let count = self.fetch_u8(bus);
+                let a = self.read_rm8(bus, &m.rm);
+                let r = self.shift_u8(op, a, count);
+                self.write_rm8(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 5)
+            }
+            0xC1 => {
+                // Shift/rotate r/m16, imm8
+                let m = decode_modrm(self, bus);
+                let op = shift_op_from_reg_field(m.reg);
+                let count = self.fetch_u8(bus);
+                let a = self.read_rm16(bus, &m.rm);
+                let r = self.shift_u16(op, a, count);
+                self.write_rm16(bus, &m.rm, r);
+                Self::cycles_for(&m.rm, 5)
+            }
+            0x8F => {
+                // POP r/m16 (reg field 0)
+                let m = decode_modrm(self, bus);
+                let v = self.pop16(bus);
+                self.write_rm16(bus, &m.rm, v);
+                Self::cycles_for(&m.rm, 8)
+            }
+
             _ => unimplemented!(
                 "opcode {:#04X} is not yet implemented (Phase 1 covers a representative subset; see docs/dev/DevelopmentPlan.md)",
                 opcode
