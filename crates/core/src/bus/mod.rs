@@ -10,6 +10,7 @@ mod tests;
 pub use cart::Cartridge;
 
 use crate::cpu::MemoryBus;
+use crate::ppu::{MonoPaletteResolver, Ppu};
 
 /// Open-bus return value for unmapped reads on WonderSwan mono.
 const OPEN_BUS: u8 = 0x90;
@@ -57,6 +58,8 @@ pub struct Bus {
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
     ports: [u8; 0x100],
+    /// Picture processing unit (renders from `wram` + display registers).
+    ppu: Ppu,
 }
 
 impl Bus {
@@ -66,6 +69,7 @@ impl Bus {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, Vec::new()),
             ports: [0u8; 0x100],
+            ppu: Ppu::new(),
         };
         // INT_ENABLE: VBLANK (bit 6) is always forced on.
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
@@ -78,6 +82,7 @@ impl Bus {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, sram),
             ports: [0u8; 0x100],
+            ppu: Ppu::new(),
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
@@ -260,6 +265,29 @@ impl Bus {
 
         self.ports[0xB4] |= (1 << IrqSource::GdmaComplete as u8) & self.ports[0xB2];
         cycles
+    }
+
+    // ── PPU ──────────────────────────────────────────────────────────────
+
+    /// Render visible scanline `line` (0–143) into the PPU framebuffer and
+    /// advance the per-scanline timing hooks: the LCD line-compare interrupt
+    /// ([`Bus::set_current_scanline`]) and the HBlank timer
+    /// ([`Bus::on_hblank`]).
+    ///
+    /// The frontend (or a future system-level driver) calls this once per
+    /// visible scanline, interleaved with CPU execution, then
+    /// [`Bus::on_vblank`] at the end of the frame.
+    pub fn render_scanline(&mut self, line: u8) {
+        self.ppu
+            .render_scanline(line, &self.wram, &self.ports, &MonoPaletteResolver);
+        self.set_current_scanline(line);
+        self.on_hblank();
+    }
+
+    /// The current PPU framebuffer: 224×144 monochrome shade indices,
+    /// row-major. Stable read API for the frontend and RetroAchievements.
+    pub fn framebuffer(&self) -> &[u8] {
+        self.ppu.framebuffer()
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────

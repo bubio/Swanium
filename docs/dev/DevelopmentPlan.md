@@ -205,6 +205,38 @@ video               audio                input
 -   可能であれば公開PPU検証テストROMを利用、無い場合は自作テストROM+フレームバッファの
     スナップショット比較（ハッシュ化）で回帰検出
 
+**設計上の確定事項（実装着手時に確認済み）**
+-   **VRAMは独立メモリではなく内蔵WRAM（0x0000–0x3FFF）を共有する**。タイルデータ・
+    タイルマップ・スプライトアテーブル（OAM）はすべてWRAM内に置かれ、PPUは `bus.wram` を
+    読んで描画する（WonderCrab `src/display/` 参照）。新規VRAMバッファは作らない。
+-   **駆動粒度**: スキャンライン単位で開始（`render_scanline` を1ラインずつ）。ドット単位
+    精度は将来のリファクタ余地としてAPI設計で残す。
+-   **フレームバッファ形式**: `[u8; 224*144]` のパレット解決済み濃淡インデックス
+    （モノクロは最終グレー濃淡 0–15）。RGBA展開は frontend/video 側が担当。
+-   **モノクロのパレット連鎖**: タイルピクセル(2bit) → パレット 0x20–0x3F の
+    プールインデックス(3bit) → 濃淡プール 0x1C–0x1F の濃淡(4bit) → フレームバッファ。
+    この解決を `PaletteResolver` トレイトで抽象化し、Phase 8でColor実装に差し替える。
+
+**サブフェーズ分解（実装単位）**
+
+| サブ | 内容 | 状態 |
+|---|---|---|
+| 4a | PPUスケルトン: `Ppu`構造体・フレームバッファ(224×144)・`DisplayControl`レジスタアクセサ・`lib.rs`へ`pub mod ppu` | ✅ 完了 |
+| 4b | タイルデコード(2bppプレーナー) + 背景レイヤー(SCR1/SCR2)スクロール・フリップ・`render_scanline` | ✅ 完了 |
+| 4c | `PaletteResolver`トレイト + `MonoPaletteResolver`（濃淡プール連鎖） | ✅ 完了 |
+| 4d | スプライトレイヤー(OAM): 4バイトエントリ・優先度・フリップ | ✅ 完了 |
+| 4e | ウィンドウマスク(SCR2 inside/outside・スプライトウィンドウ) | ✅ 完了 |
+| 4f | Bus統合(`Bus`が`Ppu`保持) + `render_scanline`/`framebuffer`公開 + スキャンライン同期 | ✅ 完了 |
+| 4g | テスト整備: 統合テスト `tests/ppu_render.rs`（public API + CPU→I/O→PPU経路） | ✅ 完了 |
+
+**実装メモ**
+-   `render_scanline<R: PaletteResolver>` はジェネリックresolver引数を取り、`Bus::render_scanline`
+    が `MonoPaletteResolver` を渡す。Phase 8でColor resolverに差し替え可能。
+-   合成順（背→前）: SCR1 → スプライト(priority 0) → SCR2 → スプライト(priority 1)。
+-   スプライト1スキャンライン上限（実機32枚）・背景色レジスタは未実装（後続最適化/課題）。
+-   スプライトウィンドウのinside/outside意味は実機未確認（コードコメントで明記）。
+-   テスト数: PPUユニット 61 + Bus統合 6 + `ppu_render.rs` 7 = Phase 4で +74。
+
 ---
 
 ## Phase 5 — APU実装（音声生成）

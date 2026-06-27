@@ -1,0 +1,449 @@
+//! WonderSwan PPU (Picture Processing Unit) — monochrome, tile-based 2D
+//! rendering.
+//!
+//! The PPU renders a 224×144 screen from tile data, tile maps, and a sprite
+//! attribute table that all live in the internal WRAM (0x0000–0x3FFF) shared
+//! with the CPU; there is no separate VRAM. Display registers are the I/O
+//! ports 0x00–0x3F, read here from the `Bus`'s shadow port array.
+//!
+//! Phase 4 (see `docs/dev/DevelopmentPlan.md`) drives the PPU one scanline at
+//! a time via [`Ppu::render_scanline`]. The framebuffer holds resolved
+//! monochrome shade indices (0–15); RGBA expansion happens in the frontend.
+//! A future phase may decompose rendering to per-dot timing.
+
+mod palette;
+
+#[cfg(test)]
+mod tests;
+
+pub use palette::{MonoPaletteResolver, PaletteResolver};
+
+/// Visible screen width in pixels.
+pub const SCREEN_WIDTH: usize = 224;
+/// Visible screen height in pixels (scanlines).
+pub const SCREEN_HEIGHT: usize = 144;
+
+/// Number of framebuffer entries (one shade index per pixel).
+const FRAMEBUFFER_LEN: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
+
+/// Display-control register (I/O port 0x00, low byte) layer/window bits.
+const DISP_CTRL: usize = 0x00;
+const DISP_SCR1_ENABLE: u8 = 1 << 0;
+const DISP_SCR2_ENABLE: u8 = 1 << 1;
+const DISP_SPR_ENABLE: u8 = 1 << 2;
+const DISP_SPR_WINDOW_ENABLE: u8 = 1 << 3;
+const DISP_SCR2_WINDOW_OUTSIDE: u8 = 1 << 4; // 0 = inside, 1 = outside
+const DISP_SCR2_WINDOW_ENABLE: u8 = 1 << 5;
+
+/// SCR2 window rectangle registers (inclusive bounds).
+const SCR2_WINDOW_X1: usize = 0x08;
+const SCR2_WINDOW_Y1: usize = 0x09;
+const SCR2_WINDOW_X2: usize = 0x0A;
+const SCR2_WINDOW_Y2: usize = 0x0B;
+/// Sprite window rectangle registers (inclusive bounds).
+const SPR_WINDOW_X1: usize = 0x0C;
+const SPR_WINDOW_Y1: usize = 0x0D;
+const SPR_WINDOW_X2: usize = 0x0E;
+const SPR_WINDOW_Y2: usize = 0x0F;
+
+/// Map-base register (I/O port 0x07): low nibble = SCR1 base, high = SCR2.
+const MAP_BASE: usize = 0x07;
+/// Background scroll registers (X/Y per screen).
+const SCR1_SCROLL_X: usize = 0x10;
+const SCR1_SCROLL_Y: usize = 0x11;
+const SCR2_SCROLL_X: usize = 0x12;
+const SCR2_SCROLL_Y: usize = 0x13;
+
+/// Monochrome tile data lives at a fixed WRAM offset; each tile is 16 bytes
+/// (8 rows × 2 planar bytes), 2 bits per pixel.
+const TILE_DATA_BASE: usize = 0x2000;
+const TILE_BYTES: usize = 16;
+/// A tile map is 32×32 entries of 16 bits each, row-major.
+const TILEMAP_COLS: usize = 32;
+/// Background planes wrap at 256×256 pixels (32 tiles × 8 px).
+const BG_WRAP_MASK: u16 = 0xFF;
+
+/// Sprite attribute table registers and layout.
+const SPR_BASE: usize = 0x04; // base = (value & 0x3F) << 9
+const SPR_FIRST: usize = 0x05; // index of the first sprite to process
+const SPR_COUNT: usize = 0x06; // number of sprites to process (0–128)
+/// Sprites use palettes 8–15, so the entry's 3-bit palette is offset by 8.
+const SPRITE_PALETTE_OFFSET: u8 = 8;
+/// Sprite tiles are 8×8 like background tiles.
+const SPRITE_SIZE: usize = 8;
+/// The sprite attribute table holds up to 128 four-byte entries.
+const SPRITE_TABLE_LEN: usize = 128;
+
+/// Decoded view of the display-control register (I/O port 0x00).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayControl {
+    /// Screen 1 (background layer 1) enabled.
+    pub scr1_enabled: bool,
+    /// Screen 2 (background layer 2) enabled.
+    pub scr2_enabled: bool,
+    /// Sprite layer enabled.
+    pub sprites_enabled: bool,
+    /// Sprite window enabled (masks sprites whose window attribute is set).
+    pub sprite_window_enabled: bool,
+    /// SCR2 window enabled.
+    pub scr2_window_enabled: bool,
+    /// SCR2 window mode: `false` shows SCR2 inside the window, `true` outside.
+    pub scr2_window_outside: bool,
+}
+
+impl DisplayControl {
+    /// Decode the display-control register from the I/O port shadow array.
+    ///
+    /// `ports` is the 256-entry I/O port shadow (`Bus` port array); only
+    /// index [`DISP_CTRL`] is read.
+    pub fn from_ports(ports: &[u8]) -> Self {
+        let v = ports[DISP_CTRL];
+        Self {
+            scr1_enabled: v & DISP_SCR1_ENABLE != 0,
+            scr2_enabled: v & DISP_SCR2_ENABLE != 0,
+            sprites_enabled: v & DISP_SPR_ENABLE != 0,
+            sprite_window_enabled: v & DISP_SPR_WINDOW_ENABLE != 0,
+            scr2_window_enabled: v & DISP_SCR2_WINDOW_ENABLE != 0,
+            scr2_window_outside: v & DISP_SCR2_WINDOW_OUTSIDE != 0,
+        }
+    }
+}
+
+/// PPU state: the rendered framebuffer plus the current scanline position.
+///
+/// The framebuffer stores one resolved shade index (0–15 on monochrome) per
+/// pixel, row-major, `SCREEN_WIDTH * SCREEN_HEIGHT` entries.
+#[derive(Debug, Clone)]
+pub struct Ppu {
+    /// Resolved shade indices, row-major (`y * SCREEN_WIDTH + x`).
+    framebuffer: Box<[u8]>,
+    /// Scanline currently being rendered (0–143 visible; up to 158 total).
+    current_line: u8,
+}
+
+impl Default for Ppu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Ppu {
+    /// Create a PPU with a cleared framebuffer at scanline 0.
+    pub fn new() -> Self {
+        Self {
+            framebuffer: vec![0u8; FRAMEBUFFER_LEN].into_boxed_slice(),
+            current_line: 0,
+        }
+    }
+
+    /// Reset the PPU to its power-on state (cleared framebuffer, line 0).
+    pub fn reset(&mut self) {
+        self.framebuffer.fill(0);
+        self.current_line = 0;
+    }
+
+    /// The rendered framebuffer: `SCREEN_WIDTH * SCREEN_HEIGHT` shade indices,
+    /// row-major. Stable read API for the frontend and future RetroAchievements
+    /// integration.
+    pub fn framebuffer(&self) -> &[u8] {
+        &self.framebuffer
+    }
+
+    /// The scanline the PPU is currently positioned at.
+    pub fn current_line(&self) -> u8 {
+        self.current_line
+    }
+
+    /// Render one visible scanline into the framebuffer.
+    ///
+    /// `line` is the scanline (0–143; lines ≥ [`SCREEN_HEIGHT`] are ignored).
+    /// `wram` is the internal work RAM (tile data, tile maps); `ports` is the
+    /// I/O port shadow array holding the display registers; `resolver` maps
+    /// raw tile pixels to shade indices (see [`PaletteResolver`]).
+    ///
+    /// Compositing order, back to front: SCR1 (opaque background), sprites
+    /// with priority 0 (behind SCR2), SCR2 (transparent on pixel 0), then
+    /// sprites with priority 1 (in front of SCR2). Pixels where no layer
+    /// draws are left at shade 0. Each layer's pixel is shade-resolved via
+    /// `resolver`; sprite pixels use palettes 8–15.
+    pub fn render_scanline<R: PaletteResolver>(
+        &mut self,
+        line: u8,
+        wram: &[u8],
+        ports: &[u8],
+        resolver: &R,
+    ) {
+        let y = line as usize;
+        if y >= SCREEN_HEIGHT {
+            return;
+        }
+        let dc = DisplayControl::from_ports(ports);
+        let row = y * SCREEN_WIDTH;
+        for x in 0..SCREEN_WIDTH {
+            let mut shade = 0u8;
+            if dc.scr1_enabled {
+                let s = sample_background(wram, ports, BgLayer::Scr1, x, line);
+                shade = resolver.resolve(ports, s.palette, s.pixel);
+            }
+            if dc.sprites_enabled {
+                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, false, resolver) {
+                    shade = px;
+                }
+            }
+            if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
+                let s = sample_background(wram, ports, BgLayer::Scr2, x, line);
+                if s.pixel != 0 {
+                    shade = resolver.resolve(ports, s.palette, s.pixel);
+                }
+            }
+            if dc.sprites_enabled {
+                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, true, resolver) {
+                    shade = px;
+                }
+            }
+            self.framebuffer[row + x] = shade;
+        }
+        self.current_line = line;
+    }
+}
+
+/// Which background screen layer is being sampled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BgLayer {
+    Scr1,
+    Scr2,
+}
+
+/// A decoded 16-bit tile-map entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TileMapEntry {
+    /// Tile number (9 bits on monochrome, 0–511).
+    pub tile_idx: u16,
+    /// Palette index (4 bits, 0–15); consumed by the palette resolver.
+    pub palette: u8,
+    /// Horizontal flip.
+    pub hflip: bool,
+    /// Vertical flip.
+    pub vflip: bool,
+}
+
+impl TileMapEntry {
+    /// Decode a tile-map entry from its little-endian 16-bit word.
+    pub fn decode(word: u16) -> Self {
+        Self {
+            tile_idx: word & 0x01FF,
+            palette: ((word >> 9) & 0x0F) as u8,
+            hflip: word & (1 << 14) != 0,
+            vflip: word & (1 << 15) != 0,
+        }
+    }
+}
+
+/// A sampled background pixel: the raw 2-bit value plus its palette index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BgSample {
+    pixel: u8,
+    palette: u8,
+}
+
+/// Read a 2-bit pixel from planar tile data in WRAM.
+///
+/// `tile_idx` selects the 16-byte tile at [`TILE_DATA_BASE`]; `(tx, ty)` are
+/// the in-tile pixel coordinates (0–7). Each row is two bytes: plane 0 (low
+/// bit) then plane 1 (high bit), MSB = leftmost pixel.
+pub fn tile_pixel(wram: &[u8], tile_idx: u16, tx: usize, ty: usize) -> u8 {
+    let addr = TILE_DATA_BASE + tile_idx as usize * TILE_BYTES + ty * 2;
+    let plane0 = wram[addr];
+    let plane1 = wram[addr + 1];
+    let bit = 7 - tx;
+    let lo = (plane0 >> bit) & 1;
+    let hi = (plane1 >> bit) & 1;
+    (hi << 1) | lo
+}
+
+/// Read a tile-map entry at tile coordinates `(col, row)` from a map at
+/// `base` in WRAM.
+fn tilemap_entry(wram: &[u8], base: usize, col: usize, row: usize) -> TileMapEntry {
+    let addr = base + (row * TILEMAP_COLS + col) * 2;
+    let word = u16::from_le_bytes([wram[addr], wram[addr + 1]]);
+    TileMapEntry::decode(word)
+}
+
+/// Tile-map base offset in WRAM for a background layer (monochrome: the
+/// register nibble's low 3 bits shifted left by 11, masking to the 16 KiB
+/// WRAM window).
+fn map_base(ports: &[u8], layer: BgLayer) -> usize {
+    let nibble = match layer {
+        BgLayer::Scr1 => ports[MAP_BASE] & 0x0F,
+        BgLayer::Scr2 => (ports[MAP_BASE] >> 4) & 0x0F,
+    };
+    ((nibble & 0x07) as usize) << 11
+}
+
+/// Sample a background layer at visible screen coordinate `(screen_x, line)`,
+/// applying the layer's scroll offset and tile flips.
+fn sample_background(
+    wram: &[u8],
+    ports: &[u8],
+    layer: BgLayer,
+    screen_x: usize,
+    line: u8,
+) -> BgSample {
+    let (scroll_x, scroll_y) = match layer {
+        BgLayer::Scr1 => (ports[SCR1_SCROLL_X], ports[SCR1_SCROLL_Y]),
+        BgLayer::Scr2 => (ports[SCR2_SCROLL_X], ports[SCR2_SCROLL_Y]),
+    };
+    let bg_x = (screen_x as u16 + scroll_x as u16) & BG_WRAP_MASK;
+    let bg_y = (line as u16 + scroll_y as u16) & BG_WRAP_MASK;
+
+    let base = map_base(ports, layer);
+    let entry = tilemap_entry(wram, base, (bg_x >> 3) as usize, (bg_y >> 3) as usize);
+
+    let mut tx = (bg_x & 7) as usize;
+    let mut ty = (bg_y & 7) as usize;
+    if entry.hflip {
+        tx = 7 - tx;
+    }
+    if entry.vflip {
+        ty = 7 - ty;
+    }
+    BgSample {
+        pixel: tile_pixel(wram, entry.tile_idx, tx, ty),
+        palette: entry.palette,
+    }
+}
+
+/// A decoded 4-byte sprite attribute-table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpriteEntry {
+    /// Tile number (9 bits, 0–511).
+    pub tile_idx: u16,
+    /// Palette index (3 bits, 0–7); offset by 8 to select palettes 8–15.
+    pub palette: u8,
+    /// Priority: `true` draws in front of SCR2, `false` behind it.
+    pub priority: bool,
+    /// Window attribute (bit 12): when the sprite window is enabled, such a
+    /// sprite is shown only inside the sprite window.
+    pub window: bool,
+    /// Horizontal flip.
+    pub hflip: bool,
+    /// Vertical flip.
+    pub vflip: bool,
+    /// Top-left X coordinate.
+    pub x: u8,
+    /// Top-left Y coordinate.
+    pub y: u8,
+}
+
+impl SpriteEntry {
+    /// Decode the 4-byte sprite entry at `addr` in WRAM. The first two bytes
+    /// are the little-endian attribute word; byte 2 is Y, byte 3 is X.
+    pub fn decode(wram: &[u8], addr: usize) -> Self {
+        let word = u16::from_le_bytes([wram[addr], wram[addr + 1]]);
+        Self {
+            tile_idx: word & 0x01FF,
+            palette: ((word >> 9) & 0x07) as u8,
+            window: word & (1 << 12) != 0,
+            priority: word & (1 << 13) != 0,
+            hflip: word & (1 << 14) != 0,
+            vflip: word & (1 << 15) != 0,
+            y: wram[addr + 2],
+            x: wram[addr + 3],
+        }
+    }
+}
+
+/// True if pixel `(x, y)` lies within the inclusive rectangle whose corner
+/// registers start at `rect_base` (X1, Y1, X2, Y2 in consecutive ports).
+fn in_window(ports: &[u8], x: usize, y: u8, x1: usize, y1: usize, x2: usize, y2: usize) -> bool {
+    let xb = x as u8;
+    xb >= ports[x1] && xb <= ports[x2] && y >= ports[y1] && y <= ports[y2]
+}
+
+/// Whether SCR2 is visible at `(x, line)` given its window configuration.
+fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> bool {
+    if !dc.scr2_window_enabled {
+        return true;
+    }
+    let inside = in_window(
+        ports,
+        x,
+        line,
+        SCR2_WINDOW_X1,
+        SCR2_WINDOW_Y1,
+        SCR2_WINDOW_X2,
+        SCR2_WINDOW_Y2,
+    );
+    if dc.scr2_window_outside {
+        !inside
+    } else {
+        inside
+    }
+}
+
+/// Sample the sprite layer at `(screen_x, line)` for sprites whose priority
+/// matches `want_priority`.
+///
+/// Walks the sprite attribute table in order (lower index = higher priority);
+/// returns the shade of the first non-transparent overlapping sprite pixel, or
+/// `None` if none covers this pixel. Sprite pixels use palettes 8–15.
+fn sample_sprite<R: PaletteResolver>(
+    wram: &[u8],
+    ports: &[u8],
+    dc: &DisplayControl,
+    screen_x: usize,
+    line: u8,
+    want_priority: bool,
+    resolver: &R,
+) -> Option<u8> {
+    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
+    let first = ports[SPR_FIRST] as usize;
+    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
+
+    for i in 0..count {
+        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
+        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+        if sprite.priority != want_priority {
+            continue;
+        }
+        // A window-attributed sprite is shown only inside the sprite window
+        // (exact inside/outside semantics are unverified against hardware; see
+        // docs/dev/DevelopmentPlan.md "リスクと不確実性").
+        if dc.sprite_window_enabled
+            && sprite.window
+            && !in_window(
+                ports,
+                screen_x,
+                line,
+                SPR_WINDOW_X1,
+                SPR_WINDOW_Y1,
+                SPR_WINDOW_X2,
+                SPR_WINDOW_Y2,
+            )
+        {
+            continue;
+        }
+        let sx = sprite.x as usize;
+        let sy = sprite.y as usize;
+        if screen_x < sx || screen_x >= sx + SPRITE_SIZE {
+            continue;
+        }
+        if (line as usize) < sy || (line as usize) >= sy + SPRITE_SIZE {
+            continue;
+        }
+        let mut tx = screen_x - sx;
+        let mut ty = line as usize - sy;
+        if sprite.hflip {
+            tx = SPRITE_SIZE - 1 - tx;
+        }
+        if sprite.vflip {
+            ty = SPRITE_SIZE - 1 - ty;
+        }
+        let pixel = tile_pixel(wram, sprite.tile_idx, tx, ty);
+        if pixel == 0 {
+            continue; // transparent
+        }
+        return Some(resolver.resolve(ports, sprite.palette + SPRITE_PALETTE_OFFSET, pixel));
+    }
+    None
+}

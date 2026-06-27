@@ -476,6 +476,57 @@ fn gdma_clears_enable_bit_after_transfer() {
     assert_eq!(bus.read_io(0x48), 0x00);
 }
 
+// ── PPU integration ──────────────────────────────────────────────────────────
+
+/// A bus with SCR1 enabled, identity palette, and tile 0 drawing pixel 1 at
+/// its top-left corner (map entry (0,0) defaults to tile 0).
+fn setup_bus_scr1_pixel() -> Bus {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x00, 0x01); // SCR1 enable
+    bus.write_io(0x07, 0x00); // SCR1 map base 0
+    bus.write_io(0x20, 0x10); // palette 0: pixel1 → pool1
+    bus.write_io(0x1C, 0x10); // pool1 → shade 1
+    bus.wram[0x2000] = 0b1000_0000; // tile 0 row 0 plane 0: x0 set
+    bus
+}
+
+#[test]
+fn render_scanline_draws_scr1_pixel_to_framebuffer() {
+    let mut bus = setup_bus_scr1_pixel();
+    bus.render_scanline(0);
+    assert_eq!(bus.framebuffer()[0], 1);
+}
+
+#[test]
+fn render_scanline_leaves_unset_pixel_clear() {
+    let mut bus = setup_bus_scr1_pixel();
+    bus.render_scanline(0);
+    assert_eq!(bus.framebuffer()[1], 0);
+}
+
+#[test]
+fn render_scanline_updates_lcd_line_register() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.render_scanline(5);
+    assert_eq!(bus.read_io(0x02), 5);
+}
+
+#[test]
+fn render_scanline_at_compare_line_raises_scanline_match_irq() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 0xFF); // enable all interrupts
+    bus.write_io(0x03, 10); // LCD line compare = 10
+    bus.render_scanline(10);
+    let cause = bus.read_io(0xB4);
+    assert_ne!(cause & (1 << IrqSource::ScanlineMatch as u8), 0);
+}
+
+#[test]
+fn framebuffer_has_full_screen_length() {
+    let bus = Bus::new(vec![0u8; 0x10000]);
+    assert_eq!(bus.framebuffer().len(), 224 * 144);
+}
+
 // ── CPU INT / IRET / IN / OUT (integration tests via Bus) ───────────────────
 
 fn setup_int_instruction() -> (Cpu, Bus) {
