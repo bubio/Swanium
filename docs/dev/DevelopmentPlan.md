@@ -170,8 +170,17 @@ video               audio                input
 **依存関係**: Phase 1（CPU命令セット）+ Phase 2（メモリマップ・割り込み）完了が前提。
 
 **テスト方法**
--   統合テスト（`tests/cpu_test_roms.rs`）としてCIに組み込み、継続的にパスを保証
+-   統合テスト（`crates/core/tests/cpu_test_roms.rs`）としてCIに組み込み、継続的にパスを保証
 -   発見されたバグはPhase 1のユニットテストに回帰テストとして追加する
+
+**進捗** (Phase 3 着手中)
+-   `crates/core/tests/cpu_test_roms.rs` を新設。`Bus + Cpu` を使った統合テストハーネス
+    (`run_code` 関数) を実装し、10件の自作マシンコードテストがCIで通過している:
+    算術(ADD/SUB/IMUL)・制御フロー(LOOP/JZ/JNZ)・スタック(PUSH/POP)・文字列命令(REP STOSB/MOVSB)・HLT。
+-   ROM bank 0 (`CS=0x2000`, `IP=0x0000` → 物理 `0x20000`) にコードを配置し、
+    結果を WRAM (`DS:0x0000`) に書き込んで検証するパターンを確立。
+-   **残タスク**: 公開テストROM(WSCPUTest / ws-test-suite)オプトインテストの実装、
+    テストカバレッジ拡充（BCD命令群・セグメントオーバーライド境界値・未定義opcode挙動記録）。
 
 ---
 
@@ -425,23 +434,19 @@ tests/
 Phase 1/2 のコードレビュー（Apollo Rust Best Practices Handbook 準拠）で識別された、
 後フェーズで対応予定の改善項目を記録する。
 
-## 10.1 テスト: 1テスト1アサーション原則 (Ch. 5.1)
+## 10.1 テスト: 1テスト1アサーション原則 (Ch. 5.1) ✅ 対応済み (Phase 3 着手前)
 
-現状、`bus/tests.rs` 内の一部テストが複数のプロパティを1テスト内でアサートしており、
-失敗時の診断が困難になる可能性がある。理想的には1テストにつき1アサーションとすること。
+`bus/tests.rs` 内の複数アサーションテスト5件を個別テストに分割した。ヘルパー関数
+（`setup_int_instruction` / `setup_iret` / `setup_handle_irq` / `setup_gdma_rom_to_wram`）で
+共通セットアップをまとめ、各プロパティを独立したテスト関数で検証する構成に変更した。
 
-対象テスト（複数アサーションが残っているもの）:
-
-| テスト名 | アサーション数 | 内容 |
-|---|---|---|
-| `wram_word_roundtrip` | 3 | round-trip・lo byte・hi byte |
-| `iret_restores_ip_cs_and_flags` | 3 | IP・CS・IF |
-| `int_instruction_jumps_to_ivt_vector` | 3 | IP・CS・IF |
-| `cpu_handle_irq_reads_ivt_from_wram` | 3 | IP・IF・halted |
-| `gdma_transfers_bytes_from_rom_to_wram` | 5 | 4バイト + IRQ cause |
-
-**対応フェーズ**: Phase 3 着手前（テストインフラ整備時）に `rstest` パラメトリックテストまたは
-個別テスト分割で対応する。
+| 旧テスト名 | 分割後テスト名 |
+|---|---|
+| `wram_word_roundtrip` (3) | `wram_16bit_write_reads_back_same_value` / `_low_byte_first` / `_high_byte_second` |
+| `iret_restores_ip_cs_and_flags` (3) | `iret_restores_ip_to_next_instruction` / `_cs` / `_interrupt_flag` |
+| `int_instruction_jumps_to_ivt_vector` (3) | `int_instruction_sets_ip_from_ivt` / `_cs_from_ivt` / `_clears_if_flag` |
+| `cpu_handle_irq_reads_ivt_from_wram` (3) | `handle_irq_sets_ip_from_ivt` / `_clears_interrupt_flag` / `_clears_halted_state` |
+| `gdma_transfers_bytes_from_rom_to_wram` (5) | `gdma_copies_byte_{0,1,2,3}_from_rom_to_wram` / `_sets_complete_irq_after_transfer` |
 
 ## 10.2 ドキュメント: 公開 API 全体への `///` doc コメント (Ch. 8.7)
 

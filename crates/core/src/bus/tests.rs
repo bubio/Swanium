@@ -15,12 +15,23 @@ fn wram_read_write() {
 }
 
 #[test]
-fn wram_word_roundtrip() {
+fn wram_16bit_write_reads_back_same_value() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_u16(0x0100, 0xBEEF);
     assert_eq!(bus.read_u16(0x0100), 0xBEEF);
-    // little-endian layout
+}
+
+#[test]
+fn wram_16bit_write_stores_low_byte_first() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u16(0x0100, 0xBEEF);
     assert_eq!(bus.read_u8(0x0100), 0xEF);
+}
+
+#[test]
+fn wram_16bit_write_stores_high_byte_second() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u16(0x0100, 0xBEEF);
     assert_eq!(bus.read_u8(0x0101), 0xBE);
 }
 
@@ -258,44 +269,53 @@ fn vblank_timer_fires_when_counter_reaches_zero() {
 
 // ── GDMA ─────────────────────────────────────────────────────────────────────
 
-#[test]
-fn gdma_transfers_bytes_from_rom_to_wram() {
-    // Transfer 4 bytes from ROM linear range to WRAM.
-    // ROM: linear_off=0xFF → last 16 bytes of 64 KiB ROM are at 0xFFFF0-0xFFFFF.
-    // For simplicity, place source data at ROM offset 0xFFF0 (last 16 bytes).
+fn setup_gdma_rom_to_wram() -> Bus {
     let mut rom = vec![0u8; 0x10000];
     rom[0xFFF0] = 0xAA;
     rom[0xFFF1] = 0xBB;
     rom[0xFFF2] = 0xCC;
     rom[0xFFF3] = 0xDD;
     let mut bus = Bus::new(rom);
-
-    // Enable all IRQs so GDMA completion fires
     bus.write_io(0xB2, 0xFF);
-
-    // Source: physical 0xFFFF0 → seg=0xF, offset=0xFFF0
     bus.write_io(0x40, 0xF0); // src offset low (bit 0 forced 0 → 0xF0)
     bus.write_io(0x41, 0xFF); // src offset high
     bus.write_io(0x42, 0x0F); // src segment
-
-    // Destination: WRAM offset 0x0010
-    bus.write_io(0x44, 0x10);
-    bus.write_io(0x45, 0x00);
-
-    // Length: 4 bytes
-    bus.write_io(0x46, 4);
-    bus.write_io(0x47, 0);
-
-    // Arm GDMA
-    bus.ports[0x48] = 0x80;
-
+    bus.write_io(0x44, 0x10); // dst offset low
+    bus.write_io(0x45, 0x00); // dst offset high
+    bus.write_io(0x46, 4); // length low
+    bus.write_io(0x47, 0); // length high
+    bus.ports[0x48] = 0x80; // arm GDMA
     bus.tick_gdma();
+    bus
+}
 
+#[test]
+fn gdma_copies_byte_0_from_rom_to_wram() {
+    let bus = setup_gdma_rom_to_wram();
     assert_eq!(bus.read_u8(0x0010), 0xAA);
+}
+
+#[test]
+fn gdma_copies_byte_1_from_rom_to_wram() {
+    let bus = setup_gdma_rom_to_wram();
     assert_eq!(bus.read_u8(0x0011), 0xBB);
+}
+
+#[test]
+fn gdma_copies_byte_2_from_rom_to_wram() {
+    let bus = setup_gdma_rom_to_wram();
     assert_eq!(bus.read_u8(0x0012), 0xCC);
+}
+
+#[test]
+fn gdma_copies_byte_3_from_rom_to_wram() {
+    let bus = setup_gdma_rom_to_wram();
     assert_eq!(bus.read_u8(0x0013), 0xDD);
-    // GDMA complete IRQ should be set
+}
+
+#[test]
+fn gdma_sets_complete_irq_after_transfer() {
+    let mut bus = setup_gdma_rom_to_wram();
     let cause = bus.read_io(0xB4);
     assert_ne!(cause & (1 << IrqSource::GdmaComplete as u8), 0);
 }
@@ -326,56 +346,76 @@ fn gdma_clears_enable_bit_after_transfer() {
 
 // ── CPU INT / IRET / IN / OUT (integration tests via Bus) ───────────────────
 
-#[test]
-fn int_instruction_jumps_to_ivt_vector() {
-    // Set up IVT: INT 0x10 → CS:IP = 0x0000:0x0200
+fn setup_int_instruction() -> (Cpu, Bus) {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Vector 0x10 is at physical 0x40 (= 0x10 * 4)
+    // IVT: INT 0x10 → CS:IP = 0x0000:0x0200
     bus.wram[0x40] = 0x00; // IP low
     bus.wram[0x41] = 0x02; // IP high  → IP = 0x0200
     bus.wram[0x42] = 0x00; // CS low
     bus.wram[0x43] = 0x00; // CS high  → CS = 0x0000
-                           // Code at 0x0100: INT 0x10
-    bus.wram[0x0100] = 0xCD;
+    bus.wram[0x0100] = 0xCD; // INT 0x10
     bus.wram[0x0101] = 0x10;
-
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0100);
     cpu.step(&mut bus);
-
-    assert_eq!(cpu.regs.ip, 0x0200);
-    assert_eq!(cpu.regs.cs, 0x0000);
-    assert!(!cpu.flags.interrupt); // IF cleared by INT
+    (cpu, bus)
 }
 
 #[test]
-fn iret_restores_ip_cs_and_flags() {
+fn int_instruction_sets_ip_from_ivt() {
+    let (cpu, _) = setup_int_instruction();
+    assert_eq!(cpu.regs.ip, 0x0200);
+}
+
+#[test]
+fn int_instruction_sets_cs_from_ivt() {
+    let (cpu, _) = setup_int_instruction();
+    assert_eq!(cpu.regs.cs, 0x0000);
+}
+
+#[test]
+fn int_instruction_clears_if_flag() {
+    let (cpu, _) = setup_int_instruction();
+    assert!(!cpu.flags.interrupt);
+}
+
+fn setup_iret() -> (Cpu, Bus) {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Set up IVT: INT 5 → 0x0000:0x0300
+    // IVT: INT 5 → 0x0000:0x0300
     let ivt_addr = 5 * 4;
     bus.wram[ivt_addr] = 0x00;
     bus.wram[ivt_addr + 1] = 0x03; // IP = 0x0300
     bus.wram[ivt_addr + 2] = 0x00;
     bus.wram[ivt_addr + 3] = 0x00; // CS = 0x0000
-                                   // Handler at 0x0300: IRET
-    bus.wram[0x0300] = 0xCF;
-    // Code at 0x0100: INT 5
-    bus.wram[0x0100] = 0xCD;
+    bus.wram[0x0300] = 0xCF; // IRET handler
+    bus.wram[0x0100] = 0xCD; // INT 5
     bus.wram[0x0101] = 0x05;
-
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0100);
-    // Stack must live inside WRAM (0x0000–0x03FFF). SP=0 wraps to 0xFFFE
-    // which falls in the open-bus region (0x4000–0xFFFF); prime SP at the
-    // top of the first 16 KiB instead.
+    // Stack lives in WRAM; prime SP near top of first 16 KiB.
     cpu.regs.sp = 0x3FFE;
     cpu.flags.interrupt = true;
-    cpu.step(&mut bus); // INT 5: jumps to 0x0300, saves old IP=0x0102
-    assert_eq!(cpu.regs.ip, 0x0300);
-    cpu.step(&mut bus); // IRET: pops IP=0x0102, CS=0x0000, FLAGS
-    assert_eq!(cpu.regs.ip, 0x0102); // returned past the INT instruction
+    cpu.step(&mut bus); // INT 5: jumps to 0x0300, saves IP=0x0102
+    cpu.step(&mut bus); // IRET: pops IP, CS, FLAGS
+    (cpu, bus)
+}
+
+#[test]
+fn iret_restores_ip_to_next_instruction() {
+    let (cpu, _) = setup_iret();
+    assert_eq!(cpu.regs.ip, 0x0102);
+}
+
+#[test]
+fn iret_restores_cs() {
+    let (cpu, _) = setup_iret();
     assert_eq!(cpu.regs.cs, 0x0000);
-    assert!(cpu.flags.interrupt); // IF restored
+}
+
+#[test]
+fn iret_restores_interrupt_flag() {
+    let (cpu, _) = setup_iret();
+    assert!(cpu.flags.interrupt);
 }
 
 #[test]
@@ -426,24 +466,36 @@ fn in_out_dx_uses_dx_as_port_number() {
     assert_eq!(cpu.regs.get_reg8(0), 0x77);
 }
 
-#[test]
-fn cpu_handle_irq_reads_ivt_from_wram() {
+fn setup_handle_irq() -> (Cpu, Bus) {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // IVT: vector 6 (VBlank) → 0x0000:0x0400
     bus.wram[6 * 4] = 0x00;
     bus.wram[6 * 4 + 1] = 0x04; // IP = 0x0400
     bus.wram[6 * 4 + 2] = 0x00;
     bus.wram[6 * 4 + 3] = 0x00; // CS = 0x0000
-
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0200);
     cpu.flags.interrupt = true;
-
     bus.on_vblank();
     let vector = bus.pending_irq().unwrap();
     cpu.handle_irq(&mut bus, vector);
+    (cpu, bus)
+}
 
+#[test]
+fn handle_irq_sets_ip_from_ivt() {
+    let (cpu, _) = setup_handle_irq();
     assert_eq!(cpu.regs.ip, 0x0400);
+}
+
+#[test]
+fn handle_irq_clears_interrupt_flag() {
+    let (cpu, _) = setup_handle_irq();
     assert!(!cpu.flags.interrupt);
+}
+
+#[test]
+fn handle_irq_clears_halted_state() {
+    let (cpu, _) = setup_handle_irq();
     assert!(!cpu.halted);
 }
