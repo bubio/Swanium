@@ -1,70 +1,117 @@
-//! Swanium frontend.
+//! Swanium frontend: a minimal Slint window that plays a WonderSwan ROM.
 //!
-//! The interactive Slint window, wgpu surface, cpal output stream, and
-//! gilrs/keyboard input are wired in the GUI step (see
-//! `docs/dev/DevelopmentPlan.md` Phase 7 後続課題). Until then this binary
-//! exercises the full data path headlessly: it loads a ROM, drives the core
-//! one frame at a time, and runs each produced frame through the `video`,
-//! `audio`, and `input` adapter crates. This keeps the wiring honest and gives
-//! CI a "boots and runs without crashing" smoke check.
+//! Scope (see `docs/dev/DevelopmentPlan.md` Phase 7): open a window, run the
+//! core one frame at a time, show the framebuffer, and accept keyboard input.
+//! Audio output (cpal), gamepad input (gilrs), an in-app file picker, and a
+//! settings UI remain follow-ups; the ROM path is given on the command line.
 
-use std::path::Path;
-use std::process::ExitCode;
+mod keymap;
 
-use audio::RingBuffer;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::error::Error;
+use std::rc::Rc;
+use std::time::Duration;
+
 use input::Button;
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode};
 use swanium_core::system::System;
 
-/// Number of frames the headless run advances before exiting.
-const HEADLESS_FRAMES: u32 = 600;
+/// WonderSwan refresh interval (~75.47 Hz → one frame every ~13.25 ms).
+const FRAME_INTERVAL: Duration = Duration::from_micros(13_250);
 
-/// Audio ring-buffer capacity (a few frames of stereo samples is plenty).
-const AUDIO_BUFFER_SAMPLES: usize = 8192;
+slint::slint! {
+    export component MainWindow inherits Window {
+        in property <image> frame;
+        in property <length> view-width;
+        in property <length> view-height;
+        callback key-event(string, bool);
 
-fn main() -> ExitCode {
-    common::logging::init();
+        title: "Swanium";
+        width: root.view-width;
+        height: root.view-height;
+        forward-focus: scope;
 
-    let Some(rom_path) = std::env::args().nth(1) else {
-        eprintln!("usage: frontend <rom.ws>");
-        eprintln!("(headless runner; the Slint GUI is wired in a later step)");
-        return ExitCode::FAILURE;
-    };
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.frame;
+            image-rendering: pixelated;
+        }
 
-    match run_headless(rom_path.as_ref(), HEADLESS_FRAMES) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("error: {err}");
-            ExitCode::FAILURE
+        scope := FocusScope {
+            key-pressed(event) => {
+                root.key-event(event.text, true);
+                accept
+            }
+            key-released(event) => {
+                root.key-event(event.text, false);
+                reject
+            }
         }
     }
 }
 
-/// Load `rom_path`, run `frames` frames, and push each frame through the
-/// adapter crates. Returns once the run completes.
-fn run_headless(rom_path: &Path, frames: u32) -> std::io::Result<()> {
-    let rom = std::fs::read(rom_path)?;
-    tracing::info!(rom = %rom_path.display(), bytes = rom.len(), "loaded ROM");
+fn main() -> Result<(), Box<dyn Error>> {
+    common::logging::init();
 
-    let mut system = System::from_rom(rom);
-    let mut audio_buffer = RingBuffer::new(AUDIO_BUFFER_SAMPLES);
-    let mut frame_rgba =
-        vec![0u8; video::SCREEN_WIDTH * video::SCREEN_HEIGHT * video::BYTES_PER_PIXEL];
+    let Some(rom_path) = std::env::args().nth(1) else {
+        eprintln!("usage: frontend <rom.ws>");
+        return Err("no ROM path given".into());
+    };
 
-    // No host input in the headless runner; fold an empty button set through
-    // the input adapter to keep the keyboard/gamepad path wired.
-    let keys = input::keys_from(Vec::<Button>::new());
+    let rom = std::fs::read(&rom_path)?;
+    tracing::info!(rom = %rom_path, bytes = rom.len(), "loaded ROM");
 
-    for _ in 0..frames {
+    run(rom)
+}
+
+fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    let scale = common::config::Config::default().sanitised().scale;
+    let width = video::SCREEN_WIDTH as u32;
+    let height = video::SCREEN_HEIGHT as u32;
+
+    let window = MainWindow::new()?;
+    window.set_view_width((width * scale) as f32);
+    window.set_view_height((height * scale) as f32);
+
+    // Keys currently held down, updated from Slint key events.
+    let pressed: Rc<RefCell<HashSet<Button>>> = Rc::new(RefCell::new(HashSet::new()));
+    window.on_key_event({
+        let pressed = pressed.clone();
+        move |text, is_down| {
+            if let Some(button) = keymap::button_from_text(&text) {
+                if is_down {
+                    pressed.borrow_mut().insert(button);
+                } else {
+                    pressed.borrow_mut().remove(&button);
+                }
+            }
+        }
+    });
+
+    let system = Rc::new(RefCell::new(System::from_rom(rom)));
+
+    // Drive one frame per tick and upload the result as the window's image.
+    let timer = Timer::default();
+    let window_weak = window.as_weak();
+    timer.start(TimerMode::Repeated, FRAME_INTERVAL, move || {
+        let keys = input::keys_from(pressed.borrow().iter().copied());
+
+        let mut system = system.borrow_mut();
         system.run_frame(keys);
-
-        // Video: framebuffer shade indices -> RGBA8 (what the GPU would upload).
-        video::write_rgba(system.framebuffer(), &mut frame_rgba);
-
-        // Audio: drain the core's samples into the output ring buffer.
-        audio_buffer.push(system.audio_samples());
+        // Audio is not yet routed to an output device; drop the samples so the
+        // APU buffer does not grow without bound.
         system.clear_audio_samples();
-    }
 
-    tracing::info!(frames, "headless run complete");
+        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
+        video::write_rgba(system.framebuffer(), buffer.make_mut_bytes());
+
+        if let Some(window) = window_weak.upgrade() {
+            window.set_frame(Image::from_rgba8(buffer));
+        }
+    });
+
+    window.run()?;
     Ok(())
 }

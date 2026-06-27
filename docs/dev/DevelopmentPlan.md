@@ -443,16 +443,32 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     1 フレームずつ駆動し、各フレームを video / audio / input 変換層に通す（データ経路の健全性確認 +
     「起動して N フレーム走ってクラッシュしない」スモーク）。
 
-### Phase 7 後続課題（GUI 実配線; 別タスクで対応）
+### Phase 7 後半（GUI 実配線: 最小ウィンドウ — 実装済み）
 
--   **Slint UI 骨格**: ROM 選択ダイアログ、起動/一時停止、基本設定画面、メインループ。
--   **wgpu 描画**: `crates/video` に wgpu サーフェス/スワップチェーン/整数スケーリングを追加し、
-    `write_rgba` の出力をテクスチャアップロード。
+ユーザ確認のうえ「描画は Slint、範囲は画面＋キーボード操作のみ、ROM はコマンドライン指定」で最小 GUI を実装した。
+
+-   **描画スタックの選択**: 計画当初は wgpu を直接想定していたが、ウィンドウ・画像表示・キー入力・将来の
+    メニュー/設定 UI が一式そろう **Slint** を採用（プロジェクト当初の想定とも一致）。Slint が内部に持つ
+    レンダラ（femtovg/skia）が描画を担うため、Phase 7 段階では独自 wgpu パイプラインは作らない。
+-   **`crates/frontend`**: ヘッドレスランナーを最小 GUI に置換。`slint::slint!` マクロで `MainWindow`
+    （`Image` + `FocusScope`）を定義し、`Timer`（約 13.25ms ≒ 75.47Hz）で `System::run_frame` を駆動 →
+    `video::write_rgba` → `slint::Image`（`image-rendering: pixelated`）でウィンドウへ表示。整数スケーリングは
+    `Config::scale`（既定 3 倍）。ROM はコマンドライン引数で指定。ヘッドレスのフレーム実行スモークは
+    `crates/core/tests/system_frame.rs` で継続担保（GUI はヘッドレス CI で起動できないため）。
+-   **キーボード入力（`crates/frontend/src/keymap.rs`）**: Slint のキーイベント text を `slint::platform::Key`
+    と照合して `input::Button` へ変換（矢印=X パッド、WASD=Y パッド、Z/X=B/A、Enter=Start）。押下中キー集合を
+    `HashSet<Button>` で保持し、毎フレーム `input::keys_from` で `KeyState` に畳み込む。
+
+### Phase 7 後続課題（さらなる GUI 拡充; 別タスクで対応）
+
 -   **cpal 音声出力**: `crates/audio` に cpal ストリームを追加し、`RingBuffer` を出力コールバックへ供給。
-    音声-映像同期（リングバッファ水位に基づくフレームペーシング）。
--   **gilrs / キーボード入力**: `crates/input` に gilrs パッドと実ウィンドウのキーイベントを `Button` に
-    変換する層を追加。`default_keyboard_bindings()` を実キーコードへ解決。
+    音声-映像同期（リングバッファ水位に基づくフレームペーシング）。現状の最小 GUI は音声未出力
+    （APU サンプルは毎フレーム破棄）。
+-   **gilrs ゲームパッド入力**: `crates/input` に gilrs パッドを `Button` に変換する層を追加。
+-   **UI 拡充**: ROM 選択ダイアログ（ファイルピッカー）、起動/一時停止、基本設定画面、キーバインド設定。
 -   **設定ファイル永続化**: `Config` の TOML ロード/セーブ（serde + toml）を設定 UI と共に実装。
+-   **高品質スケーリング/シェーダ**: 必要に応じて Slint のレンダラを超える wgpu ポストプロセス段
+    （LCD 風表現等）を Phase 9 のシェーダ対応で検討。
 -   **キー押下割り込みの精緻化**: 現状フレーム粒度の `KeyPress` 割り込みを、必要ならスキャン
     タイミングに合わせた粒度へ。
 

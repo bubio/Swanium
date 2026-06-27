@@ -14,3 +14,4 @@ video = { path = "../video" }
 audio = { path = "../audio" }
 input = { path = "../input" }
 tracing = "0.1"
+slint = "1"
