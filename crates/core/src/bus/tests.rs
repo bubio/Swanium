@@ -4,13 +4,23 @@ use crate::cpu::{Cpu, MemoryBus};
 // ── Memory map ───────────────────────────────────────────────────────────────
 
 #[test]
-fn wram_read_write() {
+fn wram_write_reads_back_at_base_address() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_u8(0x0000, 0xAB);
-    bus.write_u8(0x03FF, 0xCD);
-    bus.write_u8(0x3FFF, 0xEF);
     assert_eq!(bus.read_u8(0x0000), 0xAB);
+}
+
+#[test]
+fn wram_write_reads_back_at_mid_address() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u8(0x03FF, 0xCD);
     assert_eq!(bus.read_u8(0x03FF), 0xCD);
+}
+
+#[test]
+fn wram_write_reads_back_at_top_address() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u8(0x3FFF, 0xEF);
     assert_eq!(bus.read_u8(0x3FFF), 0xEF);
 }
 
@@ -36,22 +46,33 @@ fn wram_16bit_write_stores_high_byte_second() {
 }
 
 #[test]
-fn open_bus_returns_0x90_in_unmapped_range() {
+fn open_bus_returns_0x90_at_start_of_unmapped_range() {
     let bus = Bus::new(vec![0u8; 0x10000]);
-    // 0x04000-0x0FFFF is open bus on mono
     assert_eq!(bus.read_u8(0x04000), 0x90);
-    assert_eq!(bus.read_u8(0x0FFFF), 0x90);
 }
 
 #[test]
-fn rom_ex_maps_to_last_rom_bytes_at_power_on() {
-    // Last 16 bytes of a 64 KiB ROM should be visible at 0xFFFF0-0xFFFFF
-    // when linear_off = 0xFF (power-on default).
+fn open_bus_returns_0x90_at_end_of_unmapped_range() {
+    let bus = Bus::new(vec![0u8; 0x10000]);
+    assert_eq!(bus.read_u8(0x0FFFF), 0x90);
+}
+
+fn make_reset_vector_rom() -> Bus {
     let mut rom = vec![0u8; 0x10000];
-    rom[0xFFF0] = 0x55; // marker at last 16 bytes
+    rom[0xFFF0] = 0x55; // marker at last 16 bytes (reset vector)
     rom[0xFFF1] = 0xAA;
-    let bus = Bus::new(rom);
+    Bus::new(rom)
+}
+
+#[test]
+fn rom_ex_maps_first_reset_byte_at_power_on() {
+    let bus = make_reset_vector_rom();
     assert_eq!(bus.read_u8(0xFFFF0), 0x55);
+}
+
+#[test]
+fn rom_ex_maps_second_reset_byte_at_power_on() {
+    let bus = make_reset_vector_rom();
     assert_eq!(bus.read_u8(0xFFFF1), 0xAA);
 }
 
@@ -65,28 +86,31 @@ fn sram_read_write() {
     assert_eq!(bus.read_u8(0x10000), 0x77);
 }
 
-#[test]
-fn rom_bank0_register_controls_0x20000_window() {
-    // ROM bank 0 (I/O port 0xC2) controls what appears at 0x20000-0x2FFFF.
+fn make_3bank_rom() -> Bus {
     let mut rom = vec![0u8; 0x30000]; // 192 KiB ROM
-                                      // Bank 0 (bank_reg=0) → offset 0x00000-0x0FFFF
-    rom[0x0000] = 0x11;
-    // Bank 1 (bank_reg=1) → offset 0x10000-0x1FFFF
-    rom[0x10000] = 0x22;
-    // Bank 2 (bank_reg=2) → offset 0x20000-0x2FFFF
-    rom[0x20000] = 0x33;
+    rom[0x0000] = 0x11; // bank 0
+    rom[0x10000] = 0x22; // bank 1
+    rom[0x20000] = 0x33; // bank 2
+    Bus::new(rom)
+}
 
-    let mut bus = Bus::new(rom);
-
-    // Point ROM bank 0 register at bank 0
+#[test]
+fn rom_bank0_register_bank0_maps_to_0x20000() {
+    let mut bus = make_3bank_rom();
     bus.write_io(0xC2, 0x00);
     assert_eq!(bus.read_u8(0x20000), 0x11);
+}
 
-    // Point ROM bank 0 register at bank 1
+#[test]
+fn rom_bank0_register_bank1_maps_to_0x20000() {
+    let mut bus = make_3bank_rom();
     bus.write_io(0xC2, 0x01);
     assert_eq!(bus.read_u8(0x20000), 0x22);
+}
 
-    // Point ROM bank 0 register at bank 2
+#[test]
+fn rom_bank0_register_bank2_maps_to_0x20000() {
+    let mut bus = make_3bank_rom();
     bus.write_io(0xC2, 0x02);
     assert_eq!(bus.read_u8(0x20000), 0x33);
 }
@@ -116,29 +140,45 @@ fn int_enable_vblank_bit_is_always_set() {
     assert_eq!(bus.read_io(0xB2) & (1 << 6), 1 << 6);
 }
 
-#[test]
-fn int_cause_clear_port_clears_selected_bits() {
+fn bus_with_vblank_and_hblank_requested_then_vblank_cleared() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.request_irq(IrqSource::VBlank);
     bus.request_irq(IrqSource::HBlankTimer);
-    // INT_CAUSE_CLEAR: writing 1 clears the corresponding bits
     bus.write_io(0xB6, 1 << IrqSource::VBlank as u8);
-    // VBlank bit cleared; HBlankTimer still set
-    let cause = bus.read_io(0xB4);
-    assert_eq!(cause & (1 << IrqSource::VBlank as u8), 0);
-    assert_eq!(cause & (1 << IrqSource::HBlankTimer as u8), 1 << 7);
+    bus
 }
 
 #[test]
-fn gdma_ctrl_self_clears_on_read() {
+fn int_cause_clear_clears_targeted_bit() {
+    let mut bus = bus_with_vblank_and_hblank_requested_then_vblank_cleared();
+    let cause = bus.read_io(0xB4);
+    assert_eq!(cause & (1 << IrqSource::VBlank as u8), 0);
+}
+
+#[test]
+fn int_cause_clear_leaves_other_bits_intact() {
+    let mut bus = bus_with_vblank_and_hblank_requested_then_vblank_cleared();
+    let cause = bus.read_io(0xB4);
+    assert_eq!(cause & (1 << IrqSource::HBlankTimer as u8), 1 << 7);
+}
+
+fn setup_gdma_ctrl_read() -> (u8, Bus) {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Write 0xC0 (enable + direction bits) directly via shadow
     bus.write_io(0x48, 0xC0);
-    // First read: returns C0, then clears
     let first = bus.read_io(0x48);
-    let second = bus.read_io(0x48);
+    (first, bus)
+}
+
+#[test]
+fn gdma_ctrl_first_read_returns_written_value() {
+    let (first, _) = setup_gdma_ctrl_read();
     assert_eq!(first, 0xC0);
-    assert_eq!(second, 0x00);
+}
+
+#[test]
+fn gdma_ctrl_second_read_returns_zero_after_self_clear() {
+    let (_, mut bus) = setup_gdma_ctrl_read();
+    assert_eq!(bus.read_io(0x48), 0x00);
 }
 
 // ── Interrupt controller ─────────────────────────────────────────────────────
@@ -156,25 +196,42 @@ fn vblank_irq_not_pending_before_on_vblank() {
     assert!(bus.pending_irq().is_none());
 }
 
-#[test]
-fn vblank_irq_fires_after_on_vblank() {
+fn bus_after_vblank() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.on_vblank();
-    // VBlank (bit 6) should now be pending
-    assert!(bus.pending_irq().is_some());
-    let vector = bus.pending_irq().unwrap();
-    // With INT_BASE = 0, vector = 0 + 6 = 6
-    assert_eq!(vector, IrqSource::VBlank as u8);
+    bus
 }
 
 #[test]
-fn pending_irq_only_returns_enabled_sources() {
+fn vblank_irq_is_pending_after_on_vblank() {
+    let bus = bus_after_vblank();
+    assert!(bus.pending_irq().is_some());
+}
+
+#[test]
+fn vblank_irq_vector_matches_irq_source_index() {
+    let bus = bus_after_vblank();
+    // With INT_BASE = 0, vector = 0 + 6 = 6
+    assert_eq!(bus.pending_irq().unwrap(), IrqSource::VBlank as u8);
+}
+
+fn bus_with_gdma_enabled_and_key_requested() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Enable only GDMA (bit 3)
     bus.write_io(0xB2, 1 << IrqSource::GdmaComplete as u8);
     bus.request_irq(IrqSource::KeyPress); // bit 1, not enabled
-                                          // GDMA not yet pending; KEY not enabled → no IRQ
+    bus
+}
+
+#[test]
+fn pending_irq_is_none_when_only_disabled_source_is_requested() {
+    let bus = bus_with_gdma_enabled_and_key_requested();
     assert!(bus.pending_irq().is_none());
+}
+
+#[test]
+fn pending_irq_is_some_when_enabled_source_is_requested() {
+    let mut bus = bus_with_gdma_enabled_and_key_requested();
     bus.request_irq(IrqSource::GdmaComplete);
     assert!(bus.pending_irq().is_some());
 }
@@ -205,63 +262,131 @@ fn highest_priority_bit_wins_when_multiple_pending() {
 
 // ── Timer ────────────────────────────────────────────────────────────────────
 
-#[test]
-fn hblank_timer_fires_when_counter_reaches_zero() {
+fn bus_with_hblank_timer_period_3() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Enable all interrupts
     bus.write_io(0xB2, 0xFF);
     // Enable HBlank timer (bit 0) without auto-reload (bit 1 = 0)
     bus.write_io(0xA2, 0x01);
     // Set period to 3 HBlanks (writing resets counter too)
     bus.write_io(0xA4, 3);
     bus.write_io(0xA5, 0);
+    bus
+}
 
+fn bus_after_hblank_1_of_period_3() -> Bus {
+    let mut bus = bus_with_hblank_timer_period_3();
     bus.on_hblank(); // counter: 3 → 2
-    assert!(bus.pending_irq().is_none());
+    bus
+}
+
+fn bus_after_hblank_2_of_period_3() -> Bus {
+    let mut bus = bus_with_hblank_timer_period_3();
+    bus.on_hblank(); // counter: 3 → 2
     bus.on_hblank(); // counter: 2 → 1
-    assert!(bus.pending_irq().is_none());
+    bus
+}
+
+fn bus_after_hblank_3_of_period_3() -> Bus {
+    let mut bus = bus_with_hblank_timer_period_3();
+    bus.on_hblank(); // counter: 3 → 2
+    bus.on_hblank(); // counter: 2 → 1
     bus.on_hblank(); // counter: 1 → 0 → fires HBlankTimer IRQ
-    assert!(bus.pending_irq().is_some());
-    let vector = bus.pending_irq().unwrap();
-    assert_eq!(vector, IrqSource::HBlankTimer as u8);
+    bus
 }
 
 #[test]
-fn hblank_timer_reloads_counter_when_auto_reload_set() {
+fn hblank_timer_is_not_pending_after_first_hblank() {
+    let bus = bus_after_hblank_1_of_period_3();
+    assert!(bus.pending_irq().is_none());
+}
+
+#[test]
+fn hblank_timer_is_not_pending_after_second_hblank() {
+    let bus = bus_after_hblank_2_of_period_3();
+    assert!(bus.pending_irq().is_none());
+}
+
+#[test]
+fn hblank_timer_fires_after_period_hblanks() {
+    let bus = bus_after_hblank_3_of_period_3();
+    assert!(bus.pending_irq().is_some());
+}
+
+#[test]
+fn hblank_timer_irq_source_matches_hblank_timer() {
+    let bus = bus_after_hblank_3_of_period_3();
+    assert_eq!(bus.pending_irq().unwrap(), IrqSource::HBlankTimer as u8);
+}
+
+fn bus_with_auto_reload_hblank_timer() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0xB2, 0xFF);
     // HBlank timer with auto-reload (bits 0 and 1)
     bus.write_io(0xA2, 0x03);
     bus.write_io(0xA4, 2);
     bus.write_io(0xA5, 0);
+    bus
+}
 
+fn bus_after_auto_reload_first_fire() -> Bus {
+    let mut bus = bus_with_auto_reload_hblank_timer();
     bus.on_hblank(); // 2 → 1
     bus.on_hblank(); // 1 → 0 → fires; reloads to 2
-    assert!(bus.pending_irq().is_some());
-    // Clear the IRQ via INT_CAUSE_CLEAR
-    bus.write_io(0xB6, 1 << IrqSource::HBlankTimer as u8);
-    assert!(bus.pending_irq().is_none());
+    bus
+}
 
-    // Should fire again after another 2 HBlanks
+fn bus_after_auto_reload_first_fire_cleared() -> Bus {
+    let mut bus = bus_after_auto_reload_first_fire();
+    bus.write_io(0xB6, 1 << IrqSource::HBlankTimer as u8);
+    bus
+}
+
+#[test]
+fn hblank_timer_fires_on_first_period_with_auto_reload() {
+    let bus = bus_after_auto_reload_first_fire();
+    assert!(bus.pending_irq().is_some());
+}
+
+#[test]
+fn hblank_timer_irq_clears_after_cause_clear_write() {
+    let bus = bus_after_auto_reload_first_fire_cleared();
+    assert!(bus.pending_irq().is_none());
+}
+
+#[test]
+fn hblank_timer_fires_again_after_auto_reload() {
+    let mut bus = bus_after_auto_reload_first_fire_cleared();
     bus.on_hblank(); // 2 → 1
     bus.on_hblank(); // 1 → 0 → fires again
     assert!(bus.pending_irq().is_some());
 }
 
-#[test]
-fn vblank_timer_fires_when_counter_reaches_zero() {
+fn bus_with_vblank_timer_period_2() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0xB2, 0xFF);
     // Enable VBlank timer (bit 2) without auto-reload
     bus.write_io(0xA2, 0x04);
     bus.write_io(0xA6, 2);
     bus.write_io(0xA7, 0);
+    bus
+}
 
+fn bus_after_first_vblank_timer_cleared() -> Bus {
+    let mut bus = bus_with_vblank_timer_period_2();
     bus.on_vblank(); // counter: 2 → 1; also fires VBlank IRQ
-                     // Clear VBlank IRQ to isolate the timer test
-    bus.write_io(0xB6, 1 << IrqSource::VBlank as u8);
-    assert!(bus.pending_irq().is_none());
+    bus.write_io(0xB6, 1 << IrqSource::VBlank as u8); // clear VBlank to isolate timer test
+    bus
+}
 
+#[test]
+fn vblank_timer_is_not_pending_before_counter_reaches_zero() {
+    let bus = bus_after_first_vblank_timer_cleared();
+    assert!(bus.pending_irq().is_none());
+}
+
+#[test]
+fn vblank_timer_appears_in_cause_register_when_counter_reaches_zero() {
+    let mut bus = bus_after_first_vblank_timer_cleared();
     bus.on_vblank(); // counter: 1 → 0 → fires VBlankTimer
     let cause = bus.read_io(0xB4);
     assert_ne!(cause & (1 << IrqSource::VBlankTimer as u8), 0);
@@ -284,7 +409,7 @@ fn setup_gdma_rom_to_wram() -> Bus {
     bus.write_io(0x45, 0x00); // dst offset high
     bus.write_io(0x46, 4); // length low
     bus.write_io(0x47, 0); // length high
-    bus.ports[0x48] = 0x80; // arm GDMA
+    bus.write_io(0x48, 0x80); // arm GDMA via public I/O write
     bus.tick_gdma();
     bus
 }
@@ -321,13 +446,20 @@ fn gdma_sets_complete_irq_after_transfer() {
 }
 
 #[test]
-fn gdma_does_not_transfer_without_enable_bit() {
+fn gdma_returns_zero_cycles_without_enable_bit() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.wram[0x10] = 0xAB;
     // Do NOT set the enable bit in port 0x48
     let cycles = bus.tick_gdma();
     assert_eq!(cycles, 0);
-    assert_eq!(bus.wram[0x10], 0xAB); // unchanged
+}
+
+#[test]
+fn gdma_leaves_destination_unchanged_without_enable_bit() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.wram[0x10] = 0xAB;
+    bus.tick_gdma();
+    assert_eq!(bus.wram[0x10], 0xAB);
 }
 
 #[test]
@@ -338,7 +470,7 @@ fn gdma_clears_enable_bit_after_transfer() {
     bus.write_io(0x45, 0x00);
     bus.write_io(0x46, 2);
     bus.write_io(0x47, 0);
-    bus.ports[0x48] = 0x80;
+    bus.write_io(0x48, 0x80); // arm via public I/O write
     bus.tick_gdma();
     // ctrl should be cleared after completion
     assert_eq!(bus.read_io(0x48), 0x00);

@@ -191,16 +191,14 @@ fn push_pop_round_trips_value_through_wram_stack() {
 
 // ── String instructions ───────────────────────────────────────────────────────
 
-#[test]
-fn rep_stosb_fills_four_bytes_in_wram() {
-    // ES = DS = 0x0000 (default); DI = 0 → ES:DI = physical 0x00000 = WRAM.
-    // After REP STOSB with CX=4, AL=0xAB: WRAM[0..3] = 0xAB.
-    //
-    //   0: B9 04 00   MOV CX, 4
-    //   3: B0 AB      MOV AL, 0xAB
-    //   5: 31 FF      XOR DI, DI
-    //   7: F3 AA      REP STOSB
-    //   9: F4         HLT
+// REP STOSB: fills 4 bytes at ES:DI=0 with AL=0xAB, then HLT.
+//
+//   0: B9 04 00   MOV CX, 4
+//   3: B0 AB      MOV AL, 0xAB
+//   5: 31 FF      XOR DI, DI
+//   7: F3 AA      REP STOSB
+//   9: F4         HLT
+fn bus_after_rep_stosb_4_bytes() -> Bus {
     #[rustfmt::skip]
     let code = [
         0xB9, 0x04, 0x00, // MOV CX, 4
@@ -210,29 +208,49 @@ fn rep_stosb_fills_four_bytes_in_wram() {
         0xF4,             // HLT
     ];
     let (_, bus) = run_code(&code, 10_000);
-    // Check all four filled bytes and that the fifth is untouched.
-    for i in 0u32..4 {
-        assert_eq!(bus.read_u8(i), 0xAB, "WRAM[{i}] should be 0xAB");
-    }
-    assert_eq!(bus.read_u8(4), 0x00);
+    bus
 }
 
 #[test]
-fn rep_movsb_copies_bytes_within_wram() {
-    // Copy 3 bytes from DS:0x0010 to ES:0x0020 (both in WRAM).
-    // Source bytes are seeded with MOV [imm], AL before the copy.
-    //
-    //   0: B0 AA      MOV AL, 0xAA
-    //   2: A2 10 00   MOV [0x0010], AL
-    //   5: B0 BB      MOV AL, 0xBB
-    //   7: A2 11 00   MOV [0x0011], AL
-    //  10: B0 CC      MOV AL, 0xCC
-    //  12: A2 12 00   MOV [0x0012], AL
-    //  15: B9 03 00   MOV CX, 3
-    //  18: BE 10 00   MOV SI, 0x0010
-    //  21: BF 20 00   MOV DI, 0x0020
-    //  24: F3 A4      REP MOVSB
-    //  26: F4         HLT
+fn rep_stosb_fills_byte_0_in_wram() {
+    assert_eq!(bus_after_rep_stosb_4_bytes().read_u8(0), 0xAB);
+}
+
+#[test]
+fn rep_stosb_fills_byte_1_in_wram() {
+    assert_eq!(bus_after_rep_stosb_4_bytes().read_u8(1), 0xAB);
+}
+
+#[test]
+fn rep_stosb_fills_byte_2_in_wram() {
+    assert_eq!(bus_after_rep_stosb_4_bytes().read_u8(2), 0xAB);
+}
+
+#[test]
+fn rep_stosb_fills_byte_3_in_wram() {
+    assert_eq!(bus_after_rep_stosb_4_bytes().read_u8(3), 0xAB);
+}
+
+#[test]
+fn rep_stosb_does_not_overwrite_byte_beyond_count() {
+    assert_eq!(bus_after_rep_stosb_4_bytes().read_u8(4), 0x00);
+}
+
+// REP MOVSB: copies 3 bytes from DS:0x0010 to ES:0x0020 (both in WRAM).
+// Source bytes are seeded with MOV [imm], AL before the copy.
+//
+//   0: B0 AA      MOV AL, 0xAA
+//   2: A2 10 00   MOV [0x0010], AL
+//   5: B0 BB      MOV AL, 0xBB
+//   7: A2 11 00   MOV [0x0011], AL
+//  10: B0 CC      MOV AL, 0xCC
+//  12: A2 12 00   MOV [0x0012], AL
+//  15: B9 03 00   MOV CX, 3
+//  18: BE 10 00   MOV SI, 0x0010
+//  21: BF 20 00   MOV DI, 0x0020
+//  24: F3 A4      REP MOVSB
+//  26: F4         HLT
+fn bus_after_rep_movsb_3_bytes() -> Bus {
     #[rustfmt::skip]
     let code = [
         0xB0, 0xAA,       // MOV AL, 0xAA
@@ -248,10 +266,27 @@ fn rep_movsb_copies_bytes_within_wram() {
         0xF4,             // HLT
     ];
     let (_, bus) = run_code(&code, 10_000);
-    assert_eq!(bus.read_u8(0x00020), 0xAA);
-    assert_eq!(bus.read_u8(0x00021), 0xBB);
-    assert_eq!(bus.read_u8(0x00022), 0xCC);
-    assert_eq!(bus.read_u8(0x00023), 0x00); // not overwritten
+    bus
+}
+
+#[test]
+fn rep_movsb_copies_first_byte_to_destination() {
+    assert_eq!(bus_after_rep_movsb_3_bytes().read_u8(0x00020), 0xAA);
+}
+
+#[test]
+fn rep_movsb_copies_second_byte_to_destination() {
+    assert_eq!(bus_after_rep_movsb_3_bytes().read_u8(0x00021), 0xBB);
+}
+
+#[test]
+fn rep_movsb_copies_third_byte_to_destination() {
+    assert_eq!(bus_after_rep_movsb_3_bytes().read_u8(0x00022), 0xCC);
+}
+
+#[test]
+fn rep_movsb_does_not_overwrite_byte_beyond_count() {
+    assert_eq!(bus_after_rep_movsb_3_bytes().read_u8(0x00023), 0x00);
 }
 
 // ── Carry / borrow propagation ────────────────────────────────────────────────

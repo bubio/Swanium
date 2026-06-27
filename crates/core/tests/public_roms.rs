@@ -69,7 +69,7 @@ fn wscputest_all_tests_pass() {
     let max_cycles = 3_072_000u64 * 10; // 10 seconds of simulated time
     let (cpu, bus) = boot_rom(rom, max_cycles);
 
-    // TODO: update this check once the WSCPUTest output convention is confirmed.
+    // TODO(issue): confirm WSCPUTest output convention and update these assertions.
     // Current placeholder: CPU must have halted (test finished) and WRAM[0] = 0 (pass).
     assert!(
         cpu.halted,
@@ -102,7 +102,7 @@ fn ws_test_suite_rom_passes() {
     let max_cycles = 3_072_000u64 * 10;
     let (cpu, bus) = boot_rom(rom, max_cycles);
 
-    // TODO: confirm the ws-test-suite output convention and update accordingly.
+    // TODO(issue): confirm ws-test-suite output convention and update accordingly.
     assert!(
         cpu.halted,
         "ws-test-suite ROM did not reach HLT within the cycle budget"
