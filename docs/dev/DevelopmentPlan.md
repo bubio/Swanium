@@ -272,6 +272,60 @@ video               audio                input
 **テスト方法**
 -   ユニットテスト: 既知のレジスタ設定から解析的に計算した波形とサンプル列を比較
 
+**設計上の確定事項**
+-   **全4チャンネルが波形テーブル方式**（WonderSwanの音源はGB/NESと異なり、4ch全てが
+    32サンプル×4bitの波形テーブルオシレータ）。「矩形波」は波形テーブルに矩形パターンを
+    書くことで得る。波形データは内蔵WRAMを共有（PPUと同様、独立音声RAMは無い）。
+-   **駆動粒度**: 3.072 MHzサウンドクロック（= CPU 1サイクル）単位で `tick(cycles, wram, ports)`
+    を進め、128サイクルごとに1ステレオサンプルを生成（24000 Hz）。
+-   **出力形式**: インターリーブ ステレオ `i16`（`L, R, L, R, …`）@ 24000 Hz。
+    `Bus::audio_samples() -> &[i16]` / `clear_audio_samples()` で公開。最終的なゲイン調整・
+    DCセンタリング・ホスト sample-rate へのリサンプルは frontend/audio (cpal) 側が担当。
+-   **チャンネル特殊機能**: ch2=ボイス(8bit PCM, port 0x89がサンプル / 0x94がL/R音量)、
+    ch3=スイープ(0x8C/0x8D)、ch4=ノイズ(15bit LFSR, port 0x8E, タップ可変)。
+    スイープ・ノイズは結果をレジスタ可視状態へ書き戻す（pitch 0x84/85、LFSR 0x92/93）。
+
+**サブフェーズ分解（実装単位）**
+
+| サブ | 内容 | 状態 |
+|---|---|---|
+| 5a | `apu`モジュール: `WaveChannel`波形ステッピング + `Apu`スケルトン + サンプルバッファ + `lib.rs`へ`pub mod apu` | ✅ 完了 |
+| 5b | チャンネルenable + 音量ミックス(L/R nibble) + ステレオ出力 | ✅ 完了 |
+| 5c | ノイズ(ch4): 15bit LFSR・タップ可変・0x92/93書き戻し | ✅ 完了 |
+| 5d | スイープ(ch3) + ボイス(ch2 PCM, 0x94音量) | ✅ 完了 |
+| 5e | Bus統合(`Bus`が`Apu`保持) + `tick_apu`/`audio_samples`/`clear_audio_samples`公開 + 統合テスト `tests/apu_render.rs` | ✅ 完了 |
+
+**実装メモ**
+-   WonderCrab `src/sound` をアルゴリズム参照とし、borrow安全・core非依存・解析テスト可能な
+    設計に作り替えた。2点の意図的な逸脱（コード内に明記）:
+    1.  **ノイズLFSRのシード**: WonderCrabは0シードだが、XORフィードバックでは全0が固定状態
+        （ノイズが出ない）。Swaniumは非ゼロ（1）でシードし、reset要求(0x8E bit3)も1で再シード。
+    2.  **ノイズDACレベル**: WonderCrabは0xFF/0x00。Swaniumは他チャンネルと同じ4bitドメインに
+        揃えるため 0x0F/0x00 を出力。
+-   APU内部型 `WaveChannel` は `pub(crate)`、自由関数 `pitch_of`/`mix`/`voice_output` は private。
+    crate公開APIは `Apu` と関連定数（`OUTPUT_SAMPLE_RATE`/`CYCLES_PER_SAMPLE`/`MASTER_CLOCK`/
+    `STEREO_CHANNELS`）のみ。
+-   テスト数: APUユニット 32 + `apu_render.rs` 8 = Phase 5で +40。
+
+**Phase 5 後続課題**
+1.  **Sound DMA(SDMA)連携**: ボイスチャンネルへのSDMA転送（port 0x4A–0x52, Phase 2でレジスタ
+    配線済み）と `tick_apu` の連動が未実装。現状ボイスは port 0x89 を直接読む。SDMAが
+    サンプルを 0x89 へ供給する経路を実装する（Phase 7のフロントエンド実プレイ前に推奨）。
+2.  **`tick` のサイクル単位ループ**: `tick` は1サウンドクロックずつループする（1フレーム約5万回）。
+    性能上は問題ないが、サンプル境界までのバッチ処理（次のチャンネル前進までの最小公倍数で
+    まとめて進める）に最適化する余地がある。cycle-accuracy方針上のドット/サウンド単位駆動
+    リファクタ時に併せて検討。
+3.  **高品質リサンプル**: 現状は3.072 MHz生成値を128サイクルごとに単純間引き（デシメーション）
+    しており、ナイキスト以上の成分はエイリアスする。Blip_Buffer相当の帯域制限リサンプルは
+    audio品質フェーズで検討（DoDの「正しい波形のサンプル列」は満たす）。
+4.  **マスター音量(0x9E)・ヘッドホン出力(0x91)**: WSCのマスター音量2bit、スピーカー/ヘッドホン
+    切替・出力シフトは未実装（現状はステレオL/Rを生のまま出力）。frontend実プレイ時に実装。
+5.  **ノイズタップ/スイープ周期の実機検証**: タップ位置テーブルとスイープ8192tick周期は
+    WonderCrab由来。実機/他エミュとの突き合わせは精度フェーズで実施。
+
+**対応フェーズ**: 1 はPhase 7前に推奨。2・3 はcycle-accuracy/audio品質強化フェーズ。
+4 はPhase 7（フロントエンド）。5 は精度フェーズ。
+
 ---
 
 ## Phase 6 — カートリッジ/セーブRAM

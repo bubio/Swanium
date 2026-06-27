@@ -9,6 +9,7 @@ mod tests;
 
 pub use cart::Cartridge;
 
+use crate::apu::Apu;
 use crate::cpu::MemoryBus;
 use crate::ppu::{MonoPaletteResolver, Ppu};
 
@@ -60,6 +61,8 @@ pub struct Bus {
     ports: [u8; 0x100],
     /// Picture processing unit (renders from `wram` + display registers).
     ppu: Ppu,
+    /// Audio processing unit (samples waveforms from `wram` + sound registers).
+    apu: Apu,
 }
 
 impl Bus {
@@ -70,6 +73,7 @@ impl Bus {
             cart: Cartridge::new(rom, Vec::new()),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
+            apu: Apu::new(),
         };
         // INT_ENABLE: VBLANK (bit 6) is always forced on.
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
@@ -83,6 +87,7 @@ impl Bus {
             cart: Cartridge::new(rom, sram),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
+            apu: Apu::new(),
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
@@ -288,6 +293,26 @@ impl Bus {
     /// row-major. Stable read API for the frontend and RetroAchievements.
     pub fn framebuffer(&self) -> &[u8] {
         self.ppu.framebuffer()
+    }
+
+    // ── APU ──────────────────────────────────────────────────────────────
+
+    /// Advance the APU by `cycles` sound-clock ticks (one per CPU cycle),
+    /// generating audio samples from the waveform data in WRAM and the sound
+    /// registers. Sweep and noise write back into the register file.
+    pub fn tick_apu(&mut self, cycles: u32) {
+        self.apu.tick(cycles, &self.wram, &mut self.ports);
+    }
+
+    /// The interleaved stereo samples (`L, R, …`) generated so far, at
+    /// [`Apu::OUTPUT_SAMPLE_RATE`]. Stable read API for the audio frontend.
+    pub fn audio_samples(&self) -> &[i16] {
+        self.apu.samples()
+    }
+
+    /// Drop all buffered audio samples (call after the frontend consumes them).
+    pub fn clear_audio_samples(&mut self) {
+        self.apu.clear_samples();
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────

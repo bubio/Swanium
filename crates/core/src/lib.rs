@@ -4,6 +4,7 @@
 //! (see docs/dev/Blueprint.md and docs/dev/DevelopmentPlan.md). It is
 //! implemented and tested in subsequent phases of the development plan.
 
+pub mod apu;
 pub mod bus;
 pub mod cpu;
 pub mod ppu;
