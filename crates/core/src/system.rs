@@ -34,6 +34,22 @@ pub const CYCLES_PER_SCANLINE: u32 = 256;
 /// CPU cycles in one full frame ([`SCANLINES_PER_FRAME`] × [`CYCLES_PER_SCANLINE`]).
 pub const CYCLES_PER_FRAME: u32 = SCANLINES_PER_FRAME as u32 * CYCLES_PER_SCANLINE;
 
+/// Display-register state captured at one visible scanline by
+/// [`System::run_frame_traced`], for diagnosing per-scanline (raster) effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanlineTrace {
+    /// Visible scanline (0–143).
+    pub line: u8,
+    /// Display-control register (port 0x00).
+    pub disp_ctrl: u8,
+    /// SCR1 vertical scroll (port 0x11).
+    pub scr1_scroll_y: u8,
+    /// SCR2 vertical scroll (port 0x13).
+    pub scr2_scroll_y: u8,
+    /// LCD line-compare register (port 0x03).
+    pub line_compare: u8,
+}
+
 /// The complete emulated WonderSwan: CPU plus the hardware [`Bus`].
 pub struct System {
     cpu: Cpu,
@@ -72,6 +88,19 @@ impl System {
     /// APU across frames; the caller drains them with [`System::audio_samples`]
     /// and [`System::clear_audio_samples`].
     pub fn run_frame(&mut self, keys: KeyState) {
+        self.drive_frame(keys, None);
+    }
+
+    /// Run one frame while recording the display registers seen at each visible
+    /// scanline. For PPU debugging (e.g. diagnosing raster split effects); the
+    /// returned vector has one entry per visible line.
+    pub fn run_frame_traced(&mut self, keys: KeyState) -> Vec<ScanlineTrace> {
+        let mut trace = Vec::with_capacity(VISIBLE_SCANLINES as usize);
+        self.drive_frame(keys, Some(&mut trace));
+        trace
+    }
+
+    fn drive_frame(&mut self, keys: KeyState, mut trace: Option<&mut Vec<ScanlineTrace>>) {
         self.bus.set_keys(keys);
         for line in 0..SCANLINES_PER_FRAME {
             self.run_cpu_cycles(CYCLES_PER_SCANLINE);
@@ -79,6 +108,15 @@ impl System {
             self.bus.tick_gdma();
 
             if line < VISIBLE_SCANLINES {
+                if let Some(trace) = trace.as_deref_mut() {
+                    trace.push(ScanlineTrace {
+                        line: line as u8,
+                        disp_ctrl: self.bus.peek_io(0x00),
+                        scr1_scroll_y: self.bus.peek_io(0x11),
+                        scr2_scroll_y: self.bus.peek_io(0x13),
+                        line_compare: self.bus.peek_io(0x03),
+                    });
+                }
                 // Renders the line and advances the line-compare / HBlank hooks.
                 self.bus.render_scanline(line as u8);
             } else {

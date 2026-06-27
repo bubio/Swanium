@@ -217,6 +217,24 @@ enum BgLayer {
     Scr2,
 }
 
+impl Ppu {
+    /// Debug helper: the raw `(pixel, palette)` a background layer samples at
+    /// screen coordinate `(x, y)`. `scr2 = true` selects SCR2, else SCR1.
+    /// Pixel 0 on SCR2 is the transparent index.
+    pub fn debug_bg_sample(
+        &self,
+        wram: &[u8],
+        ports: &[u8],
+        scr2: bool,
+        x: usize,
+        y: u8,
+    ) -> (u8, u8) {
+        let layer = if scr2 { BgLayer::Scr2 } else { BgLayer::Scr1 };
+        let s = sample_background(wram, ports, layer, x, y);
+        (s.pixel, s.palette)
+    }
+}
+
 /// A decoded 16-bit tile-map entry (internal to the `ppu` module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TileMapEntry {

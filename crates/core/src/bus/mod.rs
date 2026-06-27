@@ -134,6 +134,23 @@ impl Bus {
         &mut self.cart
     }
 
+    /// Read the raw shadow value of an I/O port without side effects.
+    ///
+    /// Unlike [`MemoryBus::read_io`], this never clears edge-triggered bits or
+    /// applies read masks; it is a debugging/tooling accessor for ports that
+    /// hold plain register state (display control, scroll, line-compare, …).
+    pub fn peek_io(&self, port: u8) -> u8 {
+        self.ports[port as usize]
+    }
+
+    /// Debug helper: the raw `(pixel, palette)` a background layer samples at
+    /// screen coordinate `(x, y)` (`scr2 = true` selects SCR2). For diagnosing
+    /// layer compositing and transparency.
+    pub fn debug_bg_sample(&self, scr2: bool, x: usize, y: u8) -> (u8, u8) {
+        self.ppu
+            .debug_bg_sample(&self.wram, &self.ports, scr2, x, y)
+    }
+
     // ── Key matrix ────────────────────────────────────────────────────────
 
     /// Set the currently-held keys (read back through port 0xB5).
