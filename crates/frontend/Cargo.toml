@@ -13,3 +13,4 @@ swanium-core = { path = "../core" }
 video = { path = "../video" }
 audio = { path = "../audio" }
 input = { path = "../input" }
+tracing = "0.1"

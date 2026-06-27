@@ -406,6 +406,56 @@ video               audio                input
 -   実ROMでの起動・操作確認（手動QA）
 -   CIでは「ビルドが通る」「ヘッドレスでcoreを一定フレーム実行してクラッシュしない」程度の自動テストに限定
 
+### 設計上の確定事項（Phase 7 前半: コア駆動 + 薄い変換層）
+
+Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先に実装し、slint/wgpu/cpal/gilrs の
+実ウィンドウ配線は後続課題に分離する」方針で着手した。重い GUI 依存を入れる前に、
+アーキテクチャ上重要かつヘッドレスでテスト可能な部分（フレーム境界駆動・入力レジスタ・
+変換ロジック）を確定させ、CI 緑を維持する。
+
+-   **キー入力（`crates/core/src/keypad.rs`）**: 11 個の物理キー（X1–X4 / Y1–Y4 / Start / A / B）を
+    `KeyState`（`u16` ビット集合）で表現。ハードのスキャン順に合わせたビット配置
+    （Y=bit0–3 / X=bit4–7 / ボタン=bit8–11、bit8 は未使用）にし、`Bus::read_io(0xB5)` を
+    `KeyState::scan(select)`（セレクタ高ニブル → 該当グループの下位ニブルを OR）で実装。
+    `Bus::set_keys()` は前フレームとの差分で新規押下時に `KeyPress` 割り込みを立てる
+    （フレーム粒度の近似; HALT 復帰用途には十分）。ホストのキー/パッド → `KeyState` の対応は
+    `crates/input` 側に置き、core はウィンドウ/パッドライブラリに依存しない。
+-   **フレーム境界駆動（`crates/core/src/system.rs`）**: `System { cpu, bus }` が機械全体を所有し、
+    `run_frame(keys)` で 1 フレーム（159 スキャンライン: 可視 144 + 垂直帰線 15、各 256 サイクル）を
+    駆動する。各ラインで「CPU を 256 サイクル実行 → APU/GDMA を同サイクル進める →
+    可視ラインは `render_scanline`、帰線ラインは `set_current_scanline` のみ → 144 ライン目で
+    `on_vblank`」。CPU は命令間で `pending_irq` を確認し、IF が立っていれば `handle_irq` で受理。
+    これは開発計画書 §5 の逐次駆動モデルそのままで、サイクル厳密なインターリーブは後続フェーズの精緻化。
+-   **RA 向け公開 API**: `System::read_memory_at(addr)`（20bit 物理空間の副作用なし読み出し）を用意し、
+    §7 の「安定したメモリ参照 API」「1 フレームずつ呼べるフレーム境界フック」要件を満たす形にした。
+-   **変換層（薄いアダプタ、外部依存無し・全て単体テスト付き）**:
+    -   `crates/video`: 濃淡インデックス（0–15）→ RGBA8 変換（`shade_to_rgba` / `framebuffer_to_rgba` /
+        `write_rgba`）。`shade 0 = 白`、`15 = 黒`（`255 − shade×17`）。wgpu サーフェスは後続課題。
+    -   `crates/audio`: インターリーブ i16 用固定容量リングバッファ（`RingBuffer`）。オーバーラン時は
+        新しいサンプルを破棄、アンダーラン時は無音パディング。cpal ストリームは後続課題。
+    -   `crates/input`: バックエンド非依存の `Button` enum（11 キー）+ `keys_from` で `KeyState` へ畳み込み。
+        `default_keyboard_bindings()` は windowing ライブラリに依存しない `(キー名, Button)` の既定表。
+        gilrs / 実キーボードイベントの取り込みは後続課題。
+-   **`crates/common`**: `logging::init()` を `tracing-subscriber`（`RUST_LOG` 既定 `info`、二重初期化は無害）で
+    本実装。`Config` を型付き（scale / volume / start_paused + `sanitised()`）に。設定ファイル永続化（TOML）は
+    Slint 設定 UI と合わせて後続課題。
+-   **`crates/frontend`**: 実プレイ GUI 配線前のヘッドレス実行ランナーを実装。ROM を読み込み `System` を
+    1 フレームずつ駆動し、各フレームを video / audio / input 変換層に通す（データ経路の健全性確認 +
+    「起動して N フレーム走ってクラッシュしない」スモーク）。
+
+### Phase 7 後続課題（GUI 実配線; 別タスクで対応）
+
+-   **Slint UI 骨格**: ROM 選択ダイアログ、起動/一時停止、基本設定画面、メインループ。
+-   **wgpu 描画**: `crates/video` に wgpu サーフェス/スワップチェーン/整数スケーリングを追加し、
+    `write_rgba` の出力をテクスチャアップロード。
+-   **cpal 音声出力**: `crates/audio` に cpal ストリームを追加し、`RingBuffer` を出力コールバックへ供給。
+    音声-映像同期（リングバッファ水位に基づくフレームペーシング）。
+-   **gilrs / キーボード入力**: `crates/input` に gilrs パッドと実ウィンドウのキーイベントを `Button` に
+    変換する層を追加。`default_keyboard_bindings()` を実キーコードへ解決。
+-   **設定ファイル永続化**: `Config` の TOML ロード/セーブ（serde + toml）を設定 UI と共に実装。
+-   **キー押下割り込みの精緻化**: 現状フレーム粒度の `KeyPress` 割り込みを、必要ならスキャン
+    タイミングに合わせた粒度へ。
+
 ---
 
 ## Phase 8 — WonderSwan Color / SwanCrystal拡張

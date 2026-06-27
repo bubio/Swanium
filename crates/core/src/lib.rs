@@ -7,4 +7,6 @@
 pub mod apu;
 pub mod bus;
 pub mod cpu;
+pub mod keypad;
 pub mod ppu;
+pub mod system;

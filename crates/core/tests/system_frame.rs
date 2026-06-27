@@ -1,0 +1,66 @@
+//! Integration smoke tests for the frame-boundary driver.
+//!
+//! These drive [`System`] through the public API exactly as the frontend will:
+//! load a ROM, run whole frames, and observe the framebuffer / save data.
+//! The intent (per `docs/dev/DevelopmentPlan.md` Phase 7 テスト方法) is a
+//! "headlessly runs N frames without crashing" guarantee, plus a check that a
+//! tiny program drawn into WRAM actually reaches the framebuffer across frames.
+
+use swanium_core::cpu::MemoryBus;
+use swanium_core::keypad::KeyState;
+use swanium_core::system::System;
+
+/// A 64 KiB ROM whose reset entry (`0xFFFF0`, the last 16 bytes) is `HLT`.
+fn halting_rom() -> Vec<u8> {
+    let mut rom = vec![0u8; 0x10000];
+    let len = rom.len();
+    rom[len - 16] = 0xF4; // HLT
+    rom
+}
+
+#[test]
+fn runs_many_frames_without_panicking() {
+    let mut system = System::new(halting_rom());
+    for _ in 0..120 {
+        system.run_frame(KeyState::NONE);
+    }
+    assert_eq!(system.framebuffer().len(), 224 * 144);
+}
+
+#[test]
+fn key_press_sets_keypad_scan_result() {
+    let mut system = System::new(halting_rom());
+    system.run_frame(KeyState::X1 | KeyState::A);
+    // Select the X-pad group (0x20) on the keypad port, then read it back.
+    system.bus_mut().write_io(0xB5, 0x20);
+    assert_eq!(system.bus_mut().read_io(0xB5), 0x20 | 0x01); // X1 -> bit 0
+}
+
+#[test]
+fn background_tile_reaches_framebuffer_after_a_frame() {
+    let mut system = System::new(halting_rom());
+    let bus = system.bus_mut();
+    // Identity monochrome palette (tile pixel i -> shade i).
+    bus.write_io(0x20, 0x10);
+    bus.write_io(0x21, 0x32);
+    bus.write_io(0x1C, 0x10);
+    bus.write_io(0x1D, 0x32);
+    bus.write_io(0x00, 0x01); // enable SCR1
+    bus.write_io(0x07, 0x00); // SCR1 map base 0
+                              // Tile 0, row 0, leftmost pixel = colour 1.
+    bus.write_u8(0x2000, 0b1000_0000);
+    bus.write_u8(0x2001, 0b0000_0000);
+
+    system.run_frame(KeyState::NONE);
+    assert_eq!(system.framebuffer()[0], 1);
+}
+
+#[test]
+fn save_data_round_trips_through_system() {
+    let sram = vec![0u8; 0x8000];
+    let mut system = System::with_sram(halting_rom(), sram);
+    let mut snapshot = vec![0u8; 0x8000];
+    snapshot[10] = 0xAB;
+    system.load_save_data(&snapshot);
+    assert_eq!(system.save_data()[10], 0xAB);
+}

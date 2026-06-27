@@ -11,6 +11,7 @@ pub use cart::{Cartridge, CartridgeHeader, Mapper, Rtc, SaveType};
 
 use crate::apu::Apu;
 use crate::cpu::MemoryBus;
+use crate::keypad::KeyState;
 use crate::ppu::{MonoPaletteResolver, Ppu};
 
 /// Open-bus return value for unmapped reads on WonderSwan mono.
@@ -63,6 +64,8 @@ pub struct Bus {
     ppu: Ppu,
     /// Audio processing unit (samples waveforms from `wram` + sound registers).
     apu: Apu,
+    /// Currently-held keys, presented on port 0xB5 when scanned.
+    keys: KeyState,
 }
 
 impl Bus {
@@ -74,6 +77,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            keys: KeyState::NONE,
         };
         // INT_ENABLE: VBLANK (bit 6) is always forced on.
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
@@ -88,6 +92,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            keys: KeyState::NONE,
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
@@ -102,6 +107,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            keys: KeyState::NONE,
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
@@ -126,6 +132,22 @@ impl Bus {
     /// Returns a mutable reference to the cartridge.
     pub fn cart_mut(&mut self) -> &mut Cartridge {
         &mut self.cart
+    }
+
+    // ── Key matrix ────────────────────────────────────────────────────────
+
+    /// Set the currently-held keys (read back through port 0xB5).
+    ///
+    /// Newly-pressed keys raise [`IrqSource::KeyPress`]; the frontend calls this
+    /// once per frame with the host input mapped to a [`KeyState`]. The press
+    /// interrupt is modelled at frame granularity (an edge versus the previous
+    /// call), which is sufficient for the maskable wake-from-HALT use case.
+    pub fn set_keys(&mut self, keys: KeyState) {
+        let newly_pressed = keys.bits() & !self.keys.bits();
+        self.keys = keys;
+        if newly_pressed != 0 {
+            self.request_irq(IrqSource::KeyPress);
+        }
     }
 
     // ── Interrupt controller ──────────────────────────────────────────────
@@ -417,6 +439,8 @@ impl MemoryBus for Bus {
                 self.ports[0xB4] &= !0b1111_0010;
                 v
             }
+            // KEYPAD: low nibble = scanned keys, high nibble = group selector
+            0xB5 => self.keys.scan(self.ports[0xB5] & 0x70),
             // INT_CAUSE_CLEAR is write-only
             0xB6 => 0,
             // INT_NMI_CTRL: clears all but bit 4 on read
@@ -495,6 +519,8 @@ impl MemoryBus for Bus {
             0xB3 => {}
             // INT_CAUSE is read-only (clear via INT_CAUSE_CLEAR)
             0xB4 => {}
+            // KEYPAD: only the group-selector nibble is writable
+            0xB5 => self.ports[0xB5] = value & 0x70,
             // INT_CAUSE_CLEAR: writing 1 clears the corresponding INT_CAUSE bits
             0xB6 => {
                 self.ports[0xB6] = value;
