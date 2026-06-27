@@ -345,6 +345,46 @@ video               audio                input
 **テスト方法**
 -   ユニットテスト: バンク切り替え境界値、SRAM読み書き、複数マッパー種別のテストフィクスチャ
 
+### 設計上の確定事項（Phase 6 実装時）
+
+-   **モジュール構成**: `crates/core/src/bus/cart/` 以下に分割。`header.rs`（フッタ解析）、
+    `eeprom.rs`（シリアルEEPROMデバイス）、`rtc.rs`（RTCインターフェーススタブ）、
+    `mod.rs`（`Cartridge` 本体・バンキング・セーブデータAPI）。
+-   **ヘッダ解析**: ROMイメージ末尾16バイトのフッタ（物理 0xFFFF0–0xFFFFF。リセット時の
+    CPU実行開始位置でもある）を `CartridgeHeader::parse` で解析。publisher / color フラグ /
+    game_id / version / ROMサイズコード / セーブタイプ / 画面向き / マッパー / チェックサムを取得。
+    フッタが無い（ROMが16バイト未満）場合は `None`。
+-   **セーブタイプ**: `SaveType { None, Sram(usize), Eeprom(usize) }`。フッタの save コード
+    （0x01–0x05=SRAM、0x10/0x20/0x50=EEPROM）から容量を決定。1カートリッジのセーブ媒体は
+    SRAM **か** EEPROM のどちらか一方。
+-   **マッパー方式**: 当初計画の「`CartridgeMapper` トレイト」は、既知マッパーが Bandai 2001 /
+    2003 の2種（閉じた集合）であることから、`dyn` トレイトオブジェクトではなく `Mapper` enum
+    でのディスパッチに変更した（Apollo Rust ベストプラクティス Ch.6: 閉じた集合は enum を優先、
+    `dyn` はヘテロな開集合向け）。決定的・FFIフレンドリーなコア API 方針（RetroAchievements要件）
+    とも整合する。2001 は8ビットバンクレジスタ、2003 は上位バイトポート 0xD1/0xD3/0xD5 を加えた
+    16ビットバンクレジスタ。バンクオフセットは OR セマンティクス `(bank << 16) | (addr & 0xFFFF)`
+    を媒体長で剰余。
+-   **EEPROM**: 93Cxx（Microwire）相当のシリアルEEPROM。READ/WRITE/ERASE と拡張命令
+    EWEN/EWDS/WRAL/ERAL を実装。カートリッジEEPROMポート 0xC4–0xC8（データ/コマンドラッチ +
+    制御）を配線。コマンドワードは `[start][2bit opcode][address]` 形式で、容量に応じたアドレス
+    ビット幅（128B→6、1KiB→9、2KiB→10）を使用。
+-   **RTC**: `Option<Rtc>` フィールドとして `Cartridge` に保持。Phase 6 ではインターフェース
+    （`Rtc` 型、`state`/`load_state`、`Cartridge::has_rtc`/`rtc()`）のみを公開し、実時間計時・
+    BCD レジスタ・ポート 0xCA/0xCB のコマンドプロトコルは Phase 8 で実装する。
+-   **セーブデータAPI**: `Bus::save_data() -> &[u8]`（SRAM または EEPROM 内容のゼロコピー参照）、
+    `Bus::load_save_data(&[u8])`、`Cartridge::has_save()`。ファイルI/O は frontend 側。
+
+### Phase 6 後続課題
+
+-   **内蔵EEPROM（IEEPROM）**: コンソール側の内蔵EEPROM（ポート 0xBA–0xBE、本体設定/名前保存）は
+    未配線。デバイス実装（`Eeprom`）は流用可能。Phase 7 のフロントエンド統合時に配線する。
+-   **RTC本体**: 計時ロジック・レジスタ・コマンドプロトコルは Phase 8（Color/Crystal）で実装。
+    ヘッダからのRTC自動検出（フッタのRTCビット位置）も実機未検証のため Phase 8 で確定する。
+-   **マッパー2003の実機検証**: 2003 の上位バイトバンクポート割り当て（0xD0–0xD5）は WonderCrab
+    参照実装に準拠。実カートリッジでの動作確認は未実施。
+-   **セーブデータのフレーミング**: 現状 `save_data()` は単一媒体（SRAM xor EEPROM）の生バイト列。
+    将来 RTC状態を含む複合セーブが必要になれば、バージョン付きフレーミングを別途設計する。
+
 ---
 
 ## Phase 7 — 最小フロントエンド（実プレイ可能版、v1.0候補）

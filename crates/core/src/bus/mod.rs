@@ -7,7 +7,7 @@ mod cart;
 #[cfg(test)]
 mod tests;
 
-pub use cart::Cartridge;
+pub use cart::{Cartridge, CartridgeHeader, Mapper, Rtc, SaveType};
 
 use crate::apu::Apu;
 use crate::cpu::MemoryBus;
@@ -93,9 +93,34 @@ impl Bus {
         bus
     }
 
+    /// Create a bus from a ROM image, allocating the cartridge's save medium
+    /// (SRAM or EEPROM) and configuring its mapper from the parsed header.
+    pub fn from_rom(rom: Vec<u8>) -> Self {
+        let mut bus = Self {
+            wram: vec![0u8; 0x10000].into_boxed_slice(),
+            cart: Cartridge::from_rom(rom),
+            ports: [0u8; 0x100],
+            ppu: Ppu::new(),
+            apu: Apu::new(),
+        };
+        bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
+        bus
+    }
+
     /// Returns a shared reference to the cartridge (ROM, SRAM, bank registers).
     pub fn cart(&self) -> &Cartridge {
         &self.cart
+    }
+
+    /// The cartridge's persistent save bytes (SRAM or EEPROM contents), for the
+    /// frontend to write to disk. Empty if the cartridge has no save medium.
+    pub fn save_data(&self) -> &[u8] {
+        self.cart.save_data()
+    }
+
+    /// Restore the cartridge's save medium from previously serialised bytes.
+    pub fn load_save_data(&mut self, data: &[u8]) {
+        self.cart.load_save_data(data);
     }
 
     /// Returns a mutable reference to the cartridge.
@@ -324,8 +349,8 @@ impl Bus {
             a @ 0x00000..=0x03FFF => self.wram[a as usize],
             0x04000..=0x0FFFF => OPEN_BUS,
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
-            a @ 0x20000..=0x2FFFF => self.cart.read_rom_bank(self.cart.rom_bank0, a),
-            a @ 0x30000..=0x3FFFF => self.cart.read_rom_bank(self.cart.rom_bank1, a),
+            a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
+            a @ 0x30000..=0x3FFFF => self.cart.read_rom1(a),
             a @ 0x40000..=0xFFFFF => self.cart.read_rom_ex(a),
             _ => OPEN_BUS,
         }
@@ -338,8 +363,8 @@ impl MemoryBus for Bus {
             a @ 0x00000..=0x03FFF => self.wram[a as usize],
             0x04000..=0x0FFFF => OPEN_BUS,
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
-            a @ 0x20000..=0x2FFFF => self.cart.read_rom_bank(self.cart.rom_bank0, a),
-            a @ 0x30000..=0x3FFFF => self.cart.read_rom_bank(self.cart.rom_bank1, a),
+            a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
+            a @ 0x30000..=0x3FFFF => self.cart.read_rom1(a),
             a @ 0x40000..=0xFFFFF => self.cart.read_rom_ex(a),
             _ => OPEN_BUS,
         }
@@ -400,11 +425,26 @@ impl MemoryBus for Bus {
                 self.ports[0xB7] = v;
                 v
             }
-            // Cartridge bank registers
+            // Cartridge bank registers (low byte; both mappers)
             0xC0 => self.cart.linear_off,
             0xC1 => self.cart.ram_bank,
             0xC2 => self.cart.rom_bank0,
             0xC3 => self.cart.rom_bank1,
+            // Cartridge serial-EEPROM data/command latches
+            0xC4..=0xC7 if self.cart.has_eeprom() => self.ports[port as usize],
+            // EEPROM status: bit 1 set (device ready) when present
+            0xC8 if self.cart.has_eeprom() => 0x02,
+            0xC4..=0xC9 => OPEN_BUS,
+            // Bandai 2003 high-byte bank registers (open bus on 2001)
+            0xD0..=0xD5 if self.cart.mapper() == Mapper::Bandai2003 => match port {
+                0xD0 => self.cart.ram_bank,
+                0xD1 => self.cart.ram_bank_hi,
+                0xD2 => self.cart.rom_bank0,
+                0xD3 => self.cart.rom_bank0_hi,
+                0xD4 => self.cart.rom_bank1,
+                _ => self.cart.rom_bank1_hi,
+            },
+            0xD0..=0xD5 => OPEN_BUS,
             // Default: return raw shadow value
             p => self.ports[p as usize],
         }
@@ -477,6 +517,29 @@ impl MemoryBus for Bus {
                 self.cart.rom_bank1 = value;
                 self.ports[0xC3] = value;
             }
+            // Cartridge serial-EEPROM data/command latches
+            0xC4..=0xC7 if self.cart.has_eeprom() => self.ports[port as usize] = value,
+            // EEPROM control: high nibble selects the operation; the data latch
+            // (0xC4/0xC5) is refreshed with the result of a READ.
+            0xC8 if self.cart.has_eeprom() => {
+                self.ports[0xC8] = value & 0xF0;
+                let operation = value >> 4;
+                let data = u16::from_le_bytes([self.ports[0xC4], self.ports[0xC5]]);
+                let comm = u16::from_le_bytes([self.ports[0xC6], self.ports[0xC7]]);
+                let new_data = self.cart.eeprom_control(operation, data, comm);
+                [self.ports[0xC4], self.ports[0xC5]] = new_data.to_le_bytes();
+            }
+            0xC4..=0xC9 => {} // EEPROM absent: ignore
+            // Bandai 2003 high-byte bank registers (ignored on 2001)
+            0xD0..=0xD5 if self.cart.mapper() == Mapper::Bandai2003 => match port {
+                0xD0 => self.cart.ram_bank = value,
+                0xD1 => self.cart.ram_bank_hi = value,
+                0xD2 => self.cart.rom_bank0 = value,
+                0xD3 => self.cart.rom_bank0_hi = value,
+                0xD4 => self.cart.rom_bank1 = value,
+                _ => self.cart.rom_bank1_hi = value,
+            },
+            0xD0..=0xD5 => {}
             // Default: raw write
             p => self.ports[p as usize] = value,
         }
