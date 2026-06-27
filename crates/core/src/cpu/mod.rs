@@ -974,10 +974,9 @@ impl Cpu {
                 15
             }
 
-            // ── String instructions (MOVS/CMPS/STOS/LODS/SCAS) ───────────
-            0xA4 | 0xA5 | 0xA6 | 0xA7 | 0xAA | 0xAB | 0xAC | 0xAD | 0xAE | 0xAF => {
-                self.exec_string_op(bus, opcode)
-            }
+            // ── String instructions (MOVS/CMPS/STOS/LODS/SCAS, INS/OUTS) ──
+            0x6C | 0x6D | 0x6E | 0x6F | 0xA4 | 0xA5 | 0xA6 | 0xA7 | 0xAA | 0xAB | 0xAC | 0xAD
+            | 0xAE | 0xAF => self.exec_string_op(bus, opcode),
 
             // ── INC/DEC r/m (group FE/FF) ─────────────────────────────────
             0xFE => {
@@ -1302,6 +1301,7 @@ impl Cpu {
     fn exec_string_op<B: MemoryBus>(&mut self, bus: &mut B, op: u8) -> u32 {
         let src_seg = self.seg_override.unwrap_or(self.regs.ds);
         let base_cycles: u32 = match op {
+            0x6C..=0x6F => 8,
             0xA4 | 0xA5 => 8,
             0xA6 | 0xA7 => 22,
             0xAA | 0xAB => 7,
@@ -1349,6 +1349,38 @@ impl Cpu {
         };
 
         match op {
+            0x6C => {
+                // INSB: port DX → ES:DI
+                let port = self.regs.dx as u8;
+                let v = bus.read_io(port);
+                bus.write_u8(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0x6D => {
+                // INSW: port DX (and DX+1) → ES:DI
+                let port = self.regs.dx as u8;
+                let lo = bus.read_io(port);
+                let hi = bus.read_io(port.wrapping_add(1));
+                let v = u16::from_le_bytes([lo, hi]);
+                bus.write_u16(linear_address(self.regs.es, self.regs.di), v);
+                self.regs.di = self.regs.di.wrapping_add(delta);
+            }
+            0x6E => {
+                // OUTSB: DS:SI → port DX
+                let port = self.regs.dx as u8;
+                let v = bus.read_u8(linear_address(src_seg, self.regs.si));
+                bus.write_io(port, v);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+            }
+            0x6F => {
+                // OUTSW: DS:SI → port DX (and DX+1)
+                let port = self.regs.dx as u8;
+                let v = bus.read_u16(linear_address(src_seg, self.regs.si));
+                let [lo, hi] = v.to_le_bytes();
+                bus.write_io(port, lo);
+                bus.write_io(port.wrapping_add(1), hi);
+                self.regs.si = self.regs.si.wrapping_add(delta);
+            }
             0xA4 => {
                 let v = bus.read_u8(linear_address(src_seg, self.regs.si));
                 bus.write_u8(linear_address(self.regs.es, self.regs.di), v);

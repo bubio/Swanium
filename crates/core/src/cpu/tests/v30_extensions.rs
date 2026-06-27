@@ -1,9 +1,59 @@
 //! 80186 / V30 instruction-set additions beyond the 8086 base set:
-//! PUSHA/POPA, BOUND, PUSH/IMUL with immediates, immediate-count shifts, and
-//! POP r/m16.
+//! PUSHA/POPA, BOUND, PUSH/IMUL with immediates, immediate-count shifts,
+//! POP r/m16, and the INS/OUTS string-I/O instructions.
 
 use super::super::MemoryBus;
 use super::{run_with, Cpu, FlatMemory};
+
+/// Memory plus a 256-entry I/O space, recording the last `OUT`, for INS/OUTS.
+struct IoMemory {
+    data: Vec<u8>,
+    io: [u8; 256],
+    last_out: Option<(u8, u8)>,
+}
+
+impl IoMemory {
+    fn new(code: &[u8]) -> Self {
+        let mut data = vec![0u8; 0x10_0000];
+        data[..code.len()].copy_from_slice(code);
+        Self {
+            data,
+            io: [0; 256],
+            last_out: None,
+        }
+    }
+}
+
+impl MemoryBus for IoMemory {
+    fn read_u8(&self, addr: u32) -> u8 {
+        self.data[addr as usize]
+    }
+
+    fn write_u8(&mut self, addr: u32, value: u8) {
+        self.data[addr as usize] = value;
+    }
+
+    fn read_io(&mut self, port: u8) -> u8 {
+        self.io[port as usize]
+    }
+
+    fn write_io(&mut self, port: u8, value: u8) {
+        self.io[port as usize] = value;
+        self.last_out = Some((port, value));
+    }
+}
+
+/// Build a CPU + [`IoMemory`] at CS:IP = 0, apply `setup`, run one instruction.
+fn run_io(setup: impl FnOnce(&mut Cpu, &mut IoMemory), code: &[u8]) -> (Cpu, IoMemory) {
+    let mut mem = IoMemory::new(code);
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0xFFFE;
+    setup(&mut cpu, &mut mem);
+    cpu.step(&mut mem);
+    (cpu, mem)
+}
 
 // ── PUSHA (0x60) ─────────────────────────────────────────────────────────────
 
@@ -191,4 +241,135 @@ fn bound_below_lower_raises_int5() {
 #[test]
 fn bound_above_upper_raises_int5() {
     assert_eq!(run_bound(20, 0, 10).regs.ip, 0x0050);
+}
+
+// ── INS / OUTS string I/O (0x6C–0x6F) ────────────────────────────────────────
+
+#[test]
+fn insb_reads_port_into_memory() {
+    // INSB: port DX=0x10 → ES:DI=0x0500. Port latched with 0xAB.
+    let (_, mem) = run_io(
+        |cpu, mem| {
+            cpu.regs.dx = 0x10;
+            cpu.regs.es = 0;
+            cpu.regs.di = 0x0500;
+            mem.io[0x10] = 0xAB;
+        },
+        &[0x6C],
+    );
+    assert_eq!(mem.read_u8(0x0500), 0xAB);
+}
+
+#[test]
+fn insb_increments_di() {
+    let (cpu, _) = run_io(
+        |cpu, _| {
+            cpu.regs.es = 0;
+            cpu.regs.di = 0x0500;
+        },
+        &[0x6C],
+    );
+    assert_eq!(cpu.regs.di, 0x0501);
+}
+
+#[test]
+fn insw_reads_word_from_two_ports() {
+    // INSW: ports 0x10 (lo) and 0x11 (hi) → word at ES:DI.
+    let (_, mem) = run_io(
+        |cpu, mem| {
+            cpu.regs.dx = 0x10;
+            cpu.regs.es = 0;
+            cpu.regs.di = 0x0500;
+            mem.io[0x10] = 0xCD;
+            mem.io[0x11] = 0xAB;
+        },
+        &[0x6D],
+    );
+    assert_eq!(mem.read_u16(0x0500), 0xABCD);
+}
+
+#[test]
+fn outsb_writes_memory_to_port() {
+    // OUTSB: DS:SI=0x0400 → port DX=0x20.
+    let (_, mem) = run_io(
+        |cpu, mem| {
+            cpu.regs.dx = 0x20;
+            cpu.regs.ds = 0;
+            cpu.regs.si = 0x0400;
+            mem.data[0x0400] = 0xCD;
+        },
+        &[0x6E],
+    );
+    assert_eq!(mem.last_out, Some((0x20, 0xCD)));
+}
+
+#[test]
+fn outsb_increments_si() {
+    let (cpu, _) = run_io(
+        |cpu, _| {
+            cpu.regs.ds = 0;
+            cpu.regs.si = 0x0400;
+        },
+        &[0x6E],
+    );
+    assert_eq!(cpu.regs.si, 0x0401);
+}
+
+#[test]
+fn outsw_writes_high_byte_to_next_port() {
+    // OUTSW: word 0xABCD at DS:SI → ports 0x20 (lo) then 0x21 (hi); last is hi.
+    let (_, mem) = run_io(
+        |cpu, mem| {
+            cpu.regs.dx = 0x20;
+            cpu.regs.ds = 0;
+            cpu.regs.si = 0x0400;
+            mem.data[0x0400] = 0xCD;
+            mem.data[0x0401] = 0xAB;
+        },
+        &[0x6F],
+    );
+    assert_eq!(mem.last_out, Some((0x21, 0xAB)));
+}
+
+#[test]
+fn outsb_honours_direction_flag() {
+    // With DF set, SI decrements.
+    let (cpu, _) = run_io(
+        |cpu, _| {
+            cpu.regs.ds = 0;
+            cpu.regs.si = 0x0400;
+            cpu.flags.direction = true;
+        },
+        &[0x6E],
+    );
+    assert_eq!(cpu.regs.si, 0x03FF);
+}
+
+#[test]
+fn rep_outsb_consumes_cx() {
+    // REP OUTSB (0xF3 0x6E) with CX=3 transfers three bytes, leaving CX=0.
+    let (cpu, _) = run_io(
+        |cpu, _| {
+            cpu.regs.cx = 3;
+            cpu.regs.dx = 0x20;
+            cpu.regs.ds = 0;
+            cpu.regs.si = 0x0400;
+        },
+        &[0xF3, 0x6E],
+    );
+    assert_eq!(cpu.regs.cx, 0);
+}
+
+#[test]
+fn rep_insb_advances_di_per_byte() {
+    // REP INSB with CX=4 advances DI by four.
+    let (cpu, _) = run_io(
+        |cpu, _| {
+            cpu.regs.cx = 4;
+            cpu.regs.es = 0;
+            cpu.regs.di = 0x0500;
+        },
+        &[0xF3, 0x6C],
+    );
+    assert_eq!(cpu.regs.di, 0x0504);
 }
