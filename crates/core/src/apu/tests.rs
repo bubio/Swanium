@@ -175,7 +175,7 @@ fn disabled_channel_is_silent() {
 #[test]
 fn enabled_channel_left_volume_scales_sample() {
     // ch1 enabled, pitch 0 (sample held at idx1 = high nibble of byte0 = 5),
-    // left volume 3 → 5 × 3 = 15.
+    // left volume 3 → raw 5 × 3 = 15, scaled by MIX_SCALE (32) = 480.
     let (mut ports, mut wram) = blank();
     write_waveform(&mut wram, 0, {
         let mut w = [0u8; 16];
@@ -187,7 +187,7 @@ fn enabled_channel_left_volume_scales_sample() {
     set_pitch(&mut ports, 0, 0);
     let mut apu = Apu::new();
     apu.tick(128, &wram, &mut ports);
-    assert_eq!(apu.samples()[0], 15);
+    assert_eq!(apu.samples()[0], 480);
 }
 
 #[test]
@@ -208,13 +208,13 @@ fn enabled_channel_right_volume_is_independent() {
 
 #[test]
 fn mix_sums_two_channels_on_left() {
-    // ch1 sample 5 × vol 1 + ch2 sample 5 × vol 2 = 5 + 10 = 15.
+    // ch1 sample 5 × vol 1 + ch2 sample 5 × vol 2 = raw 15, scaled = 480.
     let mut ports = [0u8; 0x100];
     ports[0x90] = CTRL_ENABLE[0] | CTRL_ENABLE[1];
     ports[SND_CH_VOL] = 0x10; // ch1 L = 1
     ports[SND_CH_VOL + 1] = 0x20; // ch2 L = 2
     let (left, _) = mix(&[5, 5, 0, 0], ports[0x90], &ports);
-    assert_eq!(left, 15);
+    assert_eq!(left, 480);
 }
 
 // ── Voice (channel 2 PCM) ────────────────────────────────────────────────────
@@ -222,14 +222,14 @@ fn mix_sums_two_channels_on_left() {
 #[test]
 fn voice_overrides_channel2_sample_with_port_0x89() {
     // VOICE set: channel 2's sample comes from port 0x89 (8-bit), voice volume
-    // 0x04 → full left. 0x89 = 200 → left contribution 200.
+    // 0x04 → full left. 0x89 = 200 → raw 200, scaled by MIX_SCALE (32) = 6400.
     let (mut ports, wram) = blank();
     ports[0x90] = CTRL_ENABLE[1] | CTRL_VOICE;
     ports[SND_CH_VOL + 1] = 200; // 0x89 doubles as the PCM sample register
     ports[SND_VOICE_VOL] = 0x04; // left full
     let mut apu = Apu::new();
     apu.tick(128, &wram, &mut ports);
-    assert_eq!(apu.samples()[0], 200);
+    assert_eq!(apu.samples()[0], 6400);
 }
 
 #[test]

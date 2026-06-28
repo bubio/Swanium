@@ -300,6 +300,15 @@ fn pitch_of(ports: &[u8], ch: usize) -> u16 {
 
 /// Mix the four channel samples into one interleaved stereo (`L`, `R`) frame,
 /// applying per-channel volume and the channel-2 voice volume override.
+/// Scale applied to the raw channel sum before converting to `i16`.
+///
+/// The raw sum of 4 wave channels peaks at `4 × 15 × 15 = 900`, which is only
+/// 2.7 % of the i16 full-scale range (32767).  Multiplying by 32 brings the
+/// maximum to 28 800 (≈ 88 % of full scale), giving adequate headroom while
+/// mapping the hardware's output level into a range cpal can render at audible
+/// volume via the standard `/32768.0` f32 conversion.
+const MIX_SCALE: i32 = 32;
+
 fn mix(samples: &[u8; 4], ctrl: u8, ports: &[u8]) -> (i16, i16) {
     let mut left = 0i32;
     let mut right = 0i32;
@@ -314,7 +323,10 @@ fn mix(samples: &[u8; 4], ctrl: u8, ports: &[u8]) -> (i16, i16) {
             right += sample as i32 * (vol & 0x0F) as i32;
         }
     }
-    (left as i16, right as i16)
+    (
+        (left * MIX_SCALE).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        (right * MIX_SCALE).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+    )
 }
 
 /// Compute the channel-2 voice (`L`, `R`) contribution from the 8-bit PCM

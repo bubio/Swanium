@@ -57,7 +57,7 @@ fn channel1_left_sample_reflects_volume() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     setup_channel1_tone(&mut bus);
     bus.tick_apu(128);
-    assert_eq!(bus.audio_samples()[0], 15); // sample 5 × left volume 3
+    assert_eq!(bus.audio_samples()[0], 480); // raw 5 × vol 3 = 15, × MIX_SCALE 32 = 480
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn cpu_out_enabling_channel1_makes_tone_audible() {
 
     run_cpu_until_halt(&mut bus, 1_000);
     bus.tick_apu(128);
-    assert_eq!(bus.audio_samples()[0], 15);
+    assert_eq!(bus.audio_samples()[0], 480); // raw 15 × MIX_SCALE 32 = 480
 }
 
 #[test]
