@@ -22,8 +22,21 @@ use slint::{Image, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode};
 use swanium_core::keypad::KeyState;
 use swanium_core::system::System;
 
-/// WonderSwan refresh interval (~75.47 Hz → one frame every ~13.25 ms).
-const FRAME_INTERVAL: Duration = Duration::from_micros(13_250);
+/// Polling interval for the frame-pacing timer.
+///
+/// We poll at ~4 ms rather than the WS frame period (~13.25 ms) so that the
+/// audio ring-buffer fill level — not a fixed wall-clock timer — governs when
+/// the next emulated frame runs.  This decouples execution rate from OS
+/// scheduler jitter and drives the emulator at exactly the audio device's
+/// clock, eliminating tempo drift and reducing underrun stuttering.
+const POLL_INTERVAL: Duration = Duration::from_millis(4);
+
+/// Ring-buffer fill fraction above which we hold off running another frame.
+///
+/// 3/4 of 16 384 samples ≈ 128 ms of audio at 48 kHz — enough headroom to
+/// absorb OS scheduling spikes while keeping audio latency acceptable.
+const FILL_HOLD_NUM: usize = 3;
+const FILL_HOLD_DEN: usize = 4;
 
 slint::slint! {
     export component MainWindow inherits Window {
@@ -109,14 +122,31 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
         .map_err(|e| tracing::warn!("audio unavailable: {e}"))
         .ok();
 
-    // Drive one frame per tick and upload the result as the window's image.
+    // Pace emulated frames via audio ring-buffer fill level.
+    //
+    // The timer fires every 4 ms; we only run an emulated frame when the ring
+    // buffer has dropped below 3/4 capacity (≈128 ms at 48 kHz).  This ties
+    // the emulator's speed to the audio device clock rather than a wall-clock
+    // timer, keeping tempo accurate and minimising underrun stuttering.
+    // If no audio device is open we fall back to always running (timer-driven).
     let timer = Timer::default();
     let window_weak = window.as_weak();
-    timer.start(TimerMode::Repeated, FRAME_INTERVAL, move || {
-        let keys = input::keys_from(pressed.borrow().iter().copied());
+    timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
+        let dump = dump_request.take();
 
+        let should_run = dump
+            || audio_stream
+                .as_ref()
+                .map(|a| a.ring_fill() * FILL_HOLD_DEN < a.ring_capacity() * FILL_HOLD_NUM)
+                .unwrap_or(true);
+
+        if !should_run {
+            return;
+        }
+
+        let keys = input::keys_from(pressed.borrow().iter().copied());
         let mut system = system.borrow_mut();
-        if dump_request.take() {
+        if dump {
             dump_display_registers(&mut system, keys);
         } else {
             system.run_frame(keys);
@@ -128,7 +158,6 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
 
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
         video::write_rgba(system.framebuffer(), buffer.make_mut_bytes());
-
         if let Some(window) = window_weak.upgrade() {
             window.set_frame(Image::from_rgba8(buffer));
         }

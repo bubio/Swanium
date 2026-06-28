@@ -40,6 +40,8 @@ const SCRATCH_SIZE: usize = 8_192;
 /// Dropping this value stops the audio stream.
 pub struct AudioStream {
     ring: Arc<Mutex<RingBuffer>>,
+    /// Cached capacity so callers can read it without locking.
+    ring_capacity: usize,
     resampler: Resampler,
     /// Temporary buffer reused across [`push`](Self::push) calls.
     resampled: Vec<i16>,
@@ -74,6 +76,7 @@ impl AudioStream {
 
         Ok(Self {
             ring,
+            ring_capacity: RING_CAPACITY,
             resampler: Resampler::new(APU_SAMPLE_RATE, device_rate),
             resampled: Vec::new(),
             _stream: stream,
@@ -88,6 +91,19 @@ impl AudioStream {
         self.resampled.clear();
         self.resampler.process(samples, &mut self.resampled);
         let _ = self.ring.lock().unwrap().push(&self.resampled);
+    }
+
+    /// Number of samples currently queued (lock-based snapshot).
+    ///
+    /// Used by the frontend to decide whether to run another emulated frame
+    /// before the ring buffer empties and an underrun occurs.
+    pub fn ring_fill(&self) -> usize {
+        self.ring.lock().unwrap().len()
+    }
+
+    /// Total ring buffer capacity in samples (constant after construction).
+    pub fn ring_capacity(&self) -> usize {
+        self.ring_capacity
     }
 }
 
