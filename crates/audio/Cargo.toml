@@ -9,3 +9,5 @@ workspace = true
 
 [dependencies]
 swanium-core = { path = "../core" }
+cpal = "0.15"
+tracing = "0.1"

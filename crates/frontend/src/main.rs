@@ -103,6 +103,12 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
 
     let system = Rc::new(RefCell::new(System::from_rom(rom)));
 
+    // Open the cpal output stream.  Failure (e.g. headless CI) is non-fatal:
+    // the emulator runs silently and APU samples are discarded each frame.
+    let mut audio_stream = audio::AudioStream::open()
+        .map_err(|e| tracing::warn!("audio unavailable: {e}"))
+        .ok();
+
     // Drive one frame per tick and upload the result as the window's image.
     let timer = Timer::default();
     let window_weak = window.as_weak();
@@ -115,8 +121,9 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
         } else {
             system.run_frame(keys);
         }
-        // Audio is not yet routed to an output device; drop the samples so the
-        // APU buffer does not grow without bound.
+        if let Some(ref mut audio) = audio_stream {
+            audio.push(system.audio_samples());
+        }
         system.clear_audio_samples();
 
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);

@@ -1,18 +1,21 @@
-//! Audio sample buffering between the emulator core and the output device.
+//! Audio sample buffering and cpal output for Swanium.
 //!
 //! The core generates interleaved stereo `i16` samples one frame at a time
-//! (see [`swanium_core::system::System::audio_samples`]). The output device
-//! (cpal, wired in a later step — see `docs/dev/DevelopmentPlan.md` Phase 7
-//! 後続課題) pulls samples from a callback running on its own thread at an
-//! independent rate. [`RingBuffer`] decouples the two: the producer pushes a
-//! frame's worth of samples, the consumer pops whatever the device asks for,
-//! and rate mismatches degrade gracefully (overruns drop the newest samples,
-//! underruns are padded with silence) rather than blocking or panicking.
+//! (see [`swanium_core::system::System::audio_samples`]).  [`RingBuffer`]
+//! decouples producer (emulator thread) from consumer (cpal callback thread):
+//! the producer pushes a frame's worth of samples; the consumer pops whatever
+//! the device requests; rate mismatches degrade gracefully (overruns drop the
+//! newest samples; underruns are padded with silence).
 //!
-//! The buffer itself carries no threading; the frontend wraps it in the
-//! synchronisation primitive cpal requires. Keeping it a plain, single-threaded
-//! data structure makes the fill/drain logic unit-testable without an audio
-//! device.
+//! [`AudioStream`] opens the host output device and wires the ring buffer to
+//! it, resampling from the APU's 24 kHz output to whatever rate the device
+//! reports.  The frontend calls [`AudioStream::push`] once per frame and the
+//! cpal thread drains the buffer automatically.
+
+mod resample;
+pub mod stream;
+
+pub use stream::AudioStream;
 
 /// A fixed-capacity FIFO of interleaved `i16` audio samples.
 pub struct RingBuffer {
