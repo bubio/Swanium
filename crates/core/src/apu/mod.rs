@@ -15,10 +15,11 @@
 //! and emits one interleaved stereo [`i16`] sample every
 //! [`Apu::CYCLES_PER_SAMPLE`] ticks, i.e. at [`Apu::OUTPUT_SAMPLE_RATE`].
 //!
-//! Faithful to WonderCrab's `src/sound` with two deliberate deviations, both
-//! noted inline: the noise DAC level is kept in the 4-bit domain (`0x0F`/`0x00`
-//! rather than `0xFF`/`0x00`), and the sweep-step reload uses a saturating
-//! subtraction so a zero sweep-time register cannot underflow.
+//! The noise generator (channel 4) follows StoicGoose's `SoundChannel4`: a 15-bit
+//! LFSR with XNOR feedback (`1 ^ bit7 ^ bit_tap`), stepped every `2048 - pitch`
+//! sound-clock ticks, whose low bit drives a `0x0F`/`0x00` DAC.  The sweep-step
+//! reload uses a saturating subtraction (a deviation from WonderCrab) so a zero
+//! sweep-time register cannot underflow.
 
 #[cfg(test)]
 mod tests;
@@ -52,7 +53,6 @@ const PITCH_MASK: u16 = 0x7FF; // channel pitch/period is 11-bit
 const SWEEP_INTERVAL: u32 = 8192; // sound-clock ticks between sweep ticks
 const LFSR_MASK: u16 = 0x7FFF; // noise LFSR is 15-bit
 const LFSR_OUTPUT_BIT: u16 = 7; // LFSR bit XOR-ed with the selected tap
-const NOISE_PERIOD_MASK: u16 = 0x1FF; // noise step period wraps to 9 bits
 /// Channel index of the voice (PCM) channel.
 const VOICE_CHANNEL: usize = 1;
 
@@ -135,9 +135,10 @@ impl Apu {
     pub fn new() -> Self {
         Self {
             channels: [WaveChannel::new(); 4],
-            // Seed 1, not 0: with XOR feedback an all-zero LFSR is a stuck state
-            // (WonderCrab seeds 0, which never produces noise).
-            lfsr: 1,
+            // Seed 0, matching StoicGoose: the noise feedback is an XNOR
+            // (`1 ^ bit7 ^ bit_tap`), whose stuck state is all-ones, so a
+            // zero seed is fine and reproduces the hardware sequence exactly.
+            lfsr: 0,
             noise_active: false,
             noise_output: 0,
             noise_counter: 0,
@@ -257,14 +258,20 @@ impl Apu {
             return;
         }
 
+        // Noise advances at the same period as the wave channels — `2048 - pitch`
+        // sound-clock ticks — NOT masked to 9 bits.  StoicGoose's `SoundChannel4`
+        // reloads its counter to 2048 and steps the LFSR when it reaches `pitch`,
+        // giving period `2048 - pitch`.  An earlier `& 0x1FF` mask (also present in
+        // WonderCrab) shortened the period up to 8× for low pitches, running the
+        // noise far too fast and adding an audible high-pitched tone to drums.
         let pitch = pitch_of(ports, 3);
-        self.noise_counter = 2048u16.wrapping_sub(pitch) & NOISE_PERIOD_MASK;
+        self.noise_counter = 2048u16.wrapping_sub(pitch);
 
-        // Reset request: reseed the LFSR (to 1, see `new`) and self-clear it.
+        // Reset request: reseed the LFSR (to 0, see `new`) and self-clear it.
         if noise_ctrl & NOISE_RESET != 0 {
-            self.lfsr = 1;
+            self.lfsr = 0;
             ports[SND_NOISE] = noise_ctrl & !NOISE_RESET;
-            ports[SND_RANDOM] = 1;
+            ports[SND_RANDOM] = 0;
             ports[SND_RANDOM + 1] = 0;
         }
 
@@ -278,15 +285,20 @@ impl Apu {
             6 => 9,
             _ => 11,
         };
-        let feedback = ((self.lfsr >> LFSR_OUTPUT_BIT) ^ (self.lfsr >> tap)) & 1;
-        self.lfsr = ((self.lfsr << 1) & LFSR_MASK) | feedback;
+        // XNOR feedback (`1 ^ bit7 ^ bit_tap`), matching StoicGoose's
+        // `SoundChannel4`.  An XOR here would invert the bit polarity and bias the
+        // sequence toward ~25 % duty (a sparse, tonal pulse train); the XNOR keeps
+        // it near 50 % so a drum reads as broadband noise rather than a pitched buzz.
+        let feedback = (1 ^ (self.lfsr >> LFSR_OUTPUT_BIT) ^ (self.lfsr >> tap)) & 1;
+        self.lfsr = ((self.lfsr << 1) | feedback) & LFSR_MASK;
         let bytes = self.lfsr.to_le_bytes();
         ports[SND_RANDOM] = bytes[0];
         ports[SND_RANDOM + 1] = bytes[1];
 
-        // Deviation from WonderCrab (0xFF/0x00): keep the noise DAC in the 4-bit
-        // domain so it shares scale with the other channels' samples.
-        self.noise_output = if feedback != 0 { 0x0F } else { 0x00 };
+        // Channel-4 noise DAC: `0x0F`/`0x00` from the LFSR's low bit (the bit just
+        // shifted in), kept in the 4-bit domain like the wave channels — exactly
+        // StoicGoose's `(NoiseLfsr & 1) * 0x0F`.
+        self.noise_output = if self.lfsr & 1 != 0 { 0x0F } else { 0x00 };
         self.noise_active = true;
     }
 }

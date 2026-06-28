@@ -260,14 +260,15 @@ fn voice_volume_half_right_halves_sample() {
 
 #[test]
 fn noise_advances_lfsr_into_random_port() {
-    // NOISE + ENB4, gate open (0x8E bit4), tap 0. Seed 1 → after one step the
-    // LFSR shifts to 2, exposed at the low random port 0x92.
+    // NOISE + ENB4, gate open (0x8E bit4), tap 0. Seed 0, XNOR feedback
+    // (1 ^ bit7 ^ bit14 = 1) → after one step the LFSR is 1, exposed at the low
+    // random port 0x92.
     let (mut ports, wram) = blank();
     ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
     ports[SND_NOISE] = 0x10; // gate open, tap 0
     let mut apu = Apu::new();
     apu.tick(1, &wram, &mut ports);
-    assert_eq!(ports[SND_RANDOM], 2);
+    assert_eq!(ports[SND_RANDOM], 1);
 }
 
 #[test]
@@ -295,17 +296,35 @@ fn noise_reset_bit_self_clears() {
 #[test]
 fn noise_output_replaces_channel4_sample() {
     // With noise active, channel 4's mixed sample is the noise DAC level, not
-    // the waveform. Seed 1, tap 0 → first feedback bit 0 → output 0x00. The
-    // noise period (pitch 0x700 → 256 ticks) keeps it at 0x00 for this sample.
+    // the waveform. Seed 0, tap 0 → first XNOR bit 1 → DAC 0x0F. The waveform
+    // (nibble 5) would instead give 5 × volume, so the result distinguishes them.
     let (mut ports, mut wram) = blank();
-    write_waveform(&mut wram, 3, [0xFF; 16]); // would mix to 0x0F × volume
+    write_waveform(&mut wram, 3, {
+        let mut w = [0u8; 16];
+        w[0] = 0x50; // idx1 high nibble = 5: a value the noise DAC (0x0F) won't equal
+        w
+    });
     ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
     ports[SND_NOISE] = 0x10;
-    ports[SND_CH_VOL + 3] = 0xFF; // full volume both sides
+    ports[SND_CH_VOL + 3] = 0xF0; // left volume 15
     set_pitch(&mut ports, 3, 0x700); // noise step period 256 > 128
     let mut apu = Apu::new();
     apu.tick(128, &wram, &mut ports);
-    assert_eq!(apu.samples()[0], 0); // noise bit 0 → silent, not 0x0F waveform
+    assert_eq!(apu.samples()[0], 0x0F * 15 * 32); // noise DAC 0x0F, not waveform 5
+}
+
+#[test]
+fn noise_period_is_unmasked_2048_minus_pitch() {
+    // pitch 0 → period 2048: the LFSR steps once on the first tick (seed 0 → 1),
+    // then must hold for 2048 ticks.  A 9-bit period mask (2048 & 0x1FF == 0)
+    // would instead step it every tick, advancing the random port past 1.
+    let (mut ports, wram) = blank();
+    ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
+    ports[SND_NOISE] = NOISE_GATE; // gate open, tap 0
+    set_pitch(&mut ports, 3, 0); // 2048 - 0 = 2048-tick period
+    let mut apu = Apu::new();
+    apu.tick(512, &wram, &mut ports); // well within one 2048-tick period
+    assert_eq!(ports[SND_RANDOM], 1); // single XNOR step only: seed 0 → 1
 }
 
 // ── Sweep (channel 3) ────────────────────────────────────────────────────────
