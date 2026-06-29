@@ -477,7 +477,11 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     （APU サンプルは毎フレーム破棄）。
 -   **gilrs ゲームパッド入力**: `crates/input` に gilrs パッドを `Button` に変換する層を追加。
 -   **UI 拡充**: ROM 選択ダイアログ（ファイルピッカー）、起動/一時停止、基本設定画面、キーバインド設定。
--   **設定ファイル永続化**: `Config` の TOML ロード/セーブ（serde + toml）を設定 UI と共に実装。
+-   ✅ **設定ファイル永続化（実装済み）**: `crates/common` の `Config` に serde/toml/directories を導入し、
+    `Config::load`/`save`（プラットフォーム設定ディレクトリの `swanium/config.toml`）と path 指定の
+    `load_from`/`save_to` を実装。serde `#[serde(default)]` で部分・旧フォーマットも欠損フィールドを
+    既定値で補完、ロード時に範囲外値を `sanitised()` でクランプ。frontend は起動時に `Config::load`、
+    未存在時はファイルを生成。設定 UI（値の編集）は UI 拡充タスクで対応。
 -   **高品質スケーリング/シェーダ**: 必要に応じて Slint のレンダラを超える wgpu ポストプロセス段
     （LCD 風表現等）を Phase 9 のシェーダ対応で検討。
 -   **キー押下割り込みの精緻化**: 現状フレーム粒度の `KeyPress` 割り込みを、必要ならスキャン

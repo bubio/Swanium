@@ -85,7 +85,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
-    let scale = common::config::Config::default().sanitised().scale;
+    // Load persisted settings; first run falls back to defaults. Write the
+    // file back so it exists on disk for the user to edit (and is created if
+    // missing). A failure to persist is non-fatal — we just log it.
+    let config = common::config::Config::load();
+    if let Err(e) = config.save() {
+        tracing::warn!("could not save config: {e}");
+    }
+    let scale = config.scale;
     let width = video::SCREEN_WIDTH as u32;
     let height = video::SCREEN_HEIGHT as u32;
 
