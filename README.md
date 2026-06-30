@@ -8,8 +8,8 @@ A cycle-accurate WonderSwan / WonderSwan Color emulator written in Rust.
 
 The emulator core (CPU, memory, interrupts, timers, DMA, PPU, APU, cartridge)
 is implemented and a minimal Slint frontend can load a `.ws` ROM, display the
-picture, play audio through cpal, and accept keyboard input. **431 tests pass**
-across the workspace.
+picture, play audio through cpal, and accept keyboard and gamepad input.
+**443 tests pass** across the workspace.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -27,7 +27,10 @@ across the workspace.
 
 - ✅ **Config persistence** — TOML load/save of `Config` (serde + toml); the
   frontend loads `~/.config/swanium/config.toml` (platform-dependent) at startup.
-- **gilrs gamepad input** — add a gilrs → `input::Button` layer in `crates/input`.
+- ✅ **gilrs gamepad input** — `input::gamepad::Gamepad` polls gilrs and folds
+  the controller state into the key matrix each frame (D-pad/left stick → X-pad,
+  right stick → Y-pad, face buttons → A/B, menu → Start). OR-combined with the
+  keyboard; a missing controller is non-fatal.
 - **UI**: in-app ROM file picker, start/pause, settings & key-binding screens.
 - High-quality scaling / shader post-processing (deferred to Phase 9).
 
@@ -59,8 +62,12 @@ cargo fmt --all -- --check
 cargo run -p frontend -- path/to/game.ws
 ```
 
-Default controls: arrow keys = X-pad, `WASD` = Y-pad, `Z` = B, `X` = A,
+Default keyboard controls: arrow keys = X-pad, `WASD` = Y-pad, `Z` = B, `X` = A,
 `Enter` = Start. Press `P` to dump PPU display registers to stderr.
+
+A connected gamepad works too (auto-detected via gilrs): D-pad / left stick =
+X-pad, right stick = Y-pad, bottom face button = B, right face button = A, menu
+button = Start.
 
 Public test ROMs are never committed to this repository (licensing); see
 [`tests/README.md`](tests/README.md).

@@ -123,6 +123,12 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
 
     let system = Rc::new(RefCell::new(System::from_rom(rom)));
 
+    // Open the gilrs gamepad backend.  Failure (no gamepad subsystem, headless
+    // CI) is non-fatal: we fall back to keyboard input alone.
+    let mut gamepad = input::gamepad::Gamepad::open()
+        .map_err(|e| tracing::warn!("gamepad unavailable: {e}"))
+        .ok();
+
     // Open the cpal output stream.  Failure (e.g. headless CI) is non-fatal:
     // the emulator runs silently and APU samples are discarded each frame.
     let mut audio_stream = audio::AudioStream::open()
@@ -151,7 +157,10 @@ fn run(rom: Vec<u8>) -> Result<(), Box<dyn Error>> {
             return;
         }
 
-        let keys = input::keys_from(pressed.borrow().iter().copied());
+        let mut keys = input::keys_from(pressed.borrow().iter().copied());
+        if let Some(ref mut gamepad) = gamepad {
+            keys |= gamepad.poll();
+        }
         let mut system = system.borrow_mut();
         if dump {
             dump_display_registers(&mut system, keys);

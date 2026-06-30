@@ -472,10 +472,13 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 
 ### Phase 7 後続課題（さらなる GUI 拡充; 別タスクで対応）
 
--   **cpal 音声出力**: `crates/audio` に cpal ストリームを追加し、`RingBuffer` を出力コールバックへ供給。
-    音声-映像同期（リングバッファ水位に基づくフレームペーシング）。現状の最小 GUI は音声未出力
-    （APU サンプルは毎フレーム破棄）。
--   **gilrs ゲームパッド入力**: `crates/input` に gilrs パッドを `Button` に変換する層を追加。
+-   ✅ **cpal 音声出力（実装済み）**: `crates/audio` に cpal ストリームを追加し、`RingBuffer` を出力
+    コールバックへ供給。音声-映像同期（リングバッファ水位に基づくフレームペーシング）も frontend に配線。
+-   ✅ **gilrs ゲームパッド入力（実装済み）**: `crates/input::gamepad::Gamepad` が gilrs を `open`/`poll` し、
+    パッド状態を毎フレーム `KeyState` に畳み込む。マッピング（水平向き）は D-pad/左スティック→X パッド、
+    右スティック→Y パッド、下/右フェイスボタン→B/A、メニュー→Start。デジタルボタンはイベント駆動、
+    アナログは軸値をデッドゾーン（0.5）で判定。frontend でキーボード入力と OR 合成。マッピング純粋関数
+    （`map_button`/`stick_directions`）はユニットテスト済み。コントローラ未接続・初期化失敗は非致命。
 -   **UI 拡充**: ROM 選択ダイアログ（ファイルピッカー）、起動/一時停止、基本設定画面、キーバインド設定。
 -   ✅ **設定ファイル永続化（実装済み）**: `crates/common` の `Config` に serde/toml/directories を導入し、
     `Config::load`/`save`（プラットフォーム設定ディレクトリの `swanium/config.toml`）と path 指定の

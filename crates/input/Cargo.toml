@@ -9,3 +9,4 @@ workspace = true
 
 [dependencies]
 swanium-core = { path = "../core" }
+gilrs = "0.11"

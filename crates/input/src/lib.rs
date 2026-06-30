@@ -3,14 +3,15 @@
 //! The core exposes its keys as [`swanium_core::keypad::KeyState`]. This crate
 //! sits between a host input source and that representation, providing a
 //! backend-neutral [`Button`] enum for the eleven hardware keys and helpers to
-//! fold a set of pressed buttons into a [`KeyState`]. The concrete keyboard and
-//! gilrs gamepad backends — which depend on the windowing/gamepad libraries the
-//! core must never see — are wired in a later step (see
-//! `docs/dev/DevelopmentPlan.md` Phase 7 後続課題). The frontend translates its
-//! own keycodes into [`Button`]s and feeds them here, so this layer stays pure
-//! and unit-testable.
+//! fold a set of pressed buttons into a [`KeyState`]. The concrete gamepad
+//! backend lives in [`gamepad`] (it depends on gilrs, which the core must never
+//! see); the keyboard backend stays in the frontend, which translates its own
+//! keycodes into [`Button`]s and feeds them here. This top-level layer stays
+//! pure and unit-testable.
 
 use swanium_core::keypad::KeyState;
+
+pub mod gamepad;
 
 /// A logical WonderSwan key, independent of the host input device.
 ///
