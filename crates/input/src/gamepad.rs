@@ -10,9 +10,9 @@
 //! X-pad; the right analog stick drives the Y-pad; the bottom/right face buttons
 //! are B/A and the menu button is Start.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use gilrs::{Axis, EventType, Gilrs};
+use gilrs::{Axis, EventType, GamepadId, Gilrs};
 
 use crate::{keys_from, Button};
 use swanium_core::keypad::KeyState;
@@ -30,8 +30,9 @@ const AXIS_THRESHOLD: f32 = 0.5;
 /// connected pad.
 pub struct Gamepad {
     gilrs: Gilrs,
-    /// Digital buttons currently held, updated from press/release events.
-    held: HashSet<Button>,
+    /// Digital buttons currently held, keyed by pad so one controller's
+    /// release or disconnect never clears another's still-held keys.
+    held: HashMap<GamepadId, HashSet<Button>>,
 }
 
 impl Gamepad {
@@ -45,7 +46,7 @@ impl Gamepad {
     pub fn open() -> Result<Self, Box<gilrs::Error>> {
         Ok(Self {
             gilrs: Gilrs::new().map_err(Box::new)?,
-            held: HashSet::new(),
+            held: HashMap::new(),
         })
     }
 
@@ -59,22 +60,28 @@ impl Gamepad {
             match event.event {
                 EventType::ButtonPressed(button, _) => {
                     if let Some(mapped) = map_button(button) {
-                        self.held.insert(mapped);
+                        self.held.entry(event.id).or_default().insert(mapped);
                     }
                 }
                 EventType::ButtonReleased(button, _) => {
                     if let Some(mapped) = map_button(button) {
-                        self.held.remove(&mapped);
+                        if let Some(set) = self.held.get_mut(&event.id) {
+                            set.remove(&mapped);
+                        }
                     }
                 }
-                // A pad vanishing mid-press would otherwise leave its keys stuck.
-                EventType::Disconnected => self.held.clear(),
+                // A pad vanishing mid-press would otherwise leave its keys
+                // stuck; drop only that pad's state, not every pad's.
+                EventType::Disconnected => {
+                    self.held.remove(&event.id);
+                }
                 _ => {}
             }
         }
 
-        let mut buttons = self.held.clone();
+        let mut buttons: HashSet<Button> = self.held.values().flatten().copied().collect();
         for (_id, pad) in self.gilrs.gamepads() {
+            // Left stick drives the X-pad.
             stick_directions(
                 &mut buttons,
                 pad.value(Axis::LeftStickX),
@@ -84,6 +91,20 @@ impl Gamepad {
                 Button::X3,
                 Button::X4,
             );
+            // Some pads/backends report the D-pad as a hat axis rather than as
+            // discrete buttons; fold that onto the X-pad too. When the D-pad
+            // arrives as buttons (handled above) these axes read 0, so there is
+            // no double-counting.
+            stick_directions(
+                &mut buttons,
+                pad.value(Axis::DPadX),
+                pad.value(Axis::DPadY),
+                Button::X1,
+                Button::X2,
+                Button::X3,
+                Button::X4,
+            );
+            // Right stick drives the Y-pad.
             stick_directions(
                 &mut buttons,
                 pad.value(Axis::RightStickX),
