@@ -105,6 +105,15 @@ impl AudioStream {
     pub fn ring_capacity(&self) -> usize {
         self.ring_capacity
     }
+
+    /// Drop every queued sample.
+    ///
+    /// Used when swapping ROMs so the previous game's trailing audio does not
+    /// bleed into the next one; the cpal thread then underruns to silence until
+    /// the new ROM fills the buffer again.
+    pub fn clear(&self) {
+        self.ring.lock().unwrap().clear();
+    }
 }
 
 /// Build a cpal output stream for the detected sample format.

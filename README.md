@@ -31,7 +31,14 @@ picture, play audio through cpal, and accept keyboard and gamepad input.
   the controller state into the key matrix each frame (D-pad/left stick → X-pad,
   right stick → Y-pad, face buttons → A/B, menu → Start). OR-combined with the
   keyboard; a missing controller is non-fatal.
-- **UI**: in-app ROM file picker, start/pause, settings & key-binding screens.
+- ✅ **In-app ROM file picker** — the ROM path is now optional; with no
+  argument the window opens empty and the `O` key pops a native open dialog
+  (via `rfd`, XDG-portal backend on Linux so no GTK is needed). The picker
+  remembers the last directory and swapping ROMs flushes the audio buffer.
+- ✅ **Menu bar & status bar** — a Slint `MenuBar` (native macOS menu bar,
+  in-window elsewhere) with `File ▸ Open ROM…` / `Quit`, plus a bottom status
+  bar showing the current ROM name and a live FPS readout.
+- **UI**: start/pause, settings & key-binding screens.
 - High-quality scaling / shader post-processing (deferred to Phase 9).
 
 ### Known issues
@@ -59,11 +66,13 @@ cargo fmt --all -- --check
 ## Running
 
 ```sh
-cargo run -p frontend -- path/to/game.ws
+cargo run -p frontend -- path/to/game.ws   # ROM path is optional
+cargo run -p frontend                       # opens empty; press O to pick a ROM
 ```
 
 Default keyboard controls: arrow keys = X-pad, `WASD` = Y-pad, `Z` = B, `X` = A,
-`Enter` = Start. Press `P` to dump PPU display registers to stderr.
+`Enter` = Start. Press `O` to open a ROM file picker and `P` to dump PPU display
+registers to stderr.
 
 A connected gamepad works too (auto-detected via gilrs): D-pad / left stick =
 X-pad, right stick = Y-pad, bottom face button = B, right face button = A, menu
