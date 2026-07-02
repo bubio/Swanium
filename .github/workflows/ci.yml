@@ -25,9 +25,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      # Slint's winit + femtovg backend, rfd's xdg-portal dialog, and gilrs
-      # gamepad input need these system libraries on Linux (fontconfig,
-      # xkbcommon, Wayland/X11, OpenGL, udev).
+      # Linux system libraries required by the desktop crates:
+      #   slint (winit + femtovg): fontconfig, xkbcommon, Wayland/X11, OpenGL
+      #   rfd (xdg-portal): fontconfig
+      #   gilrs (gamepad input): udev
+      #   cpal (audio output): ALSA
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -39,7 +41,8 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
             libgl1-mesa-dev \
-            libudev-dev
+            libudev-dev \
+            libasound2-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
