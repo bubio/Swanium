@@ -278,6 +278,14 @@ video               audio                input
         （`crates/core/src/ppu/palette.rs` / `mod.rs`）。Color 実装（Phase 8）でも同じ seam で差し替え可能。
     -   デバッグ用の `System::run_frame_traced` / `Bus::peek_io` / `Bus::debug_bg_sample` と
         frontend の `P` キーダンプは調査ツールとして引き続き利用可能。
+-   **GDMA が非同期実行になっていた** — 上記の調査中に発見した別個の正確性バグ。**GDMA はポート 0x48 の
+    enable ビット書き込み時に同期実行されず、スキャンライン末尾の `tick_gdma()` まで遅延されていた**ため、
+    1 スキャンラインの CPU 予算内で複数回 GDMA を起動するゲームでは共有レジスタファイル（0x40–0x48）が
+    上書きされ、最後の 1 回以外の転送が黙って捨てられていた。修正: `Bus::write_io` のポート 0x48 ハンドラで
+    即 `tick_gdma()` を呼び、実機の CPU-stall バースト転送を再現。フレーム駆動側の per-scanline `tick_gdma()`
+    は冗長になったため削除（GDMA コストは `run_cpu_cycles` 内に畳み込まれ、プロファイラの `dma_ns` は 0 になる）。
+    回帰テスト `back_to_back_gdma_arms_both_complete` で連続 arm が両方反映されることを担保。なお本修正は
+    上記の Lode Runner の見た目の症状とは無関係（そちらはパレット透過の修正で別途解決済み）。
 
 ---
 

@@ -2,9 +2,10 @@
 //!
 //! [`System`] owns the whole emulated machine and advances it one video frame
 //! at a time via [`System::run_frame`]. A frame is driven scanline by scanline:
-//! the CPU runs for a scanline's worth of cycles, the APU and DMA advance by the
-//! same budget, then the PPU renders (or, during the vertical-blank period,
-//! merely advances the line counter and fires the VBlank interrupt).
+//! the CPU runs for a scanline's worth of cycles, the APU advances by the same
+//! budget, then the PPU renders (or, during the vertical-blank period, merely
+//! advances the line counter and fires the VBlank interrupt). GDMA is not driven
+//! here — it executes synchronously when a game arms it via port 0x48.
 //!
 //! The frame-boundary shape is deliberate: it satisfies the RetroAchievements
 //! requirement that the core be callable one frame at a time and expose a stable
@@ -145,9 +146,11 @@ impl System {
             time_into!(self, apu_ns, {
                 self.bus.tick_apu(CYCLES_PER_SCANLINE);
             });
-            time_into!(self, dma_ns, {
-                self.bus.tick_gdma();
-            });
+            // GDMA is not ticked here: it runs synchronously the instant a game
+            // writes the enable bit to port 0x48 (see `Bus::write_io`), matching
+            // the hardware's CPU-stalling burst. Its cost is therefore folded
+            // into `cpu_ns` (it executes inside `run_cpu_cycles`), so the
+            // profiler's `dma_ns` bucket stays zero.
 
             if line < VISIBLE_SCANLINES {
                 if let Some(trace) = trace.as_deref_mut() {
