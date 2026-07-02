@@ -54,6 +54,11 @@ WonderCrabのreadme.mdに掲載されている資料一覧（出典: WonderCrab 
 
 これらはPhase 3（CPUテストROM検証）・PPU/APU実装時の主要リファレンスとし、
 挙動が不明確な箇所はMesen/Ares/WonderCrabの実装との比較によるクロスチェックに用いる。
+仕様判断の優先順位は、まず WSDev Wiki / Sacred Tech Scroll のハードウェア記述、次に
+WSCPUTest / ws-test-suite などの公開テストROMによる観測結果、最後に Mesen/Ares/WonderCrab
+など既存実装との比較とする。テストROMのプロトコル（合否出力アドレス・終了条件など）が
+不明な場合は、ROMソースを確認して `crates/core/tests/public_roms.rs` のオプトインテストに
+明記してから回帰テストとして固定する。
 
 ------------------------------------------------------------------------
 
@@ -233,6 +238,12 @@ video               audio                input
 -   `render_scanline<R: PaletteResolver>` はジェネリックresolver引数を取り、`Bus::render_scanline`
     が `MonoPaletteResolver` を渡す。Phase 8でColor resolverに差し替え可能。
 -   合成順（背→前）: SCR1 → スプライト(priority 0) → SCR2 → スプライト(priority 1)。
+-   モノクロ 2bpp の透明色規則は WSdev Wiki `Display` に従う: palette color zero は
+    パレット 0–3 と 8–11 では不透明、それ以外（4–7, 12–15）では透明。どの
+    screen/sprite からも不透明ピクセルが出ない場合は LCD control high byte の
+    background color（濃淡プール index）を表示する。今後の PPU 回帰検証では
+    [asiekierka/ws-test-suite](https://github.com/asiekierka/ws-test-suite) の表示系テストも
+    重要リファレンスとして扱う。
 -   スプライトウィンドウのinside/outside意味は実機未確認（コードコメントで明記）。
 -   PPU内部型（`tile_pixel`/`SpriteEntry`/`TileMapEntry`/`DisplayControl`）は `pub(crate)`。
     crate公開APIは `Ppu`/`SCREEN_WIDTH`/`SCREEN_HEIGHT`/`PaletteResolver`/`MonoPaletteResolver` のみ。

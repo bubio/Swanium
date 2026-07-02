@@ -25,8 +25,15 @@ tests/
 
 参照先（出典: ローカル参考実装 `WonderCrab` の readme.md）:
 
+- [WSDev Wiki](https://ws.nesdev.org/wiki/WSdev_Wiki)
+- [WonderSwan - Sacred Tech Scroll](http://perfectkiosk.net/stsws.html)
 - [WonderSwan CPU test (FluBBaOfWard/WSCPUTest)](https://github.com/FluBBaOfWard/WSCPUTest)
 - [WonderSwan test suite (asiekierka/ws-test-suite)](https://github.com/asiekierka/ws-test-suite)
+
+仕様確認は WSDev Wiki / Sacred Tech Scroll を一次資料として扱い、互換性確認は
+WSCPUTest / ws-test-suite の公開テストROMをオプトインで実行して担保する。公開ROMの
+合否判定プロトコル（出力アドレス、終了条件、画面出力の期待値など）はテストごとに
+ソースまたは資料で確認し、`crates/core/tests/public_roms.rs` に明記する。
 
 これらのROMを使う統合テストはオプトイン（環境変数でROMパスを指定した場合のみ実行）とし、
 CIでは自作テストROM（`fixtures/cpu/self_built/`）を主軸にする。

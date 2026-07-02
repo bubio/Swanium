@@ -164,11 +164,10 @@ impl Ppu {
     /// I/O port shadow array holding the display registers; `resolver` maps
     /// raw tile pixels to shade indices (see [`PaletteResolver`]).
     ///
-    /// Compositing order, back to front: SCR1 (opaque background), sprites
-    /// with priority 0 (behind SCR2), SCR2 (transparent on pixel 0), then
-    /// sprites with priority 1 (in front of SCR2). Pixels where no layer
-    /// draws are left at shade 0. Each layer's pixel is shade-resolved via
-    /// `resolver`; sprite pixels use palettes 8–15.
+    /// Compositing order, back to front: SCR1, sprites with priority 0
+    /// (behind SCR2), SCR2, then sprites with priority 1 (in front of SCR2).
+    /// Pixel transparency and the backdrop shade are defined by `resolver`;
+    /// sprite pixels use palettes 8–15.
     pub fn render_scanline<R: PaletteResolver>(
         &mut self,
         line: u8,
@@ -183,10 +182,12 @@ impl Ppu {
         let dc = DisplayControl::from_ports(ports);
         let row = y * SCREEN_WIDTH;
         for x in 0..SCREEN_WIDTH {
-            let mut shade = 0u8;
+            let mut shade = resolver.backdrop(ports);
             if dc.scr1_enabled {
                 let s = sample_background(wram, ports, BgLayer::Scr1, x, line);
-                shade = resolver.resolve(ports, s.palette, s.pixel);
+                if !resolver.transparent(s.palette, s.pixel) {
+                    shade = resolver.resolve(ports, s.palette, s.pixel);
+                }
             }
             if dc.sprites_enabled {
                 if let Some(px) = sample_sprite(wram, ports, &dc, x, line, false, resolver) {
@@ -195,7 +196,7 @@ impl Ppu {
             }
             if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
                 let s = sample_background(wram, ports, BgLayer::Scr2, x, line);
-                if s.pixel != 0 {
+                if !resolver.transparent(s.palette, s.pixel) {
                     shade = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
@@ -220,7 +221,7 @@ enum BgLayer {
 impl Ppu {
     /// Debug helper: the raw `(pixel, palette)` a background layer samples at
     /// screen coordinate `(x, y)`. `scr2 = true` selects SCR2, else SCR1.
-    /// Pixel 0 on SCR2 is the transparent index.
+    /// Transparency depends on the sampled palette and raw pixel.
     pub fn debug_bg_sample(
         &self,
         wram: &[u8],
@@ -462,10 +463,11 @@ fn sample_sprite<R: PaletteResolver>(
             ty = SPRITE_SIZE - 1 - ty;
         }
         let pixel = tile_pixel(wram, sprite.tile_idx, tx, ty);
-        if pixel == 0 {
-            continue; // transparent
+        let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
+        if resolver.transparent(palette, pixel) {
+            continue;
         }
-        return Some(resolver.resolve(ports, sprite.palette + SPRITE_PALETTE_OFFSET, pixel));
+        return Some(resolver.resolve(ports, palette, pixel));
     }
     None
 }

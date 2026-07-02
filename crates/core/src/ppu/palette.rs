@@ -5,11 +5,17 @@
 //! color resolver that reads the palette RAM at WRAM 0xFE00 instead of the
 //! monochrome shade pool.
 
-/// Resolves a background/sprite tile pixel to a framebuffer shade index.
+/// Resolves tile pixels and palette state to framebuffer shade indices.
 pub trait PaletteResolver {
     /// Resolve tile `pixel` (0–3) under `palette` (0–15) to a shade index,
     /// reading the palette/pool registers from the I/O port shadow `ports`.
     fn resolve(&self, ports: &[u8], palette: u8, pixel: u8) -> u8;
+
+    /// Whether tile `pixel` under `palette` should be skipped as transparent.
+    fn transparent(&self, palette: u8, pixel: u8) -> bool;
+
+    /// Resolve the shade used when no screen or sprite pixel is opaque.
+    fn backdrop(&self, ports: &[u8]) -> u8;
 }
 
 /// Base I/O port of the 16 monochrome palettes (two bytes each, four 3-bit
@@ -17,6 +23,8 @@ pub trait PaletteResolver {
 const PALETTE_BASE: usize = 0x20;
 /// Base I/O port of the 8-entry shade pool (two 4-bit shades per byte).
 const SHADE_POOL_BASE: usize = 0x1C;
+/// Display control high byte: monochrome backdrop shade-pool index in bits 0–2.
+const DISP_CTRL_HI: usize = 0x01;
 
 /// Monochrome palette resolver.
 ///
@@ -38,6 +46,16 @@ impl PaletteResolver for MonoPaletteResolver {
             (byte >> 4) & 0x07
         };
         shade_from_pool(ports, pool_index)
+    }
+
+    fn transparent(&self, palette: u8, pixel: u8) -> bool {
+        // WSdev Display: in 2bpp mode, palette color zero is opaque for
+        // palettes 0–3 and 8–11; transparent for the other palettes.
+        pixel == 0 && !matches!(palette & 0x0F, 0..=3 | 8..=11)
+    }
+
+    fn backdrop(&self, ports: &[u8]) -> u8 {
+        shade_from_pool(ports, ports[DISP_CTRL_HI] & 0x07)
     }
 }
 

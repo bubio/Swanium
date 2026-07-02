@@ -9,7 +9,7 @@ A cycle-accurate WonderSwan / WonderSwan Color emulator written in Rust.
 The emulator core (CPU, memory, interrupts, timers, DMA, PPU, APU, cartridge)
 is implemented and a minimal Slint frontend can load a `.ws` ROM, display the
 picture, play audio through cpal, and accept keyboard and gamepad input.
-**443 tests pass** across the workspace.
+**445 tests pass** across the workspace.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -43,12 +43,9 @@ picture, play audio through cpal, and accept keyboard and gamepad input.
 
 ### Known issues
 
-- **Background tilemap update timing** (e.g. Lode Runner story screens): SCR1
-  text bleeds through SCR2 on a 48 px vertical period. Layer compositing itself
-  is correct; the cause is traced to GDMA / tilemap-update / frame-driver timing
-  and is deferred to the cycle-accuracy hardening phase. Debug aids: the `P` key
-  in the frontend dumps display registers (`System::run_frame_traced`,
-  `Bus::peek_io`, `Bus::debug_bg_sample`).
+- Accuracy hardening is ongoing. Current focus areas are validating CPU/PPU/APU
+  edge cases against public test ROMs and tightening cycle-level timing where
+  real games expose differences.
 
 See [`docs/dev/DevelopmentPlan.md`](docs/dev/DevelopmentPlan.md) for the full roadmap.
 
@@ -80,6 +77,20 @@ button = Start.
 
 Public test ROMs are never committed to this repository (licensing); see
 [`tests/README.md`](tests/README.md).
+
+## Accuracy References
+
+Hardware behavior is checked first against primary WonderSwan references:
+
+- [WSDev Wiki](https://ws.nesdev.org/wiki/WSdev_Wiki)
+- [WonderSwan - Sacred Tech Scroll](http://perfectkiosk.net/stsws.html)
+- [WonderSwan CPU test](https://github.com/FluBBaOfWard/WSCPUTest)
+- [WonderSwan test suite](https://github.com/asiekierka/ws-test-suite)
+
+Public test ROMs are run as opt-in compatibility tests because ROM binaries are
+not committed. See [`tests/README.md`](tests/README.md) and
+[`docs/dev/DevelopmentPlan.md`](docs/dev/DevelopmentPlan.md) for the testing
+policy and reference priority.
 
 ## Architecture
 

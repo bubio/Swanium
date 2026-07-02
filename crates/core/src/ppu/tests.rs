@@ -278,9 +278,10 @@ fn scr1_horizontal_flip_mirrors_tile() {
 }
 
 #[test]
-fn scr2_transparent_pixel_lets_scr1_show_through() {
+fn scr2_palette_4_pixel_0_lets_scr1_show_through() {
     // SCR1 and SCR2 use separate map bases (nibbles 0 and 1). SCR1 draws a
-    // pixel of value 1; SCR2's pixel is 0 (transparent), so SCR1 shows through.
+    // pixel of value 1; SCR2's palette 4 pixel 0 is transparent, so SCR1 shows
+    // through.
     let mut wram = vec![0u8; 0x10000];
     let mut ports = [0u8; 0x100];
     ports[0x00] = 0x03; // SCR1 + SCR2 enabled
@@ -288,10 +289,26 @@ fn scr2_transparent_pixel_lets_scr1_show_through() {
     set_identity_palette(&mut ports);
     write_map_entry(&mut wram, 0, 0, 0, 1); // SCR1 (base 0) → tile 1
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000); // tile1 x0 = 1
-    write_map_entry(&mut wram, 0x800, 0, 0, 0); // SCR2 (base 0x800) → tile 0 (zero)
+    write_map_entry(&mut wram, 0x800, 0, 0, 4 << 9); // SCR2 palette 4, tile 0
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
     assert_eq!(ppu.framebuffer()[0], 1);
+}
+
+#[test]
+fn scr2_palette_0_pixel_0_masks_scr1() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x03; // SCR1 + SCR2
+    ports[0x07] = 0x01 << 4; // SCR2 base nibble 1 → 0x800; SCR1 nibble 0
+    ports[0x20] = 0x10; // palette 0: pixel0 → pool0, pixel1 → pool1
+    ports[0x1C] = 0xA0; // pool0 = shade 0, pool1 = shade 0x0A
+    write_map_entry(&mut wram, 0, 0, 0, 1); // SCR1 → tile 1
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000); // SCR1 x0 = 1 → shade 0x0A
+    write_map_entry(&mut wram, 0x800, 0, 0, 0); // SCR2 palette 0, tile 0 pixel 0
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], 0);
 }
 
 #[test]
@@ -360,6 +377,48 @@ fn mono_resolver_selects_palette_by_index() {
 fn mono_resolver_returns_zero_shade_for_zeroed_registers() {
     let ports = [0u8; 0x100];
     assert_eq!(MonoPaletteResolver.resolve(&ports, 3, 2), 0);
+}
+
+#[test]
+fn mono_resolver_color_zero_is_opaque_for_palettes_0_to_3_and_8_to_11() {
+    for palette in [0, 1, 2, 3, 8, 9, 10, 11] {
+        assert!(!MonoPaletteResolver.transparent(palette, 0));
+    }
+}
+
+#[test]
+fn mono_resolver_color_zero_is_transparent_for_other_palettes() {
+    for palette in [4, 5, 6, 7, 12, 13, 14, 15] {
+        assert!(MonoPaletteResolver.transparent(palette, 0));
+    }
+}
+
+#[test]
+fn mono_resolver_nonzero_pixels_are_opaque_for_all_palettes() {
+    for palette in 0..16 {
+        assert!(!MonoPaletteResolver.transparent(palette, 1));
+    }
+}
+
+#[test]
+fn mono_resolver_backdrop_uses_display_control_high_byte_pool_index() {
+    let mut ports = [0u8; 0x100];
+    ports[0x01] = 5; // backdrop selects shade-pool index 5
+    ports[0x1E] = 0xB0; // pool4 = 0, pool5 = shade 0x0B
+    assert_eq!(MonoPaletteResolver.backdrop(&ports), 0x0B);
+}
+
+#[test]
+fn transparent_screen_pixel_falls_back_to_backdrop_shade() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enabled
+    ports[0x01] = 7; // backdrop selects shade-pool index 7
+    ports[0x1F] = 0xC0; // pool6 = 0, pool7 = shade 0x0C
+    write_map_entry(&mut wram, 0, 0, 0, 4 << 9); // palette 4, tile 0 pixel 0 => transparent
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0C);
 }
 
 #[test]
@@ -469,10 +528,35 @@ fn sprite_offset_by_x_position() {
 #[test]
 fn sprite_transparent_pixel_not_drawn() {
     // tile row all zero → transparent everywhere
-    let (wram, ports) = setup_single_sprite(1, 0, 0, (0b0000_0000, 0b0000_0000));
+    // Use sprite palette 4 (effective palette 12), where color zero is
+    // transparent in mono 2bpp mode.
+    let (wram, ports) = setup_single_sprite(1 | (4 << 9), 0, 0, (0b0000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
     assert_eq!(ppu.framebuffer()[0], 0);
+}
+
+#[test]
+fn sprite_palette_8_color_zero_is_opaque() {
+    let (wram, mut ports) = setup_single_sprite(1, 0, 0, (0b0000_0000, 0b0000_0000));
+    // Backdrop selects shade-pool index 7, which resolves to shade 0x0C.
+    ports[0x01] = 7;
+    ports[0x1F] = 0xC0;
+    // Sprite palette 0 is effective palette 8. Its color0 maps to pool0,
+    // shade 0, so an opaque sprite color-zero pixel overrides the backdrop.
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], 0);
+}
+
+#[test]
+fn sprite_palette_12_color_zero_is_transparent() {
+    let (wram, mut ports) = setup_single_sprite(1 | (4 << 9), 0, 0, (0, 0));
+    ports[0x01] = 7; // backdrop selects shade-pool index 7
+    ports[0x1F] = 0xC0; // pool7 = shade 0x0C
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0C);
 }
 
 #[test]
