@@ -18,6 +18,27 @@
 use crate::bus::Bus;
 use crate::cpu::{Cpu, MemoryBus};
 use crate::keypad::KeyState;
+use crate::model::HardwareModel;
+#[cfg(feature = "profiling")]
+use crate::profile::{FrameProfile, ProfileSnapshot};
+
+/// Time the given block, adding its wall-clock nanoseconds into `$slot`.
+///
+/// Under the `profiling` feature this brackets the block with
+/// [`std::time::Instant`] reads; otherwise it expands to just the block, so a
+/// default build carries no profiling overhead.
+macro_rules! time_into {
+    ($self:ident, $field:ident, $body:block) => {{
+        #[cfg(feature = "profiling")]
+        let __start = std::time::Instant::now();
+        let __ret = $body;
+        #[cfg(feature = "profiling")]
+        {
+            $self.profile.$field += __start.elapsed().as_nanos() as u64;
+        }
+        __ret
+    }};
+}
 
 /// V30MZ master clock in Hz (also the sound clock).
 pub const MASTER_CLOCK_HZ: u32 = 3_072_000;
@@ -54,6 +75,10 @@ pub struct ScanlineTrace {
 pub struct System {
     cpu: Cpu,
     bus: Bus,
+    /// Cumulative per-subsystem frame timings (present only with the
+    /// `profiling` feature). See [`crate::profile`].
+    #[cfg(feature = "profiling")]
+    profile: FrameProfile,
 }
 
 impl System {
@@ -79,7 +104,12 @@ impl System {
         // V30MZ power-on reset vector: the OR-with-modulo address decode maps
         // 0xFFFF0 onto the last 16 ROM bytes (the footer / boot entry).
         cpu.reset(0xFFFF, 0x0000);
-        Self { cpu, bus }
+        Self {
+            cpu,
+            bus,
+            #[cfg(feature = "profiling")]
+            profile: FrameProfile::default(),
+        }
     }
 
     /// Run the machine for one full video frame.
@@ -101,11 +131,23 @@ impl System {
     }
 
     fn drive_frame(&mut self, keys: KeyState, mut trace: Option<&mut Vec<ScanlineTrace>>) {
+        #[cfg(feature = "profiling")]
+        let frame_start = std::time::Instant::now();
+
         self.bus.set_keys(keys);
+        // Advance the cartridge RTC (if any) off the emulated clock, one frame's
+        // worth of master-clock cycles — keeps timekeeping deterministic.
+        self.bus.tick_rtc(CYCLES_PER_FRAME);
         for line in 0..SCANLINES_PER_FRAME {
-            self.run_cpu_cycles(CYCLES_PER_SCANLINE);
-            self.bus.tick_apu(CYCLES_PER_SCANLINE);
-            self.bus.tick_gdma();
+            time_into!(self, cpu_ns, {
+                self.run_cpu_cycles(CYCLES_PER_SCANLINE);
+            });
+            time_into!(self, apu_ns, {
+                self.bus.tick_apu(CYCLES_PER_SCANLINE);
+            });
+            time_into!(self, dma_ns, {
+                self.bus.tick_gdma();
+            });
 
             if line < VISIBLE_SCANLINES {
                 if let Some(trace) = trace.as_deref_mut() {
@@ -118,7 +160,9 @@ impl System {
                     });
                 }
                 // Renders the line and advances the line-compare / HBlank hooks.
-                self.bus.render_scanline(line as u8);
+                time_into!(self, ppu_ns, {
+                    self.bus.render_scanline(line as u8);
+                });
             } else {
                 // Vertical-blank period: keep the line counter (and its compare
                 // interrupt) live without rendering.
@@ -128,6 +172,12 @@ impl System {
             if line == VISIBLE_SCANLINES {
                 self.bus.on_vblank();
             }
+        }
+
+        #[cfg(feature = "profiling")]
+        {
+            self.profile.total_ns += frame_start.elapsed().as_nanos() as u64;
+            self.profile.frames += 1;
         }
     }
 
@@ -142,14 +192,29 @@ impl System {
                 }
             }
             spent += self.cpu.step(&mut self.bus);
+            #[cfg(feature = "profiling")]
+            {
+                self.profile.instructions += 1;
+            }
         }
     }
 
     // ── Output accessors ──────────────────────────────────────────────────
 
-    /// The current framebuffer: 224×144 monochrome shade indices, row-major.
-    pub fn framebuffer(&self) -> &[u8] {
+    /// The current framebuffer: 224×144 [`Rgb444`](crate::ppu::Rgb444) colors,
+    /// row-major.
+    pub fn framebuffer(&self) -> &[u16] {
         self.bus.framebuffer()
+    }
+
+    /// The emulated hardware model.
+    pub fn model(&self) -> HardwareModel {
+        self.bus.model()
+    }
+
+    /// Override the emulated hardware model (Mono / Color / Crystal).
+    pub fn set_model(&mut self, model: HardwareModel) {
+        self.bus.set_model(model);
     }
 
     /// Interleaved stereo audio samples accumulated since the last clear.
@@ -160,6 +225,27 @@ impl System {
     /// Drop buffered audio samples (call after the frontend consumes them).
     pub fn clear_audio_samples(&mut self) {
         self.bus.clear_audio_samples();
+    }
+
+    /// Inject an absolute date/time into the cartridge RTC (no-op without one).
+    ///
+    /// The frontend calls this once from the host clock at ROM load; the core
+    /// never reads wall-clock time itself, keeping execution deterministic for
+    /// RetroAchievements. Components are decimal (not BCD): `year` is the
+    /// two-digit calendar year within 2000–2099, `weekday` is 0–6 (0 = Sunday).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_rtc_datetime(
+        &mut self,
+        year: u8,
+        month: u8,
+        day: u8,
+        weekday: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+    ) {
+        self.bus
+            .set_rtc_datetime(year, month, day, weekday, hour, minute, second);
     }
 
     /// The cartridge's persistent save bytes (for the frontend to write to disk).
@@ -195,6 +281,23 @@ impl System {
     /// Shared access to the CPU (for tooling and tests).
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
+    }
+
+    // ── Profiling (feature = "profiling") ─────────────────────────────────
+
+    /// A plain-data snapshot of the cumulative per-subsystem frame timings
+    /// gathered since the last [`reset_profile`](System::reset_profile).
+    ///
+    /// Only available with the `profiling` feature; see [`crate::profile`].
+    #[cfg(feature = "profiling")]
+    pub fn profile_snapshot(&self) -> ProfileSnapshot {
+        self.profile.snapshot()
+    }
+
+    /// Clear the accumulated profiling counters back to zero.
+    #[cfg(feature = "profiling")]
+    pub fn reset_profile(&mut self) {
+        self.profile.reset();
     }
 }
 

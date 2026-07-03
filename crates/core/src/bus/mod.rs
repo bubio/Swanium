@@ -12,7 +12,8 @@ pub use cart::{Cartridge, CartridgeHeader, Mapper, Rtc, SaveType};
 use crate::apu::Apu;
 use crate::cpu::MemoryBus;
 use crate::keypad::KeyState;
-use crate::ppu::{MonoPaletteResolver, Ppu};
+use crate::model::HardwareModel;
+use crate::ppu::{ColorPaletteResolver, MonoPaletteResolver, Ppu, Rgb444};
 
 /// Open-bus return value for unmapped reads on WonderSwan mono.
 const OPEN_BUS: u8 = 0x90;
@@ -66,6 +67,9 @@ pub struct Bus {
     apu: Apu,
     /// Currently-held keys, presented on port 0xB5 when scanned.
     keys: KeyState,
+    /// Emulated hardware variant, selecting model-dependent behaviour (palette
+    /// resolver, tile formats, RAM window). Defaults to [`HardwareModel::Mono`].
+    model: HardwareModel,
 }
 
 impl Bus {
@@ -78,6 +82,7 @@ impl Bus {
             ppu: Ppu::new(),
             apu: Apu::new(),
             keys: KeyState::NONE,
+            model: HardwareModel::Mono,
         };
         // INT_ENABLE: VBLANK (bit 6) is always forced on.
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
@@ -93,21 +98,27 @@ impl Bus {
             ppu: Ppu::new(),
             apu: Apu::new(),
             keys: KeyState::NONE,
+            model: HardwareModel::Mono,
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
     }
 
     /// Create a bus from a ROM image, allocating the cartridge's save medium
-    /// (SRAM or EEPROM) and configuring its mapper from the parsed header.
+    /// (SRAM or EEPROM) and configuring its mapper from the parsed header. The
+    /// hardware model defaults to the header's Color-required flag (see
+    /// [`HardwareModel::from_color_flag`]); use [`Bus::set_model`] to override.
     pub fn from_rom(rom: Vec<u8>) -> Self {
+        let cart = Cartridge::from_rom(rom);
+        let model = HardwareModel::from_color_flag(cart.header().is_some_and(|h| h.color));
         let mut bus = Self {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
-            cart: Cartridge::from_rom(rom),
+            cart,
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
             keys: KeyState::NONE,
+            model,
         };
         bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
         bus
@@ -306,7 +317,7 @@ impl Bus {
                 break; // SRAM source: abort
             }
             let byte = self.read_u8_phys(src);
-            self.wram[(dst & 0xFFFF) as usize] = byte;
+            self.write_wram(dst & 0xFFFF, byte);
 
             if decrement {
                 src = src.wrapping_sub(1);
@@ -347,16 +358,44 @@ impl Bus {
     /// visible scanline, interleaved with CPU execution, then
     /// [`Bus::on_vblank`] at the end of the frame.
     pub fn render_scanline(&mut self, line: u8) {
-        self.ppu
-            .render_scanline(line, &self.wram, &self.ports, &MonoPaletteResolver);
+        if self.color_rendering_enabled() {
+            let resolver = ColorPaletteResolver::new(&self.wram);
+            self.ppu
+                .render_scanline(line, &self.wram, &self.ports, &resolver);
+        } else {
+            self.ppu
+                .render_scanline(line, &self.wram, &self.ports, &MonoPaletteResolver);
+        }
         self.set_current_scanline(line);
         self.on_hblank();
     }
 
-    /// The current PPU framebuffer: 224×144 monochrome shade indices,
-    /// row-major. Stable read API for the frontend and RetroAchievements.
-    pub fn framebuffer(&self) -> &[u8] {
+    /// Whether the PPU should render in WonderSwan Color mode: the emulated
+    /// model has color features *and* the video-mode register (I/O port 0x60)
+    /// has the color-mode bit (bit 7) set. A Color console running a
+    /// monochrome-compatible title (bit 7 clear) uses the mono shade path.
+    ///
+    /// (Games normally rely on the boot ROM to set port 0x60; when booting
+    /// without it, a Color title must set the bit itself.)
+    fn color_rendering_enabled(&self) -> bool {
+        self.model.is_color() && (self.ports[0x60] & 0x80 != 0)
+    }
+
+    /// The current PPU framebuffer: 224×144 [`Rgb444`] colors, row-major.
+    /// Stable read API for the frontend and RetroAchievements.
+    pub fn framebuffer(&self) -> &[Rgb444] {
         self.ppu.framebuffer()
+    }
+
+    /// The emulated hardware model.
+    pub fn model(&self) -> HardwareModel {
+        self.model
+    }
+
+    /// Override the emulated hardware model (e.g. to force Color or Crystal on a
+    /// Color-capable cartridge). Takes effect on the next rendered scanline.
+    pub fn set_model(&mut self, model: HardwareModel) {
+        self.model = model;
     }
 
     // ── APU ──────────────────────────────────────────────────────────────
@@ -379,14 +418,51 @@ impl Bus {
         self.apu.clear_samples();
     }
 
+    // ── Cartridge RTC ─────────────────────────────────────────────────────
+
+    /// Whether the inserted cartridge carries a real-time clock.
+    pub fn has_rtc(&self) -> bool {
+        self.cart.has_rtc()
+    }
+
+    /// Advance the cartridge RTC (if any) by `cycles` master-clock ticks.
+    ///
+    /// The RTC free-runs off the emulated clock rather than wall-clock time, to
+    /// keep the core deterministic; see [`Rtc`].
+    pub fn tick_rtc(&mut self, cycles: u32) {
+        if let Some(rtc) = self.cart.rtc_mut() {
+            rtc.tick(cycles);
+        }
+    }
+
+    /// Inject an absolute date/time into the cartridge RTC (no-op without one).
+    ///
+    /// Called once by the frontend from the host clock at ROM load; the core
+    /// never reads wall-clock time itself. See [`Rtc::set_datetime`] for the
+    /// component encoding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_rtc_datetime(
+        &mut self,
+        year: u8,
+        month: u8,
+        day: u8,
+        weekday: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+    ) {
+        if let Some(rtc) = self.cart.rtc_mut() {
+            rtc.set_datetime(year, month, day, weekday, hour, minute, second);
+        }
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────
 
     /// Physical memory read without going through the `MemoryBus` trait
     /// (avoids borrow conflicts in `tick_gdma`).
     fn read_u8_phys(&self, addr: u32) -> u8 {
         match addr & 0xF_FFFF {
-            a @ 0x00000..=0x03FFF => self.wram[a as usize],
-            0x04000..=0x0FFFF => OPEN_BUS,
+            a @ 0x00000..=0x0FFFF => self.read_wram(a),
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
             a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
             a @ 0x30000..=0x3FFFF => self.cart.read_rom1(a),
@@ -394,13 +470,35 @@ impl Bus {
             _ => OPEN_BUS,
         }
     }
+
+    /// Read an internal-RAM byte for physical address `a` in 0x00000–0x0FFFF.
+    ///
+    /// WonderSwan mono has 16 KiB of internal RAM (0x00000–0x03FFF); the upper
+    /// 48 KiB window (0x04000–0x0FFFF) — which holds the Color palette RAM at
+    /// 0xFE00 and the 4bpp tile banks at 0x4000 — is only present on Color
+    /// models. On mono it reads as open bus.
+    fn read_wram(&self, a: u32) -> u8 {
+        if a <= 0x03FFF || self.model.is_color() {
+            self.wram[a as usize]
+        } else {
+            OPEN_BUS
+        }
+    }
+
+    /// Write an internal-RAM byte for physical address `a` in 0x00000–0x0FFFF.
+    /// The upper 48 KiB window is writable only on Color models; on mono it is
+    /// open bus and the write is dropped. See [`Bus::read_wram`].
+    fn write_wram(&mut self, a: u32, value: u8) {
+        if a <= 0x03FFF || self.model.is_color() {
+            self.wram[a as usize] = value;
+        }
+    }
 }
 
 impl MemoryBus for Bus {
     fn read_u8(&self, addr: u32) -> u8 {
         match addr & 0xF_FFFF {
-            a @ 0x00000..=0x03FFF => self.wram[a as usize],
-            0x04000..=0x0FFFF => OPEN_BUS,
+            a @ 0x00000..=0x0FFFF => self.read_wram(a),
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
             a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
             a @ 0x30000..=0x3FFFF => self.cart.read_rom1(a),
@@ -411,8 +509,7 @@ impl MemoryBus for Bus {
 
     fn write_u8(&mut self, addr: u32, value: u8) {
         match addr & 0xF_FFFF {
-            a @ 0x00000..=0x03FFF => self.wram[a as usize] = value,
-            0x04000..=0x0FFFF => {} // open bus on mono
+            a @ 0x00000..=0x0FFFF => self.write_wram(a, value),
             a @ 0x10000..=0x1FFFF => self.cart.write_sram(a, value),
             _ => {} // ROM is read-only
         }
@@ -441,6 +538,18 @@ impl MemoryBus for Bus {
             // SDMA counter segment: bits 4-7 undefined
             0x50 => self.ports[0x50] & 0x0F,
             0x51 => 0,
+            // HW_FLAGS (0xA0): console-model / system flags. Reads as a fixed
+            // pattern with bit 0 = colour hardware — 0x87 on Color/Crystal, 0x86
+            // on mono (Mednafen `gfx.c`: `wsc ? 0x87 : 0x86`). Games read this at
+            // boot to detect a WonderSwan Color and take their colour path; a raw
+            // 0x00 here makes them mis-initialise or hang.
+            0xA0 => {
+                if self.model.is_color() {
+                    0x87
+                } else {
+                    0x86
+                }
+            }
             // HBlank/VBlank timer counters (read-only)
             0xA8 => self.ports[0xA8],
             0xA9 => self.ports[0xA9],
@@ -486,6 +595,9 @@ impl MemoryBus for Bus {
                 _ => self.cart.rom_bank1_hi,
             },
             0xD0..=0xD5 => OPEN_BUS,
+            // Cartridge RTC command/status and data ports (only when present)
+            0xCA if self.cart.has_rtc() => self.cart.rtc().map_or(OPEN_BUS, |r| r.read_command()),
+            0xCB if self.cart.has_rtc() => self.cart.rtc_mut().map_or(OPEN_BUS, |r| r.read_data()),
             // Default: return raw shadow value
             p => self.ports[p as usize],
         }
@@ -583,6 +695,17 @@ impl MemoryBus for Bus {
                 _ => self.cart.rom_bank1_hi = value,
             },
             0xD0..=0xD5 => {}
+            // Cartridge RTC command/status and data ports (only when present)
+            0xCA if self.cart.has_rtc() => {
+                if let Some(r) = self.cart.rtc_mut() {
+                    r.write_command(value);
+                }
+            }
+            0xCB if self.cart.has_rtc() => {
+                if let Some(r) = self.cart.rtc_mut() {
+                    r.write_data(value);
+                }
+            }
             // Default: raw write
             p => self.ports[p as usize] = value,
         }

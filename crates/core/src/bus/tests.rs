@@ -1,5 +1,41 @@
 use super::{Bus, IrqSource};
 use crate::cpu::{Cpu, MemoryBus};
+use crate::model::HardwareModel;
+
+// ── Hardware model selection ─────────────────────────────────────────────────
+
+/// A minimal 16-byte ROM whose footer's system byte (offset 0x7) marks it as
+/// requiring WonderSwan Color when `color` is set.
+fn rom_with_color_flag(color: bool) -> Vec<u8> {
+    let mut rom = vec![0u8; 16];
+    rom[0x7] = if color { 0x01 } else { 0x00 };
+    rom
+}
+
+#[test]
+fn new_bus_defaults_to_mono() {
+    let bus = Bus::new(vec![0u8; 0x10000]);
+    assert_eq!(bus.model(), HardwareModel::Mono);
+}
+
+#[test]
+fn from_rom_selects_color_for_color_flagged_footer() {
+    let bus = Bus::from_rom(rom_with_color_flag(true));
+    assert_eq!(bus.model(), HardwareModel::Color);
+}
+
+#[test]
+fn from_rom_selects_mono_for_mono_footer() {
+    let bus = Bus::from_rom(rom_with_color_flag(false));
+    assert_eq!(bus.model(), HardwareModel::Mono);
+}
+
+#[test]
+fn set_model_overrides_the_model() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Crystal);
+    assert_eq!(bus.model(), HardwareModel::Crystal);
+}
 
 // ── Memory map ───────────────────────────────────────────────────────────────
 
@@ -55,6 +91,73 @@ fn open_bus_returns_0x90_at_start_of_unmapped_range() {
 fn open_bus_returns_0x90_at_end_of_unmapped_range() {
     let bus = Bus::new(vec![0u8; 0x10000]);
     assert_eq!(bus.read_u8(0x0FFFF), 0x90);
+}
+
+// ── Color 64 KiB internal RAM window (0x04000–0x0FFFF) ────────────────────────
+
+/// Build a Color bus with a zeroed 16-byte ROM (footer marks Color).
+fn color_bus() -> Bus {
+    Bus::from_rom(rom_with_color_flag(true))
+}
+
+#[test]
+fn hw_flags_port_a0_reports_color_hardware() {
+    // Color/Crystal read 0x87 (bit0 = colour), mono reads 0x86. Games poll this
+    // at boot to detect a WonderSwan Color and enable the colour video path.
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    assert_eq!(bus.read_io(0xA0), 0x86); // default model is Mono
+    bus.set_model(HardwareModel::Color);
+    assert_eq!(bus.read_io(0xA0), 0x87);
+    bus.set_model(HardwareModel::Crystal);
+    assert_eq!(bus.read_io(0xA0), 0x87);
+}
+
+#[test]
+fn hw_flags_port_a0_ignores_writes() {
+    // 0xA0 is a computed read; writes do not change what it reports.
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xA0, 0x00);
+    assert_eq!(bus.read_io(0xA0), 0x86);
+}
+
+#[test]
+fn color_wram_write_reads_back_just_above_mono_window() {
+    let mut bus = color_bus();
+    bus.write_u8(0x04000, 0x5A);
+    assert_eq!(bus.read_u8(0x04000), 0x5A);
+}
+
+#[test]
+fn color_wram_write_reads_back_at_palette_ram() {
+    let mut bus = color_bus();
+    bus.write_u8(0x0FE00, 0x34);
+    bus.write_u8(0x0FE01, 0x02);
+    assert_eq!(bus.read_u8(0x0FE00), 0x34);
+    assert_eq!(bus.read_u8(0x0FE01), 0x02);
+}
+
+#[test]
+fn color_wram_write_reads_back_at_top_address() {
+    let mut bus = color_bus();
+    bus.write_u8(0x0FFFF, 0xC3);
+    assert_eq!(bus.read_u8(0x0FFFF), 0xC3);
+}
+
+#[test]
+fn mono_write_to_upper_window_is_dropped_not_just_read_masked() {
+    // On mono the upper window is open bus: the write must not reach the RAM
+    // buffer. Promote to Color afterwards and confirm the byte was never stored.
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u8(0x04000, 0x77);
+    bus.set_model(HardwareModel::Color);
+    assert_eq!(bus.read_u8(0x04000), 0x00);
+}
+
+#[test]
+fn mono_still_reads_open_bus_in_upper_window() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_u8(0x08000, 0x11);
+    assert_eq!(bus.read_u8(0x08000), 0x90);
 }
 
 fn make_reset_vector_rom() -> Bus {
@@ -490,18 +593,25 @@ fn setup_bus_scr1_pixel() -> Bus {
     bus
 }
 
+/// The RGB444 framebuffer value a monochrome `shade` (0–15) resolves to (the
+/// mono resolver inverts brightness: shade 0 = white = 0x0FFF).
+fn grey(shade: u8) -> u16 {
+    let n = (15 - (shade & 0x0F)) as u16;
+    (n << 8) | (n << 4) | n
+}
+
 #[test]
 fn render_scanline_draws_scr1_pixel_to_framebuffer() {
     let mut bus = setup_bus_scr1_pixel();
     bus.render_scanline(0);
-    assert_eq!(bus.framebuffer()[0], 1);
+    assert_eq!(bus.framebuffer()[0], grey(1));
 }
 
 #[test]
 fn render_scanline_leaves_unset_pixel_clear() {
     let mut bus = setup_bus_scr1_pixel();
     bus.render_scanline(0);
-    assert_eq!(bus.framebuffer()[1], 0);
+    assert_eq!(bus.framebuffer()[1], grey(0));
 }
 
 #[test]
@@ -617,18 +727,19 @@ fn into_does_not_trigger_when_overflow_clear() {
 #[test]
 fn in_out_imm_port_reads_and_writes_io() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Code: OUT 0xA0, AL  (0xE6 0xA0); IN AL, 0xA0  (0xE4 0xA0)
+    // Port 0xA1 is a plain read/write shadow (0xA0 is the computed HW_FLAGS port).
+    // Code: OUT 0xA1, AL  (0xE6 0xA1); IN AL, 0xA1  (0xE4 0xA1)
     bus.wram[0x0100] = 0xE6;
-    bus.wram[0x0101] = 0xA0;
+    bus.wram[0x0101] = 0xA1;
     bus.wram[0x0102] = 0xE4;
-    bus.wram[0x0103] = 0xA0;
+    bus.wram[0x0103] = 0xA1;
 
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0100);
     cpu.regs.set_reg8(0, 0x55); // AL = 0x55
-    cpu.step(&mut bus); // OUT 0xA0, AL
+    cpu.step(&mut bus); // OUT 0xA1, AL
     cpu.regs.set_reg8(0, 0x00); // clear AL
-    cpu.step(&mut bus); // IN AL, 0xA0
+    cpu.step(&mut bus); // IN AL, 0xA1
     assert_eq!(cpu.regs.get_reg8(0), 0x55);
 }
 
@@ -681,4 +792,109 @@ fn handle_irq_clears_interrupt_flag() {
 fn handle_irq_clears_halted_state() {
     let (cpu, _) = setup_handle_irq();
     assert!(!cpu.halted);
+}
+
+// ── Color-mode resolver selection (8b) ───────────────────────────────────────
+
+/// A bus with SCR1 enabled and tile 0 drawing pixel 1 (palette 0) at its
+/// top-left corner, an identity monochrome palette, and a color palette-RAM
+/// entry (palette 0, color 1) set to `color_ram`. The caller sets the model and
+/// port 0x60 to select the render path.
+fn setup_bus_scr1_pixel_dual(color_ram: u16) -> Bus {
+    let mut bus = setup_bus_scr1_pixel();
+    let addr = 0xFE00 + 2; // palette 0, color 1 → entry 1 → byte offset 2
+    let [lo, hi] = (color_ram & 0x0FFF).to_le_bytes();
+    bus.wram[addr] = lo;
+    bus.wram[addr + 1] = hi;
+    bus
+}
+
+#[test]
+fn color_model_with_color_bit_renders_from_palette_ram() {
+    let mut bus = setup_bus_scr1_pixel_dual(0x0F0F);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0x60, 0x80); // color-mode bit set
+    bus.render_scanline(0);
+    assert_eq!(bus.framebuffer()[0], 0x0F0F);
+}
+
+#[test]
+fn color_model_without_color_bit_uses_mono_path() {
+    let mut bus = setup_bus_scr1_pixel_dual(0x0F0F);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0x60, 0x00); // color-mode bit clear → mono-compat
+    bus.render_scanline(0);
+    assert_eq!(bus.framebuffer()[0], grey(1));
+}
+
+#[test]
+fn mono_model_ignores_color_bit() {
+    let mut bus = setup_bus_scr1_pixel_dual(0x0F0F);
+    bus.write_io(0x60, 0x80); // bit set, but model is Mono
+    bus.render_scanline(0);
+    assert_eq!(bus.framebuffer()[0], grey(1));
+}
+
+// ── Cartridge RTC (ports 0xCA/0xCB) ──────────────────────────────────────────
+
+/// 16-byte ROM whose footer flags byte (offset 0xC) sets bit 1 = RTC present.
+fn rom_with_rtc() -> Vec<u8> {
+    let mut rom = vec![0u8; 16];
+    rom[0xC] = 0x02;
+    rom
+}
+
+#[test]
+fn cart_without_rtc_leaves_ports_ca_cb_as_open_shadow() {
+    let mut bus = Bus::from_rom(rom_with_color_flag(true));
+    assert!(!bus.has_rtc());
+    // No RTC: 0xCA/0xCB fall through to the raw port shadow (0 by default).
+    bus.write_io(0xCA, 0x14);
+    assert_eq!(bus.read_io(0xCA), 0x14);
+}
+
+#[test]
+fn rtc_footer_bit_creates_clock() {
+    let bus = Bus::from_rom(rom_with_rtc());
+    assert!(bus.has_rtc());
+}
+
+#[test]
+fn rtc_datetime_read_over_ports_returns_injected_time() {
+    let mut bus = Bus::from_rom(rom_with_rtc());
+    bus.set_rtc_datetime(26, 7, 3, 5, 12, 34, 56);
+    // Command port: select "read date/time"; the ready bit reads back set.
+    bus.write_io(0xCA, 0x14);
+    assert_eq!(bus.read_io(0xCA), 0x94);
+    let got: Vec<u8> = (0..7).map(|_| bus.read_io(0xCB)).collect();
+    assert_eq!(got, vec![0x26, 0x07, 0x03, 5, 0x12, 0x34, 0x56]);
+}
+
+#[test]
+fn rtc_datetime_write_over_ports_round_trips() {
+    let mut bus = Bus::from_rom(rom_with_rtc());
+    bus.write_io(0xCA, 0x15); // write date/time
+    for b in [0x26, 0x07, 0x03, 0x05, 0x12, 0x34, 0x56] {
+        bus.write_io(0xCB, b);
+    }
+    bus.write_io(0xCA, 0x14); // read date/time
+    let got: Vec<u8> = (0..7).map(|_| bus.read_io(0xCB)).collect();
+    assert_eq!(got, vec![0x26, 0x07, 0x03, 0x05, 0x12, 0x34, 0x56]);
+}
+
+#[test]
+fn tick_rtc_advances_seconds() {
+    let mut bus = Bus::from_rom(rom_with_rtc());
+    bus.set_rtc_datetime(26, 7, 3, 5, 12, 0, 0);
+    bus.tick_rtc(crate::system::MASTER_CLOCK_HZ); // one wall-second
+    bus.write_io(0xCA, 0x14);
+    let got: Vec<u8> = (0..7).map(|_| bus.read_io(0xCB)).collect();
+    assert_eq!(got[6], 0x01); // seconds register advanced by one
+}
+
+#[test]
+fn tick_rtc_without_clock_is_noop() {
+    let mut bus = Bus::from_rom(rom_with_color_flag(true));
+    bus.tick_rtc(crate::system::MASTER_CLOCK_HZ);
+    assert!(!bus.has_rtc());
 }

@@ -13,6 +13,13 @@ use swanium_core::cpu::{Cpu, MemoryBus};
 const SCREEN_WIDTH: usize = 224;
 const VISIBLE_LINES: u8 = 144;
 
+/// The RGB444 framebuffer value a monochrome `shade` (0–15) resolves to (the
+/// mono resolver inverts brightness: shade 0 = white = 0x0FFF).
+fn grey(shade: u8) -> u16 {
+    let n = (15 - (shade & 0x0F)) as u16;
+    (n << 8) | (n << 4) | n
+}
+
 // ── Harness ──────────────────────────────────────────────────────────────────
 
 /// Write an identity monochrome palette (tile pixel `i` → shade `i`) for
@@ -60,7 +67,7 @@ fn frame_renders_scr1_tile_to_top_left() {
     write_identity_palette(&mut bus);
     write_tile_row(&mut bus, 0, 0, 0b1000_0000, 0b0000_0000); // tile 0 row 0: x0 = 1
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[0], 1);
+    assert_eq!(bus.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -71,7 +78,7 @@ fn frame_renders_pixel_on_later_scanline() {
     write_identity_palette(&mut bus);
     write_tile_row(&mut bus, 0, 3, 0b1000_0000, 0b0000_0000); // tile 0 row 3: x0 = 1
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[3 * SCREEN_WIDTH], 1);
+    assert_eq!(bus.framebuffer()[3 * SCREEN_WIDTH], grey(1));
 }
 
 #[test]
@@ -82,7 +89,7 @@ fn frame_leaves_background_clear_where_no_tile_pixel() {
     write_identity_palette(&mut bus);
     write_tile_row(&mut bus, 0, 0, 0b1000_0000, 0b0000_0000);
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[1], 0); // x=1 has no pixel set
+    assert_eq!(bus.framebuffer()[1], grey(0)); // x=1 has no pixel set
 }
 
 #[test]
@@ -112,7 +119,7 @@ fn frame_renders_sprite_pixel() {
     bus.write_u8(0x203, 20); // X = 20
     write_tile_row(&mut bus, 1, 0, 0b1000_0000, 0b0000_0000); // tile 1 row 0: x0 = 1
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[20], 1);
+    assert_eq!(bus.framebuffer()[20], grey(1));
 }
 
 // ── CPU → I/O → PPU path ──────────────────────────────────────────────────────
@@ -137,7 +144,7 @@ fn cpu_out_enabling_scr1_makes_tile_visible() {
 
     run_cpu_until_halt(&mut bus, 1_000);
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[0], 1);
+    assert_eq!(bus.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -149,5 +156,5 @@ fn scr1_stays_disabled_without_cpu_enabling_it() {
     write_identity_palette(&mut bus);
     write_tile_row(&mut bus, 0, 0, 0b1000_0000, 0b0000_0000);
     render_frame(&mut bus);
-    assert_eq!(bus.framebuffer()[0], 0);
+    assert_eq!(bus.framebuffer()[0], grey(0));
 }

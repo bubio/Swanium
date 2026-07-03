@@ -20,3 +20,14 @@ nonstandard_style = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = 10 }
+
+# Release builds favour raw speed: cross-crate inlining via thin LTO and a
+# single codegen unit. This is the profile the shipped emulator and `cargo
+# bench` run under; measure changes against it (see docs/dev/Profiling.md).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

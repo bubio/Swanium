@@ -16,7 +16,7 @@ mod palette;
 #[cfg(test)]
 mod tests;
 
-pub use palette::{MonoPaletteResolver, PaletteResolver};
+pub use palette::{ColorPaletteResolver, MonoPaletteResolver, PaletteResolver, Rgb444};
 
 /// Visible screen width in pixels.
 pub const SCREEN_WIDTH: usize = 224;
@@ -54,10 +54,22 @@ const SCR1_SCROLL_Y: usize = 0x11;
 const SCR2_SCROLL_X: usize = 0x12;
 const SCR2_SCROLL_Y: usize = 0x13;
 
-/// Monochrome tile data lives at a fixed WRAM offset; each tile is 16 bytes
-/// (8 rows × 2 planar bytes), 2 bits per pixel.
+/// 2bpp tile data (monochrome and WonderSwan Color 2bpp) lives at a fixed WRAM
+/// offset; each tile is 16 bytes (8 rows × 2 planar bytes), 2 bits per pixel.
 const TILE_DATA_BASE: usize = 0x2000;
 const TILE_BYTES: usize = 16;
+/// WonderSwan Color 4bpp tile data lives at a higher fixed offset; each tile is
+/// 32 bytes (8 rows × 4 bytes), 4 bits per pixel.
+const TILE_DATA_BASE_4BPP: usize = 0x4000;
+const TILE_BYTES_4BPP: usize = 32;
+/// Video-mode register (I/O port 0x60, WonderSwan Color only).
+const VIDEO_MODE: usize = 0x60;
+const VIDEO_MODE_COLOR: u8 = 1 << 7; // color palettes (1) vs mono shade pool (0)
+const VIDEO_MODE_4BPP: u8 = 1 << 6; // 16-color 4bpp tiles (1) vs 4-color 2bpp (0)
+const VIDEO_MODE_PACKED: u8 = 1 << 5; // packed 4bpp (1) vs planar 4bpp (0)
+/// In color mode, tile-map bit 13 selects the second 512-tile bank.
+const TILEMAP_BANK_BIT: u16 = 1 << 13;
+const TILE_BANK_SIZE: u16 = 512;
 /// A tile map is 32×32 entries of 16 bits each, row-major.
 const TILEMAP_COLS: usize = 32;
 /// Background planes wrap at 256×256 pixels (32 tiles × 8 px).
@@ -114,12 +126,14 @@ impl DisplayControl {
 
 /// PPU state: the rendered framebuffer plus the current scanline position.
 ///
-/// The framebuffer stores one resolved shade index (0–15 on monochrome) per
-/// pixel, row-major, `SCREEN_WIDTH * SCREEN_HEIGHT` entries.
+/// The framebuffer stores one resolved [`Rgb444`] color per pixel, row-major,
+/// `SCREEN_WIDTH * SCREEN_HEIGHT` entries. Monochrome output is a grey RGB444
+/// value (see [`palette::grey_rgb444`]); color output is the 12-bit palette RAM
+/// color. RGB444 → RGBA8888 expansion happens in `crates/video`.
 #[derive(Debug, Clone)]
 pub struct Ppu {
-    /// Resolved shade indices, row-major (`y * SCREEN_WIDTH + x`).
-    framebuffer: Box<[u8]>,
+    /// Resolved RGB444 colors, row-major (`y * SCREEN_WIDTH + x`).
+    framebuffer: Box<[Rgb444]>,
     /// Scanline currently being rendered (0–143 visible; up to 158 total).
     current_line: u8,
 }
@@ -134,7 +148,7 @@ impl Ppu {
     /// Create a PPU with a cleared framebuffer at scanline 0.
     pub fn new() -> Self {
         Self {
-            framebuffer: vec![0u8; FRAMEBUFFER_LEN].into_boxed_slice(),
+            framebuffer: vec![0u16; FRAMEBUFFER_LEN].into_boxed_slice(),
             current_line: 0,
         }
     }
@@ -145,10 +159,10 @@ impl Ppu {
         self.current_line = 0;
     }
 
-    /// The rendered framebuffer: `SCREEN_WIDTH * SCREEN_HEIGHT` shade indices,
-    /// row-major. Stable read API for the frontend and future RetroAchievements
-    /// integration.
-    pub fn framebuffer(&self) -> &[u8] {
+    /// The rendered framebuffer: `SCREEN_WIDTH * SCREEN_HEIGHT` [`Rgb444`]
+    /// colors, row-major. Stable read API for the frontend and future
+    /// RetroAchievements integration.
+    pub fn framebuffer(&self) -> &[Rgb444] {
         &self.framebuffer
     }
 
@@ -180,32 +194,80 @@ impl Ppu {
             return;
         }
         let dc = DisplayControl::from_ports(ports);
+        let mode = TileMode::from_ports(ports);
         let row = y * SCREEN_WIDTH;
+
+        // Decode the sprite attribute table once per scanline and keep only the
+        // entries that cover this line (preserving table order, i.e. priority).
+        // The per-pixel sprite sampler then walks this short list instead of
+        // re-decoding all 128 entries for every pixel — the dominant PPU cost
+        // (see docs/dev/Profiling.md). Zero-allocation: a stack-resident array
+        // sized to the full table, filled up to `sprite_count`.
+        let mut line_sprites = [SpriteEntry::default(); SPRITE_TABLE_LEN];
+        let sprite_count = if dc.sprites_enabled {
+            collect_line_sprites(wram, ports, line, &mut line_sprites)
+        } else {
+            0
+        };
+        let line_sprites = &line_sprites[..sprite_count];
+
+        // Resolve each enabled background layer for the whole line up front,
+        // decoding tile-map entries and tile rows once per 8-pixel span instead
+        // of per pixel (see fill_background_line).
+        let mut scr1_line = [BgSample::default(); SCREEN_WIDTH];
+        if dc.scr1_enabled {
+            fill_background_line(wram, ports, BgLayer::Scr1, line, mode, &mut scr1_line);
+        }
+        let mut scr2_line = [BgSample::default(); SCREEN_WIDTH];
+        if dc.scr2_enabled {
+            fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
+        }
+
         for x in 0..SCREEN_WIDTH {
-            let mut shade = resolver.backdrop(ports);
+            let mut color = resolver.backdrop(ports);
             if dc.scr1_enabled {
-                let s = sample_background(wram, ports, BgLayer::Scr1, x, line);
+                let s = scr1_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
-                    shade = resolver.resolve(ports, s.palette, s.pixel);
+                    color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
             if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, false, resolver) {
-                    shade = px;
+                if let Some(px) = sample_sprite(
+                    wram,
+                    ports,
+                    &dc,
+                    line_sprites,
+                    mode,
+                    x,
+                    line,
+                    false,
+                    resolver,
+                ) {
+                    color = px;
                 }
             }
             if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
-                let s = sample_background(wram, ports, BgLayer::Scr2, x, line);
+                let s = scr2_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
-                    shade = resolver.resolve(ports, s.palette, s.pixel);
+                    color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
             if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, true, resolver) {
-                    shade = px;
+                if let Some(px) = sample_sprite(
+                    wram,
+                    ports,
+                    &dc,
+                    line_sprites,
+                    mode,
+                    x,
+                    line,
+                    true,
+                    resolver,
+                ) {
+                    color = px;
                 }
             }
-            self.framebuffer[row + x] = shade;
+            self.framebuffer[row + x] = color;
         }
         self.current_line = line;
     }
@@ -216,6 +278,102 @@ impl Ppu {
 enum BgLayer {
     Scr1,
     Scr2,
+}
+
+/// Tile pixel format in effect, derived from the video-mode register (port
+/// 0x60). Determines how [`sample_background`]/[`sample_sprite`] decode tile
+/// pixels; the palette (mono shade pool vs color RAM) is handled separately by
+/// the [`PaletteResolver`].
+///
+/// Layouts (WSdev "Display"; exact 4bpp byte order unverified — see
+/// `docs/dev/DevelopmentPlan.md` "リスクと不確実性"):
+/// - 2bpp planar (mono and color 2bpp): 16 bytes/tile, per row two planes.
+/// - 4bpp planar: 32 bytes/tile, per row four plane bytes.
+/// - 4bpp packed: 32 bytes/tile, per row four bytes of two 4-bit pixels
+///   (high nibble = left pixel).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TileMode {
+    /// 4bpp (16-color) tiles instead of 2bpp (4-color).
+    bpp4: bool,
+    /// Packed 4bpp byte layout instead of planar (only meaningful when `bpp4`).
+    packed: bool,
+    /// Color mode: tile-map bit 13 selects the second 512-tile bank.
+    banked: bool,
+}
+
+impl TileMode {
+    /// Decode the tile format from the I/O port shadow (port 0x60). Monochrome
+    /// hardware (or a Color console with the color bit clear) always reports
+    /// 2bpp planar with no banking, matching the pre-Color behaviour.
+    pub(crate) fn from_ports(ports: &[u8]) -> Self {
+        let m = ports[VIDEO_MODE];
+        let color = m & VIDEO_MODE_COLOR != 0;
+        Self {
+            bpp4: color && (m & VIDEO_MODE_4BPP != 0),
+            packed: m & VIDEO_MODE_PACKED != 0,
+            banked: color,
+        }
+    }
+
+    /// The effective tile index for a background entry, applying the color
+    /// second-bank bit when banking is active.
+    fn bg_tile(self, entry: &TileMapEntry) -> u16 {
+        if self.banked && entry.bank {
+            entry.tile_idx + TILE_BANK_SIZE
+        } else {
+            entry.tile_idx
+        }
+    }
+
+    /// Read a tile pixel in this format from WRAM.
+    fn pixel(self, wram: &[u8], tile: u16, tx: usize, ty: usize) -> u8 {
+        if self.bpp4 {
+            tile_pixel_4bpp(wram, self.packed, tile, tx, ty)
+        } else {
+            tile_pixel(wram, tile, tx, ty)
+        }
+    }
+
+    /// Read the bytes of one tile row so a whole 8-pixel span can be extracted
+    /// without re-reading WRAM per pixel (see [`fill_background_line`]). Only
+    /// the first two bytes are meaningful in 2bpp; all four in 4bpp.
+    fn read_row(self, wram: &[u8], tile: u16, ty: usize) -> [u8; 4] {
+        if self.bpp4 {
+            let b = TILE_DATA_BASE_4BPP + tile as usize * TILE_BYTES_4BPP + ty * 4;
+            [wram[b], wram[b + 1], wram[b + 2], wram[b + 3]]
+        } else {
+            let b = TILE_DATA_BASE + tile as usize * TILE_BYTES + ty * 2;
+            [wram[b], wram[b + 1], 0, 0]
+        }
+    }
+
+    /// Extract the pixel at in-row column `tx` (0–7) from a row previously read
+    /// by [`read_row`](Self::read_row). Bit-for-bit equivalent to
+    /// [`pixel`](Self::pixel) for the same tile row.
+    fn pixel_in_row(self, row: &[u8; 4], tx: usize) -> u8 {
+        if self.bpp4 {
+            if self.packed {
+                let byte = row[tx >> 1];
+                if tx & 1 == 0 {
+                    byte >> 4
+                } else {
+                    byte & 0x0F
+                }
+            } else {
+                let bit = 7 - tx;
+                let mut px = 0u8;
+                for (plane, &b) in row.iter().enumerate() {
+                    px |= ((b >> bit) & 1) << plane;
+                }
+                px
+            }
+        } else {
+            let bit = 7 - tx;
+            let lo = (row[0] >> bit) & 1;
+            let hi = (row[1] >> bit) & 1;
+            (hi << 1) | lo
+        }
+    }
 }
 
 impl Ppu {
@@ -237,12 +395,15 @@ impl Ppu {
 }
 
 /// A decoded 16-bit tile-map entry (internal to the `ppu` module).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TileMapEntry {
-    /// Tile number (9 bits on monochrome, 0–511).
+    /// Tile number (9 bits, 0–511); combined with [`bank`](Self::bank) in color
+    /// mode to address up to 1024 tiles.
     pub tile_idx: u16,
     /// Palette index (4 bits, 0–15); consumed by the palette resolver.
     pub palette: u8,
+    /// Second tile-bank select (bit 13); honoured only in color mode.
+    pub bank: bool,
     /// Horizontal flip.
     pub hflip: bool,
     /// Vertical flip.
@@ -255,6 +416,7 @@ impl TileMapEntry {
         Self {
             tile_idx: word & 0x01FF,
             palette: ((word >> 9) & 0x0F) as u8,
+            bank: word & TILEMAP_BANK_BIT != 0,
             hflip: word & (1 << 14) != 0,
             vflip: word & (1 << 15) != 0,
         }
@@ -262,7 +424,7 @@ impl TileMapEntry {
 }
 
 /// A sampled background pixel: the raw 2-bit value plus its palette index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct BgSample {
     pixel: u8,
     palette: u8,
@@ -281,6 +443,37 @@ pub(crate) fn tile_pixel(wram: &[u8], tile_idx: u16, tx: usize, ty: usize) -> u8
     let lo = (plane0 >> bit) & 1;
     let hi = (plane1 >> bit) & 1;
     (hi << 1) | lo
+}
+
+/// Read a 4-bit pixel (0–15) from a WonderSwan Color 4bpp tile in WRAM.
+///
+/// `tile_idx` selects the 32-byte tile at [`TILE_DATA_BASE_4BPP`]; each row is
+/// four bytes. In `packed` layout a row byte holds two pixels (high nibble =
+/// left); in planar layout the four bytes are bit-planes 0–3 (MSB = leftmost
+/// pixel).
+pub(crate) fn tile_pixel_4bpp(
+    wram: &[u8],
+    packed: bool,
+    tile_idx: u16,
+    tx: usize,
+    ty: usize,
+) -> u8 {
+    let row = TILE_DATA_BASE_4BPP + tile_idx as usize * TILE_BYTES_4BPP + ty * 4;
+    if packed {
+        let byte = wram[row + (tx >> 1)];
+        if tx & 1 == 0 {
+            byte >> 4
+        } else {
+            byte & 0x0F
+        }
+    } else {
+        let bit = 7 - tx;
+        let mut px = 0u8;
+        for plane in 0..4 {
+            px |= ((wram[row + plane] >> bit) & 1) << plane;
+        }
+        px
+    }
 }
 
 /// Read a tile-map entry at tile coordinates `(col, row)` from a map at
@@ -311,6 +504,7 @@ fn sample_background(
     screen_x: usize,
     line: u8,
 ) -> BgSample {
+    let mode = TileMode::from_ports(ports);
     let (scroll_x, scroll_y) = match layer {
         BgLayer::Scr1 => (ports[SCR1_SCROLL_X], ports[SCR1_SCROLL_Y]),
         BgLayer::Scr2 => (ports[SCR2_SCROLL_X], ports[SCR2_SCROLL_Y]),
@@ -330,14 +524,71 @@ fn sample_background(
         ty = 7 - ty;
     }
     BgSample {
-        pixel: tile_pixel(wram, entry.tile_idx, tx, ty),
+        pixel: mode.pixel(wram, mode.bg_tile(&entry), tx, ty),
         palette: entry.palette,
+    }
+}
+
+/// Fill `out` with a whole background scanline for `layer` in one pass.
+///
+/// Equivalent to calling [`sample_background`] for every `screen_x`, but the
+/// tile-map entry and the tile's row bytes are decoded once per 8-pixel tile
+/// span (they only change at tile boundaries) rather than per pixel — the
+/// dominant remaining PPU cost after the sprite fix (see `docs/dev/Profiling.md`).
+/// `mode` is hoisted from the caller so it is computed once per line, not per
+/// pixel.
+fn fill_background_line(
+    wram: &[u8],
+    ports: &[u8],
+    layer: BgLayer,
+    line: u8,
+    mode: TileMode,
+    out: &mut [BgSample; SCREEN_WIDTH],
+) {
+    let (scroll_x, scroll_y) = match layer {
+        BgLayer::Scr1 => (ports[SCR1_SCROLL_X], ports[SCR1_SCROLL_Y]),
+        BgLayer::Scr2 => (ports[SCR2_SCROLL_X], ports[SCR2_SCROLL_Y]),
+    };
+    let bg_y = (line as u16 + scroll_y as u16) & BG_WRAP_MASK;
+    let map_row = (bg_y >> 3) as usize;
+    let base = map_base(ports, layer);
+
+    // Cached state for the current tile column; recomputed only when the span
+    // changes. `cur_col = usize::MAX` forces a load on the first pixel.
+    let mut cur_col = usize::MAX;
+    let mut palette = 0u8;
+    let mut hflip = false;
+    let mut row_bytes = [0u8; 4];
+
+    for (x, slot) in out.iter_mut().enumerate() {
+        let bg_x = (x as u16 + scroll_x as u16) & BG_WRAP_MASK;
+        let col = (bg_x >> 3) as usize;
+        if col != cur_col {
+            cur_col = col;
+            let entry = tilemap_entry(wram, base, col, map_row);
+            palette = entry.palette;
+            hflip = entry.hflip;
+            let ty = if entry.vflip {
+                7 - (bg_y & 7) as usize
+            } else {
+                (bg_y & 7) as usize
+            };
+            row_bytes = mode.read_row(wram, mode.bg_tile(&entry), ty);
+        }
+        let mut tx = (bg_x & 7) as usize;
+        if hflip {
+            tx = 7 - tx;
+        }
+        *slot = BgSample {
+            pixel: mode.pixel_in_row(&row_bytes, tx),
+            palette,
+        };
     }
 }
 
 /// A decoded 4-byte sprite attribute-table entry (internal to the `ppu`
 /// module).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SpriteEntry {
     /// Tile number (9 bits, 0–511).
     pub tile_idx: u16,
@@ -404,28 +655,58 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
     }
 }
 
+/// Decode the sprite attribute table into `out`, keeping (in table order,
+/// i.e. priority order) only the sprites whose 8-pixel-tall box covers `line`.
+/// Returns how many entries were written.
+///
+/// Called once per scanline by [`Ppu::render_scanline`] so the per-pixel
+/// sprite sampler works from a short pre-filtered list rather than re-decoding
+/// all 128 entries for every pixel.
+fn collect_line_sprites(
+    wram: &[u8],
+    ports: &[u8],
+    line: u8,
+    out: &mut [SpriteEntry; SPRITE_TABLE_LEN],
+) -> usize {
+    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
+    let first = ports[SPR_FIRST] as usize;
+    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
+    let ly = line as usize;
+
+    let mut n = 0;
+    for i in 0..count {
+        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
+        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+        let sy = sprite.y as usize;
+        if ly >= sy && ly < sy + SPRITE_SIZE {
+            out[n] = sprite;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Sample the sprite layer at `(screen_x, line)` for sprites whose priority
 /// matches `want_priority`.
 ///
-/// Walks the sprite attribute table in order (lower index = higher priority);
-/// returns the shade of the first non-transparent overlapping sprite pixel, or
-/// `None` if none covers this pixel. Sprite pixels use palettes 8–15.
+/// Walks `line_sprites` — the sprites covering this scanline in table order
+/// (lower index = higher priority), as gathered once by
+/// [`collect_line_sprites`] — and returns the color of the first
+/// non-transparent overlapping sprite pixel, or `None` if none covers this
+/// pixel. Sprite pixels use palettes 8–15.
+#[allow(clippy::too_many_arguments)]
 fn sample_sprite<R: PaletteResolver>(
     wram: &[u8],
     ports: &[u8],
     dc: &DisplayControl,
+    line_sprites: &[SpriteEntry],
+    mode: TileMode,
     screen_x: usize,
     line: u8,
     want_priority: bool,
     resolver: &R,
-) -> Option<u8> {
-    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
-    let first = ports[SPR_FIRST] as usize;
-    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
-
-    for i in 0..count {
-        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
-        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+) -> Option<Rgb444> {
+    for sprite in line_sprites {
         if sprite.priority != want_priority {
             continue;
         }
@@ -447,22 +728,22 @@ fn sample_sprite<R: PaletteResolver>(
             continue;
         }
         let sx = sprite.x as usize;
-        let sy = sprite.y as usize;
         if screen_x < sx || screen_x >= sx + SPRITE_SIZE {
             continue;
         }
-        if (line as usize) < sy || (line as usize) >= sy + SPRITE_SIZE {
-            continue;
-        }
+        // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
         let mut tx = screen_x - sx;
-        let mut ty = line as usize - sy;
+        let mut ty = line as usize - sprite.y as usize;
         if sprite.hflip {
             tx = SPRITE_SIZE - 1 - tx;
         }
         if sprite.vflip {
             ty = SPRITE_SIZE - 1 - ty;
         }
-        let pixel = tile_pixel(wram, sprite.tile_idx, tx, ty);
+        // Sprites carry no bank bit (attribute bit 13 is priority), so their
+        // tiles are limited to 0–511, but they follow the active 2bpp/4bpp
+        // format like backgrounds.
+        let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
         let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
         if resolver.transparent(palette, pixel) {
             continue;

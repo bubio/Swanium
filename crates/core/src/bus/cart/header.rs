@@ -21,8 +21,9 @@
 //! | 0xE–F  | 16-bit checksum (little-endian)                      |
 //!
 //! The mapper byte at offset 0xD follows WonderCrab's verified interpretation.
-//! Auto-detection of an on-cartridge RTC from the header is left unverified and
-//! tracked as a Phase 6 follow-up; see `docs/dev/DevelopmentPlan.md`.
+//! On-cartridge RTC presence is decoded from the flags byte (offset 0xC, bit 1);
+//! this bit position is **unverified** against hardware and documented as an
+//! assumption in the 実装メモ（8e） block of `docs/dev/DevelopmentPlan.md`.
 
 /// Length of the WonderSwan ROM footer in bytes.
 pub const FOOTER_LEN: usize = 16;
@@ -42,6 +43,8 @@ const OFF_CHECKSUM: usize = 0xE;
 const SYSTEM_COLOR: u8 = 0x01;
 /// Bit 0 of the flags byte: screen orientation (1 ⇒ vertical).
 const FLAG_VERTICAL: u8 = 0x01;
+/// Bit 1 of the flags byte: on-cartridge RTC present (unverified — see 実装メモ 8e).
+const FLAG_RTC: u8 = 0x02;
 
 /// The mapper (bank-switch) chip a cartridge uses.
 ///
@@ -130,6 +133,8 @@ pub struct CartridgeHeader {
     pub save_type: SaveType,
     /// Screen orientation is vertical (otherwise horizontal).
     pub vertical: bool,
+    /// Cartridge carries a real-time clock (flags byte bit 1; unverified).
+    pub rtc: bool,
     /// Bank-switch mapper chip.
     pub mapper: Mapper,
     /// 16-bit footer checksum.
@@ -150,6 +155,7 @@ impl CartridgeHeader {
             rom_size_code: footer[OFF_ROM_SIZE],
             save_type: SaveType::from_code(footer[OFF_SAVE_TYPE]),
             vertical: footer[OFF_FLAGS] & FLAG_VERTICAL != 0,
+            rtc: footer[OFF_FLAGS] & FLAG_RTC != 0,
             mapper: Mapper::from_code(footer[OFF_MAPPER]),
             checksum: u16::from_le_bytes([footer[OFF_CHECKSUM], footer[OFF_CHECKSUM + 1]]),
         })
