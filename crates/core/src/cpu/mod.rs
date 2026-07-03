@@ -12,6 +12,7 @@ mod ctrl_ops;
 mod decode;
 mod flags;
 mod registers;
+mod timing;
 
 #[cfg(test)]
 mod tests;
@@ -25,10 +26,14 @@ use bit_ops::shift_op_from_reg_field;
 use bus::linear_address;
 use decode::{decode_modrm, RegMem};
 
-/// CPU core state. Cycle costs returned by `step` are provisional
-/// per-instruction approximations (see docs/dev/DevelopmentPlan.md "サイクル
-/// 精度設計の考慮点"); they are not yet validated against real V30MZ timing
-/// and will be refined once cycle-accurate reference data is available.
+/// CPU core state. Cycle costs returned by `step` are per-instruction clock
+/// counts for the NEC V30MZ, sourced from the WonderSwan hardware reference
+/// "Sacred Tech Scroll" (perfectkiosk.net/stsws) and cross-checked against the
+/// µPD70116 (V30) datasheet — see the [`timing`] module. The V30 executes most
+/// instructions in far fewer clocks than the 8086 (e.g. MOV = 1, IRET = 10),
+/// which materially affects interrupt-heavy games; per-clock (prefetch-queue
+/// exact) modelling remains a later-phase refinement (see
+/// docs/dev/DevelopmentPlan.md "サイクル精度設計の考慮点").
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Cpu {
     pub regs: Registers,
@@ -110,14 +115,10 @@ impl Cpu {
         value
     }
 
-    /// Placeholder cycle cost: register operands are cheaper than memory
-    /// operands (extra cycles approximate effective-address calculation).
-    /// See the module doc comment regarding provisional timing.
-    fn cycles_for(rm: &RegMem, base: u32) -> u32 {
-        match rm {
-            RegMem::Reg(_) => base + 2,
-            RegMem::Mem(_) => base + 7,
-        }
+    /// V30MZ clock cost for a ModRM instruction, choosing the register- or
+    /// memory-operand count (see [`timing::rm`] and the [`timing`] module).
+    fn cycles_for(rm: &RegMem, reg: u32, mem: u32) -> u32 {
+        timing::rm(rm, reg, mem)
     }
 
     /// Dispatch a hardware (or software-triggered) interrupt with `vector`.
@@ -129,7 +130,11 @@ impl Cpu {
     /// The caller is responsible for checking `self.flags.interrupt` before
     /// calling this for maskable hardware IRQs.  This method always executes
     /// (used for NMI, software INT, and divide-by-zero as well).
-    pub fn handle_irq<B: MemoryBus>(&mut self, bus: &mut B, vector: u8) {
+    /// Returns the acknowledge/dispatch clock cost ([`timing::IRQ_ACK`]). For a
+    /// hardware IRQ the caller adds this to its cycle budget; for a software
+    /// `INT`/`INTO`/exception the wrapping opcode already reports the full cost,
+    /// so it ignores this return value.
+    pub fn handle_irq<B: MemoryBus>(&mut self, bus: &mut B, vector: u8) -> u32 {
         let flags = self.flags.to_u16();
         self.push16(bus, flags);
         let cs = self.regs.cs;
@@ -142,6 +147,7 @@ impl Cpu {
         self.regs.ip = bus.read_u16(vec_addr);
         self.regs.cs = bus.read_u16(vec_addr + 2);
         self.halted = false;
+        timing::IRQ_ACK
     }
 
     /// Executes a single instruction and returns the number of clock cycles
@@ -183,7 +189,7 @@ impl Cpu {
                 if op != alu_ops::AluOp::Cmp {
                     self.write_rm8(bus, &m.rm, r);
                 }
-                Self::cycles_for(&m.rm, 4)
+                Self::cycles_for(&m.rm, 1, if op == alu_ops::AluOp::Cmp { 2 } else { 3 })
             }
             0x81 => {
                 let m = decode_modrm(self, bus);
@@ -194,7 +200,7 @@ impl Cpu {
                 if op != alu_ops::AluOp::Cmp {
                     self.write_rm16(bus, &m.rm, r);
                 }
-                Self::cycles_for(&m.rm, 4)
+                Self::cycles_for(&m.rm, 1, if op == alu_ops::AluOp::Cmp { 2 } else { 3 })
             }
             0x83 => {
                 let m = decode_modrm(self, bus);
@@ -205,7 +211,7 @@ impl Cpu {
                 if op != alu_ops::AluOp::Cmp {
                     self.write_rm16(bus, &m.rm, r);
                 }
-                Self::cycles_for(&m.rm, 4)
+                Self::cycles_for(&m.rm, 1, if op == alu_ops::AluOp::Cmp { 2 } else { 3 })
             }
 
             // MOV
@@ -213,47 +219,47 @@ impl Cpu {
                 let m = decode_modrm(self, bus);
                 let v = self.regs.get_reg8(m.reg);
                 self.write_rm8(bus, &m.rm, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0x89 => {
                 let m = decode_modrm(self, bus);
                 let v = self.regs.get_reg16(m.reg);
                 self.write_rm16(bus, &m.rm, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0x8A => {
                 let m = decode_modrm(self, bus);
                 let v = self.read_rm8(bus, &m.rm);
                 self.regs.set_reg8(m.reg, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0x8B => {
                 let m = decode_modrm(self, bus);
                 let v = self.read_rm16(bus, &m.rm);
                 self.regs.set_reg16(m.reg, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0xC6 => {
                 let m = decode_modrm(self, bus);
                 let imm = self.fetch_u8(bus);
                 self.write_rm8(bus, &m.rm, imm);
-                Self::cycles_for(&m.rm, 3)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0xC7 => {
                 let m = decode_modrm(self, bus);
                 let imm = self.fetch_u16(bus);
                 self.write_rm16(bus, &m.rm, imm);
-                Self::cycles_for(&m.rm, 3)
+                Self::cycles_for(&m.rm, 1, 1)
             }
             0xB0..=0xB7 => {
                 let imm = self.fetch_u8(bus);
                 self.regs.set_reg8(opcode & 0x07, imm);
-                4
+                1
             }
             0xB8..=0xBF => {
                 let imm = self.fetch_u16(bus);
                 self.regs.set_reg16(opcode & 0x07, imm);
-                4
+                1
             }
 
             // INC/DEC (register form; CF is left untouched per the 8086
@@ -262,45 +268,45 @@ impl Cpu {
                 let i = opcode & 0x07;
                 let v = self.inc_u16(self.regs.get_reg16(i));
                 self.regs.set_reg16(i, v);
-                2
+                1
             }
             0x48..=0x4F => {
                 let i = opcode & 0x07;
                 let v = self.dec_u16(self.regs.get_reg16(i));
                 self.regs.set_reg16(i, v);
-                2
+                1
             }
 
             // Stack
             0x50..=0x57 => {
                 let v = self.regs.get_reg16(opcode & 0x07);
                 self.push16(bus, v);
-                4
+                1
             }
             0x58..=0x5F => {
                 let v = self.pop16(bus);
                 self.regs.set_reg16(opcode & 0x07, v);
-                4
+                1
             }
 
             // Control flow
             0xE9 => {
                 let rel = self.fetch_u16(bus) as i16;
                 self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                11
+                4
             }
             0xEB => {
                 let rel = self.fetch_u8(bus) as i8;
                 self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                8
+                4
             }
             0x70..=0x7F => {
                 let rel = self.fetch_u8(bus) as i8;
                 if self.condition(opcode) {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    16
-                } else {
                     4
+                } else {
+                    1
                 }
             }
             0xE8 => {
@@ -308,17 +314,17 @@ impl Cpu {
                 let return_ip = self.regs.ip;
                 self.push16(bus, return_ip);
                 self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                16
+                5
             }
             0xC3 => {
                 self.regs.ip = self.pop16(bus);
-                16
+                6
             }
             0xC2 => {
                 let extra = self.fetch_u16(bus);
                 self.regs.ip = self.pop16(bus);
                 self.regs.sp = self.regs.sp.wrapping_add(extra);
-                17
+                6
             }
             0xE0 => {
                 // LOOPNE/LOOPNZ
@@ -326,9 +332,9 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 && !self.flags.zero {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    19
+                    6
                 } else {
-                    5
+                    3
                 }
             }
             0xE1 => {
@@ -337,9 +343,9 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 && self.flags.zero {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    18
-                } else {
                     6
+                } else {
+                    3
                 }
             }
             0xE2 => {
@@ -348,9 +354,9 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    17
-                } else {
                     5
+                } else {
+                    2
                 }
             }
             0xE3 => {
@@ -358,9 +364,9 @@ impl Cpu {
                 let rel = self.fetch_u8(bus) as i8;
                 if self.regs.cx == 0 {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    18
+                    4
                 } else {
-                    6
+                    1
                 }
             }
 
@@ -371,7 +377,7 @@ impl Cpu {
                 let b = self.regs.get_reg8(m.reg);
                 self.write_rm8(bus, &m.rm, b);
                 self.regs.set_reg8(m.reg, a);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 3, 5)
             }
             0x87 => {
                 let m = decode_modrm(self, bus);
@@ -379,7 +385,7 @@ impl Cpu {
                 let b = self.regs.get_reg16(m.reg);
                 self.write_rm16(bus, &m.rm, b);
                 self.regs.set_reg16(m.reg, a);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 3, 5)
             }
             0x91..=0x97 => {
                 let i = opcode & 0x07;
@@ -396,49 +402,49 @@ impl Cpu {
                 let a = self.read_rm8(bus, &m.rm);
                 let b = self.regs.get_reg8(m.reg);
                 self.test_u8(a, b);
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, 2)
             }
             0x85 => {
                 let m = decode_modrm(self, bus);
                 let a = self.read_rm16(bus, &m.rm);
                 let b = self.regs.get_reg16(m.reg);
                 self.test_u16(a, b);
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, 2)
             }
             0xA8 => {
                 let imm = self.fetch_u8(bus);
                 let a = self.regs.get_reg8(0);
                 self.test_u8(a, imm);
-                4
+                1
             }
             0xA9 => {
                 let imm = self.fetch_u16(bus);
                 self.test_u16(self.regs.ax, imm);
-                4
+                1
             }
 
             // Sign extension / flags transfer
             0x98 => {
                 // CBW
                 self.regs.ax = (self.regs.ax as u8 as i8 as i16) as u16;
-                2
+                1
             }
             0x99 => {
                 // CWD
                 self.regs.dx = if self.regs.ax & 0x8000 != 0 { 0xFFFF } else { 0 };
-                5
+                1
             }
             0x9C => {
                 // PUSHF
                 let v = self.flags.to_u16();
                 self.push16(bus, v);
-                10
+                2
             }
             0x9D => {
                 // POPF
                 let v = self.pop16(bus);
                 self.flags = Flags::from_u16(v);
-                8
+                3
             }
             0x9E => {
                 // SAHF
@@ -450,7 +456,7 @@ impl Cpu {
             0x9F => {
                 // LAHF
                 self.regs.set_reg8(4, (self.flags.to_u16() & 0xFF) as u8);
-                4
+                2
             }
 
             // XLAT: AL = [DS:BX+AL]
@@ -459,7 +465,7 @@ impl Cpu {
                 let addr = linear_address(self.regs.ds, offset);
                 let v = bus.read_u8(addr);
                 self.regs.set_reg8(0, v);
-                11
+                5
             }
 
             // Shift/rotate group
@@ -469,7 +475,7 @@ impl Cpu {
                 let a = self.read_rm8(bus, &m.rm);
                 let r = self.shift_u8(op, a, 1);
                 self.write_rm8(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 3)
             }
             0xD1 => {
                 let m = decode_modrm(self, bus);
@@ -477,7 +483,7 @@ impl Cpu {
                 let a = self.read_rm16(bus, &m.rm);
                 let r = self.shift_u16(op, a, 1);
                 self.write_rm16(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 3)
             }
             0xD2 => {
                 let m = decode_modrm(self, bus);
@@ -486,7 +492,7 @@ impl Cpu {
                 let a = self.read_rm8(bus, &m.rm);
                 let r = self.shift_u8(op, a, count);
                 self.write_rm8(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 8)
+                Self::cycles_for(&m.rm, 3, 5)
             }
             0xD3 => {
                 let m = decode_modrm(self, bus);
@@ -495,7 +501,7 @@ impl Cpu {
                 let a = self.read_rm16(bus, &m.rm);
                 let r = self.shift_u16(op, a, count);
                 self.write_rm16(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 8)
+                Self::cycles_for(&m.rm, 3, 5)
             }
 
             // Group F6/F7: TEST/NOT/NEG/MUL/IMUL/DIV/IDIV
@@ -506,35 +512,35 @@ impl Cpu {
                         let imm = self.fetch_u8(bus);
                         let a = self.read_rm8(bus, &m.rm);
                         self.test_u8(a, imm);
-                        Self::cycles_for(&m.rm, 4)
+                        Self::cycles_for(&m.rm, 1, 2)
                     }
                     2 => {
                         let a = self.read_rm8(bus, &m.rm);
                         self.write_rm8(bus, &m.rm, !a);
-                        Self::cycles_for(&m.rm, 2)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     3 => {
                         let a = self.read_rm8(bus, &m.rm);
                         let r = self.sub_u8(0, a, 0);
                         self.write_rm8(bus, &m.rm, r);
-                        Self::cycles_for(&m.rm, 2)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     4 => {
                         let a = self.read_rm8(bus, &m.rm);
                         let al = self.regs.get_reg8(0);
                         self.regs.ax = self.mul_u8(al, a);
-                        Self::cycles_for(&m.rm, 70)
+                        Self::cycles_for(&m.rm, 3, 4)
                     }
                     5 => {
                         let a = self.read_rm8(bus, &m.rm);
                         let al = self.regs.get_reg8(0);
                         self.regs.ax = self.imul_u8(al, a);
-                        Self::cycles_for(&m.rm, 80)
+                        Self::cycles_for(&m.rm, 3, 4)
                     }
                     6 => {
                         let divisor = self.read_rm8(bus, &m.rm);
                         let dividend = self.regs.ax;
-                        let cycles = Self::cycles_for(&m.rm, 80);
+                        let cycles = Self::cycles_for(&m.rm, 15, 24);
                         let Some((quotient, remainder)) = Cpu::div_u8(dividend, divisor) else {
                             self.handle_irq(bus, 0); // INT 0: divide overflow
                             return cycles;
@@ -546,7 +552,7 @@ impl Cpu {
                     7 => {
                         let divisor = self.read_rm8(bus, &m.rm) as i8;
                         let dividend = self.regs.ax as i16;
-                        let cycles = Self::cycles_for(&m.rm, 100);
+                        let cycles = Self::cycles_for(&m.rm, 17, 25);
                         let Some((quotient, remainder)) = Cpu::idiv_u8(dividend, divisor) else {
                             self.handle_irq(bus, 0); // INT 0: divide overflow
                             return cycles;
@@ -565,18 +571,18 @@ impl Cpu {
                         let imm = self.fetch_u16(bus);
                         let a = self.read_rm16(bus, &m.rm);
                         self.test_u16(a, imm);
-                        Self::cycles_for(&m.rm, 4)
+                        Self::cycles_for(&m.rm, 1, 2)
                     }
                     2 => {
                         let a = self.read_rm16(bus, &m.rm);
                         self.write_rm16(bus, &m.rm, !a);
-                        Self::cycles_for(&m.rm, 2)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     3 => {
                         let a = self.read_rm16(bus, &m.rm);
                         let r = self.sub_u16(0, a, 0);
                         self.write_rm16(bus, &m.rm, r);
-                        Self::cycles_for(&m.rm, 2)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     4 => {
                         let a = self.read_rm16(bus, &m.rm);
@@ -584,7 +590,7 @@ impl Cpu {
                         let product = self.mul_u16(ax, a);
                         self.regs.ax = product as u16;
                         self.regs.dx = (product >> 16) as u16;
-                        Self::cycles_for(&m.rm, 118)
+                        Self::cycles_for(&m.rm, 3, 4)
                     }
                     5 => {
                         let a = self.read_rm16(bus, &m.rm);
@@ -592,12 +598,12 @@ impl Cpu {
                         let product = self.imul_u16(ax, a);
                         self.regs.ax = product as u16;
                         self.regs.dx = (product >> 16) as u16;
-                        Self::cycles_for(&m.rm, 128)
+                        Self::cycles_for(&m.rm, 3, 4)
                     }
                     6 => {
                         let divisor = self.read_rm16(bus, &m.rm);
                         let dividend = ((self.regs.dx as u32) << 16) | self.regs.ax as u32;
-                        let cycles = Self::cycles_for(&m.rm, 144);
+                        let cycles = Self::cycles_for(&m.rm, 15, 24);
                         let Some((quotient, remainder)) = Cpu::div_u16(dividend, divisor) else {
                             self.handle_irq(bus, 0); // INT 0: divide overflow
                             return cycles;
@@ -609,7 +615,7 @@ impl Cpu {
                     7 => {
                         let divisor = self.read_rm16(bus, &m.rm) as i16;
                         let dividend = (((self.regs.dx as u32) << 16) | self.regs.ax as u32) as i32;
-                        let cycles = Self::cycles_for(&m.rm, 184);
+                        let cycles = Self::cycles_for(&m.rm, 17, 25);
                         let Some((quotient, remainder)) = Cpu::idiv_u16(dividend, divisor) else {
                             self.handle_irq(bus, 0); // INT 0: divide overflow
                             return cycles;
@@ -626,35 +632,35 @@ impl Cpu {
             0x90 => 3,
             0xF4 => {
                 self.halted = true;
-                2
+                9
             }
             0xF5 => {
                 self.flags.carry = !self.flags.carry;
-                2
+                4
             }
             0xF8 => {
                 self.flags.carry = false;
-                2
+                4
             }
             0xF9 => {
                 self.flags.carry = true;
-                2
+                4
             }
             0xFA => {
                 self.flags.interrupt = false;
-                2
+                4
             }
             0xFB => {
                 self.flags.interrupt = true;
-                2
+                4
             }
             0xFC => {
                 self.flags.direction = false;
-                2
+                4
             }
             0xFD => {
                 self.flags.direction = true;
-                2
+                4
             }
 
             // ── Segment-override prefixes ─────────────────────────────────
@@ -692,34 +698,34 @@ impl Cpu {
             0x06 => {
                 let v = self.regs.es;
                 self.push16(bus, v);
-                10
+                2
             }
             0x07 => {
                 self.regs.es = self.pop16(bus);
-                8
+                3
             }
             0x0E => {
                 let v = self.regs.cs;
                 self.push16(bus, v);
-                10
+                2
             }
             0x16 => {
                 let v = self.regs.ss;
                 self.push16(bus, v);
-                10
+                2
             }
             0x17 => {
                 self.regs.ss = self.pop16(bus);
-                8
+                3
             }
             0x1E => {
                 let v = self.regs.ds;
                 self.push16(bus, v);
-                10
+                2
             }
             0x1F => {
                 self.regs.ds = self.pop16(bus);
-                8
+                3
             }
 
             // ── BCD adjustment ────────────────────────────────────────────
@@ -746,7 +752,7 @@ impl Cpu {
                 self.flags.carry = cf;
                 self.regs.ax = (self.regs.ax & 0xFF00) | result as u16;
                 self.set_zsp8(result);
-                4
+                10
             }
             0x2F => {
                 // DAS: Decimal Adjust AL after Subtraction
@@ -766,7 +772,7 @@ impl Cpu {
                 self.flags.carry = cf;
                 self.regs.ax = (self.regs.ax & 0xFF00) | result as u16;
                 self.set_zsp8(result);
-                4
+                10
             }
             0x37 => {
                 // AAA: ASCII Adjust after Addition
@@ -783,7 +789,7 @@ impl Cpu {
                     self.flags.aux_carry = false;
                     self.flags.carry = false;
                 }
-                8
+                9
             }
             0x3F => {
                 // AAS: ASCII Adjust after Subtraction
@@ -800,21 +806,21 @@ impl Cpu {
                     self.flags.aux_carry = false;
                     self.flags.carry = false;
                 }
-                8
+                9
             }
             0xD4 => {
                 // AAM imm8: AH = AL / imm8; AL = AL mod imm8
                 let base = self.fetch_u8(bus);
                 if base == 0 {
                     self.handle_irq(bus, 0); // INT 0: divide overflow
-                    return 83;
+                    return 17;
                 }
                 let al = self.regs.ax as u8;
                 let new_ah = al / base;
                 let new_al = al % base;
                 self.regs.ax = (new_ah as u16) << 8 | new_al as u16;
                 self.set_zsp8(new_al);
-                83
+                17
             }
             0xD5 => {
                 // AAD imm8: AL = AH * imm8 + AL; AH = 0
@@ -824,7 +830,7 @@ impl Cpu {
                 let result = ah.wrapping_mul(base).wrapping_add(al);
                 self.regs.ax = result as u16;
                 self.set_zsp8(result);
-                60
+                6
             }
 
             // ── MOV: memory direct (0xA0–0xA3) ───────────────────────────
@@ -833,28 +839,28 @@ impl Cpu {
                 let seg = self.seg_override.unwrap_or(self.regs.ds);
                 let v = bus.read_u8(linear_address(seg, offset));
                 self.regs.set_reg8(0, v);
-                10
+                1
             }
             0xA1 => {
                 let offset = self.fetch_u16(bus);
                 let seg = self.seg_override.unwrap_or(self.regs.ds);
                 let v = bus.read_u16(linear_address(seg, offset));
                 self.regs.ax = v;
-                10
+                1
             }
             0xA2 => {
                 let offset = self.fetch_u16(bus);
                 let seg = self.seg_override.unwrap_or(self.regs.ds);
                 let v = self.regs.get_reg8(0);
                 bus.write_u8(linear_address(seg, offset), v);
-                11
+                1
             }
             0xA3 => {
                 let offset = self.fetch_u16(bus);
                 let seg = self.seg_override.unwrap_or(self.regs.ds);
                 let v = self.regs.ax;
                 bus.write_u16(linear_address(seg, offset), v);
-                11
+                1
             }
 
             // ── Segment register MOV ──────────────────────────────────────
@@ -863,14 +869,14 @@ impl Cpu {
                 let m = decode_modrm(self, bus);
                 let v = self.regs.get_sreg(m.reg);
                 self.write_rm16(bus, &m.rm, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 3)
             }
             0x8E => {
                 // MOV Sreg, r/m16
                 let m = decode_modrm(self, bus);
                 let v = self.read_rm16(bus, &m.rm);
                 self.regs.set_sreg(m.reg, v);
-                Self::cycles_for(&m.rm, 2)
+                Self::cycles_for(&m.rm, 1, 3)
             }
 
             // ── LEA ───────────────────────────────────────────────────────
@@ -881,7 +887,7 @@ impl Cpu {
                 // wrong for LEA — use the dedicated lea_decode helper instead.
                 let (reg, ea) = self.lea_decode(bus);
                 self.regs.set_reg16(reg, ea);
-                2
+                1
             }
 
             // ── LES / LDS ─────────────────────────────────────────────────
@@ -898,7 +904,7 @@ impl Cpu {
                 let seg = bus.read_u16(addr.wrapping_add(2));
                 self.regs.set_reg16(m.reg, off);
                 self.regs.es = seg;
-                16
+                6
             }
             0xC5 => {
                 // LDS reg16, m32
@@ -913,7 +919,7 @@ impl Cpu {
                 let seg = bus.read_u16(addr.wrapping_add(2));
                 self.regs.set_reg16(m.reg, off);
                 self.regs.ds = seg;
-                16
+                6
             }
 
             // ── ENTER / LEAVE ─────────────────────────────────────────────
@@ -929,13 +935,13 @@ impl Cpu {
                 self.push16(bus, bp);
                 self.regs.bp = self.regs.sp;
                 self.regs.sp = self.regs.sp.wrapping_sub(size);
-                25
+                8
             }
             0xC9 => {
                 // LEAVE: SP = BP; POP BP
                 self.regs.sp = self.regs.bp;
                 self.regs.bp = self.pop16(bus);
-                8
+                2
             }
 
             // ── Far CALL / JMP / RET ──────────────────────────────────────
@@ -949,7 +955,7 @@ impl Cpu {
                 self.push16(bus, ret_ip);
                 self.regs.ip = new_ip;
                 self.regs.cs = new_cs;
-                23
+                10
             }
             0xCA => {
                 // RET far imm16
@@ -957,13 +963,13 @@ impl Cpu {
                 self.regs.ip = self.pop16(bus);
                 self.regs.cs = self.pop16(bus);
                 self.regs.sp = self.regs.sp.wrapping_add(extra);
-                25
+                9
             }
             0xCB => {
                 // RET far
                 self.regs.ip = self.pop16(bus);
                 self.regs.cs = self.pop16(bus);
-                22
+                8
             }
             0xEA => {
                 // JMP far ptr16:16
@@ -971,7 +977,7 @@ impl Cpu {
                 let new_cs = self.fetch_u16(bus);
                 self.regs.ip = new_ip;
                 self.regs.cs = new_cs;
-                15
+                7
             }
 
             // ── String instructions (MOVS/CMPS/STOS/LODS/SCAS, INS/OUTS) ──
@@ -988,7 +994,7 @@ impl Cpu {
                     other => unimplemented!("opcode 0xFE reg field {other} not yet implemented"),
                 };
                 self.write_rm8(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, 3)
             }
             0xFF => {
                 let m = decode_modrm(self, bus);
@@ -997,13 +1003,13 @@ impl Cpu {
                         let a = self.read_rm16(bus, &m.rm);
                         let r = self.inc_u16(a);
                         self.write_rm16(bus, &m.rm, r);
-                        Self::cycles_for(&m.rm, 1)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     1 => {
                         let a = self.read_rm16(bus, &m.rm);
                         let r = self.dec_u16(a);
                         self.write_rm16(bus, &m.rm, r);
-                        Self::cycles_for(&m.rm, 1)
+                        Self::cycles_for(&m.rm, 1, 3)
                     }
                     2 => {
                         // CALL near indirect
@@ -1011,7 +1017,7 @@ impl Cpu {
                         let ret_ip = self.regs.ip;
                         self.push16(bus, ret_ip);
                         self.regs.ip = target;
-                        Self::cycles_for(&m.rm, 16)
+                        Self::cycles_for(&m.rm, 5, 6)
                     }
                     3 => {
                         // CALL far indirect: [rm] = ip, [rm+2] = cs
@@ -1029,13 +1035,13 @@ impl Cpu {
                         self.push16(bus, ret_ip);
                         self.regs.ip = new_ip;
                         self.regs.cs = new_cs;
-                        37
+                        12
                     }
                     4 => {
                         // JMP near indirect
                         let target = self.read_rm16(bus, &m.rm);
                         self.regs.ip = target;
-                        Self::cycles_for(&m.rm, 9)
+                        Self::cycles_for(&m.rm, 4, 5)
                     }
                     5 => {
                         // JMP far indirect: [rm] = ip, [rm+2] = cs
@@ -1049,13 +1055,13 @@ impl Cpu {
                         let new_cs = bus.read_u16(addr.wrapping_add(2));
                         self.regs.ip = new_ip;
                         self.regs.cs = new_cs;
-                        24
+                        9
                     }
                     6 => {
                         // PUSH r/m16
                         let v = self.read_rm16(bus, &m.rm);
                         self.push16(bus, v);
-                        Self::cycles_for(&m.rm, 10)
+                        Self::cycles_for(&m.rm, 1, 2)
                     }
                     other => {
                         unimplemented!("opcode 0xFF reg field {other} is not defined on 8086")
@@ -1068,15 +1074,15 @@ impl Cpu {
                 // INT n: software interrupt
                 let n = self.fetch_u8(bus);
                 self.handle_irq(bus, n);
-                51
+                10
             }
             0xCE => {
                 // INTO: INT 4 if overflow flag is set
                 if self.flags.overflow {
                     self.handle_irq(bus, 4);
-                    53
+                    13
                 } else {
-                    4
+                    6
                 }
             }
             0xCF => {
@@ -1085,7 +1091,7 @@ impl Cpu {
                 self.regs.cs = self.pop16(bus);
                 let flags = self.pop16(bus);
                 self.flags = Flags::from_u16(flags);
-                32
+                10
             }
 
             // ── IN / OUT port I/O ─────────────────────────────────────────
@@ -1094,7 +1100,7 @@ impl Cpu {
                 let port = self.fetch_u8(bus);
                 let v = bus.read_io(port);
                 self.regs.set_reg8(0, v);
-                10
+                6
             }
             0xE5 => {
                 // IN AX, imm8
@@ -1102,14 +1108,14 @@ impl Cpu {
                 let lo = bus.read_io(port) as u16;
                 let hi = bus.read_io(port.wrapping_add(1)) as u16;
                 self.regs.ax = lo | (hi << 8);
-                10
+                6
             }
             0xE6 => {
                 // OUT imm8, AL
                 let port = self.fetch_u8(bus);
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                10
+                6
             }
             0xE7 => {
                 // OUT imm8, AX
@@ -1117,14 +1123,14 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                10
+                6
             }
             0xEC => {
                 // IN AL, DX
                 let port = self.regs.dx as u8;
                 let v = bus.read_io(port);
                 self.regs.set_reg8(0, v);
-                8
+                6
             }
             0xED => {
                 // IN AX, DX
@@ -1132,14 +1138,14 @@ impl Cpu {
                 let lo = bus.read_io(port) as u16;
                 let hi = bus.read_io(port.wrapping_add(1)) as u16;
                 self.regs.ax = lo | (hi << 8);
-                8
+                6
             }
             0xEE => {
                 // OUT DX, AL
                 let port = self.regs.dx as u8;
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                8
+                6
             }
             0xEF => {
                 // OUT DX, AX
@@ -1147,7 +1153,7 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                8
+                6
             }
 
             // ── 80186 / V30 instruction-set additions ────────────────────────
@@ -1162,7 +1168,7 @@ impl Cpu {
                 self.push16(bus, self.regs.bp);
                 self.push16(bus, self.regs.si);
                 self.push16(bus, self.regs.di);
-                36
+                9
             }
             0x61 => {
                 // POPA: pop DI, SI, BP, (discarded SP slot), BX, DX, CX, AX.
@@ -1174,7 +1180,7 @@ impl Cpu {
                 self.regs.dx = self.pop16(bus);
                 self.regs.cx = self.pop16(bus);
                 self.regs.ax = self.pop16(bus);
-                36
+                8
             }
             0x62 => {
                 // BOUND r16, m16&16: INT 5 if the index is outside [lower, upper].
@@ -1193,7 +1199,7 @@ impl Cpu {
                 // PUSH imm16
                 let v = self.fetch_u16(bus);
                 self.push16(bus, v);
-                4
+                1
             }
             0x69 => {
                 // IMUL r16, r/m16, imm16
@@ -1202,13 +1208,13 @@ impl Cpu {
                 let imm = self.fetch_u16(bus);
                 let product = self.imul_u16(src, imm);
                 self.regs.set_reg16(m.reg, product as u16);
-                Self::cycles_for(&m.rm, 30)
+                Self::cycles_for(&m.rm, 3, 4)
             }
             0x6A => {
                 // PUSH imm8 (sign-extended to 16 bits)
                 let v = self.fetch_u8(bus) as i8 as i16 as u16;
                 self.push16(bus, v);
-                4
+                1
             }
             0x6B => {
                 // IMUL r16, r/m16, imm8 (imm sign-extended)
@@ -1217,7 +1223,7 @@ impl Cpu {
                 let imm = self.fetch_u8(bus) as i8 as i16 as u16;
                 let product = self.imul_u16(src, imm);
                 self.regs.set_reg16(m.reg, product as u16);
-                Self::cycles_for(&m.rm, 30)
+                Self::cycles_for(&m.rm, 3, 4)
             }
             0xC0 => {
                 // Shift/rotate r/m8, imm8
@@ -1227,7 +1233,7 @@ impl Cpu {
                 let a = self.read_rm8(bus, &m.rm);
                 let r = self.shift_u8(op, a, count);
                 self.write_rm8(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 5)
+                Self::cycles_for(&m.rm, 3, 5)
             }
             0xC1 => {
                 // Shift/rotate r/m16, imm8
@@ -1237,14 +1243,14 @@ impl Cpu {
                 let a = self.read_rm16(bus, &m.rm);
                 let r = self.shift_u16(op, a, count);
                 self.write_rm16(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 5)
+                Self::cycles_for(&m.rm, 3, 5)
             }
             0x8F => {
                 // POP r/m16 (reg field 0)
                 let m = decode_modrm(self, bus);
                 let v = self.pop16(bus);
                 self.write_rm16(bus, &m.rm, v);
-                Self::cycles_for(&m.rm, 8)
+                Self::cycles_for(&m.rm, 1, 3)
             }
 
             _ => unimplemented!(
@@ -1300,13 +1306,16 @@ impl Cpu {
     /// if `self.rep_prefix` is set. Returns the total cycle count.
     fn exec_string_op<B: MemoryBus>(&mut self, bus: &mut B, op: u8) -> u32 {
         let src_seg = self.seg_override.unwrap_or(self.regs.ds);
+        // V30MZ per-execution clock counts (stsws; the REP-repeated per-element
+        // cost is approximated by this base, see the `timing` module).
         let base_cycles: u32 = match op {
-            0x6C..=0x6F => 8,
-            0xA4 | 0xA5 => 8,
-            0xA6 | 0xA7 => 22,
-            0xAA | 0xAB => 7,
-            0xAC | 0xAD => 12,
-            0xAE | 0xAF => 15,
+            0x6C | 0x6D => 6, // INS  (INM)
+            0x6E | 0x6F => 7, // OUTS (OUTM)
+            0xA4 | 0xA5 => 5, // MOVS (MOVBK)
+            0xA6 | 0xA7 => 6, // CMPS (CMPBK)
+            0xAA | 0xAB => 3, // STOS (STM)
+            0xAC | 0xAD => 3, // LODS (LDM)
+            0xAE | 0xAF => 4, // SCAS (CMPM)
             _ => unreachable!(),
         };
 
@@ -1454,7 +1463,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.write_rm8(bus, &m.rm, r);
                 }
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, if op == AluOp::Cmp { 2 } else { 3 })
             }
             1 => {
                 let m = decode_modrm(self, bus);
@@ -1464,7 +1473,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.write_rm16(bus, &m.rm, r);
                 }
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, if op == AluOp::Cmp { 2 } else { 3 })
             }
             2 => {
                 let m = decode_modrm(self, bus);
@@ -1474,7 +1483,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.regs.set_reg8(m.reg, r);
                 }
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, 2)
             }
             3 => {
                 let m = decode_modrm(self, bus);
@@ -1484,7 +1493,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.regs.set_reg16(m.reg, r);
                 }
-                Self::cycles_for(&m.rm, 1)
+                Self::cycles_for(&m.rm, 1, 2)
             }
             4 => {
                 let imm = self.fetch_u8(bus);
@@ -1493,7 +1502,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.regs.set_reg8(0, r);
                 }
-                4
+                1
             }
             5 => {
                 let imm = self.fetch_u16(bus);
@@ -1502,7 +1511,7 @@ impl Cpu {
                 if op != AluOp::Cmp {
                     self.regs.ax = r;
                 }
-                4
+                1
             }
             _ => unreachable!(),
         }

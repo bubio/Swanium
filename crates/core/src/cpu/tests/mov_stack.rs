@@ -6,7 +6,7 @@ fn mov_reg16_imm16() {
     // MOV CX, 0x1234 (0xB9 = MOV CX,imm16)
     let (cpu, cycles, _) = run_with(|_| {}, &[0xB9, 0x34, 0x12]);
     assert_eq!(cpu.regs.cx, 0x1234);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn push_pop_round_trip() {
     let (cpu, cycles, mem) = run_with(|cpu| cpu.regs.bx = 0xBEEF, &[0x53]);
     assert_eq!(cpu.regs.sp, 0xFFFC);
     assert_eq!(mem.read_u16(0xFFFC), 0xBEEF);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn pop_restores_register_and_advances_stack_pointer() {
     // value correctness is covered by push_pop_round_trip combined manually
     // below.
     assert_eq!(cpu.regs.sp, 0xFFFE);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
