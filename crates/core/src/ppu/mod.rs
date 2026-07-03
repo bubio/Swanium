@@ -194,7 +194,23 @@ impl Ppu {
             return;
         }
         let dc = DisplayControl::from_ports(ports);
+        let mode = TileMode::from_ports(ports);
         let row = y * SCREEN_WIDTH;
+
+        // Decode the sprite attribute table once per scanline and keep only the
+        // entries that cover this line (preserving table order, i.e. priority).
+        // The per-pixel sprite sampler then walks this short list instead of
+        // re-decoding all 128 entries for every pixel — the dominant PPU cost
+        // (see docs/dev/Profiling.md). Zero-allocation: a stack-resident array
+        // sized to the full table, filled up to `sprite_count`.
+        let mut line_sprites = [SpriteEntry::default(); SPRITE_TABLE_LEN];
+        let sprite_count = if dc.sprites_enabled {
+            collect_line_sprites(wram, ports, line, &mut line_sprites)
+        } else {
+            0
+        };
+        let line_sprites = &line_sprites[..sprite_count];
+
         for x in 0..SCREEN_WIDTH {
             let mut color = resolver.backdrop(ports);
             if dc.scr1_enabled {
@@ -204,7 +220,17 @@ impl Ppu {
                 }
             }
             if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, false, resolver) {
+                if let Some(px) = sample_sprite(
+                    wram,
+                    ports,
+                    &dc,
+                    line_sprites,
+                    mode,
+                    x,
+                    line,
+                    false,
+                    resolver,
+                ) {
                     color = px;
                 }
             }
@@ -215,7 +241,17 @@ impl Ppu {
                 }
             }
             if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(wram, ports, &dc, x, line, true, resolver) {
+                if let Some(px) = sample_sprite(
+                    wram,
+                    ports,
+                    &dc,
+                    line_sprites,
+                    mode,
+                    x,
+                    line,
+                    true,
+                    resolver,
+                ) {
                     color = px;
                 }
             }
@@ -442,7 +478,7 @@ fn sample_background(
 
 /// A decoded 4-byte sprite attribute-table entry (internal to the `ppu`
 /// module).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SpriteEntry {
     /// Tile number (9 bits, 0–511).
     pub tile_idx: u16,
@@ -509,29 +545,58 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
     }
 }
 
+/// Decode the sprite attribute table into `out`, keeping (in table order,
+/// i.e. priority order) only the sprites whose 8-pixel-tall box covers `line`.
+/// Returns how many entries were written.
+///
+/// Called once per scanline by [`Ppu::render_scanline`] so the per-pixel
+/// sprite sampler works from a short pre-filtered list rather than re-decoding
+/// all 128 entries for every pixel.
+fn collect_line_sprites(
+    wram: &[u8],
+    ports: &[u8],
+    line: u8,
+    out: &mut [SpriteEntry; SPRITE_TABLE_LEN],
+) -> usize {
+    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
+    let first = ports[SPR_FIRST] as usize;
+    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
+    let ly = line as usize;
+
+    let mut n = 0;
+    for i in 0..count {
+        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
+        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+        let sy = sprite.y as usize;
+        if ly >= sy && ly < sy + SPRITE_SIZE {
+            out[n] = sprite;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Sample the sprite layer at `(screen_x, line)` for sprites whose priority
 /// matches `want_priority`.
 ///
-/// Walks the sprite attribute table in order (lower index = higher priority);
-/// returns the color of the first non-transparent overlapping sprite pixel, or
-/// `None` if none covers this pixel. Sprite pixels use palettes 8–15.
+/// Walks `line_sprites` — the sprites covering this scanline in table order
+/// (lower index = higher priority), as gathered once by
+/// [`collect_line_sprites`] — and returns the color of the first
+/// non-transparent overlapping sprite pixel, or `None` if none covers this
+/// pixel. Sprite pixels use palettes 8–15.
+#[allow(clippy::too_many_arguments)]
 fn sample_sprite<R: PaletteResolver>(
     wram: &[u8],
     ports: &[u8],
     dc: &DisplayControl,
+    line_sprites: &[SpriteEntry],
+    mode: TileMode,
     screen_x: usize,
     line: u8,
     want_priority: bool,
     resolver: &R,
 ) -> Option<Rgb444> {
-    let mode = TileMode::from_ports(ports);
-    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
-    let first = ports[SPR_FIRST] as usize;
-    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
-
-    for i in 0..count {
-        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
-        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+    for sprite in line_sprites {
         if sprite.priority != want_priority {
             continue;
         }
@@ -553,15 +618,12 @@ fn sample_sprite<R: PaletteResolver>(
             continue;
         }
         let sx = sprite.x as usize;
-        let sy = sprite.y as usize;
         if screen_x < sx || screen_x >= sx + SPRITE_SIZE {
             continue;
         }
-        if (line as usize) < sy || (line as usize) >= sy + SPRITE_SIZE {
-            continue;
-        }
+        // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
         let mut tx = screen_x - sx;
-        let mut ty = line as usize - sy;
+        let mut ty = line as usize - sprite.y as usize;
         if sprite.hflip {
             tx = SPRITE_SIZE - 1 - tx;
         }

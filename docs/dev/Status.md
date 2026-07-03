@@ -46,7 +46,9 @@ Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll
 sprite layer (OAM 4-byte entries, priority, X/Y flip), window mask (SCR2 inside/outside +
 sprite window). Palette resolution abstracted behind the `PaletteResolver` trait with
 `MonoPaletteResolver` (2bpp → palette-pool → shade-pool chain). The mono palette-zero
-transparency rule was fixed in commit 10a8146.
+transparency rule was fixed in commit 10a8146. Sprites are decoded and Y-filtered once per
+scanline (`collect_line_sprites`) rather than re-decoded per pixel — a ~4× PPU speedup on real
+ROMs with output unchanged (verified by framebuffer hash); see `docs/dev/Profiling.md`.
 
 ### APU — Phase 5 (`apu/`)
 Four 32-sample × 4-bit wave-table channels, per-channel L/R nibble volume, stereo mix;

@@ -16,7 +16,16 @@ use swanium_core::keypad::KeyState;
 use swanium_core::system::System;
 
 /// Frames to execute before reporting (≈ several seconds of emulated time).
-const FRAMES: u32 = 600;
+/// Override with `SWANIUM_PROFILE_FRAMES` to run long enough for an external
+/// sampling profiler (e.g. macOS `sample`) to attach.
+const DEFAULT_FRAMES: u32 = 600;
+
+fn frame_count() -> u32 {
+    std::env::var("SWANIUM_PROFILE_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_FRAMES)
+}
 
 fn main() {
     let rom = match load_rom() {
@@ -37,7 +46,7 @@ fn main() {
     }
     system.reset_profile();
 
-    for _ in 0..FRAMES {
+    for _ in 0..frame_count() {
         system.run_frame(KeyState::default());
     }
 
