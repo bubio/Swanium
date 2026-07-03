@@ -18,6 +18,7 @@
 use crate::bus::Bus;
 use crate::cpu::{Cpu, MemoryBus};
 use crate::keypad::KeyState;
+use crate::model::HardwareModel;
 
 /// V30MZ master clock in Hz (also the sound clock).
 pub const MASTER_CLOCK_HZ: u32 = 3_072_000;
@@ -102,6 +103,9 @@ impl System {
 
     fn drive_frame(&mut self, keys: KeyState, mut trace: Option<&mut Vec<ScanlineTrace>>) {
         self.bus.set_keys(keys);
+        // Advance the cartridge RTC (if any) off the emulated clock, one frame's
+        // worth of master-clock cycles — keeps timekeeping deterministic.
+        self.bus.tick_rtc(CYCLES_PER_FRAME);
         for line in 0..SCANLINES_PER_FRAME {
             self.run_cpu_cycles(CYCLES_PER_SCANLINE);
             self.bus.tick_apu(CYCLES_PER_SCANLINE);
@@ -147,9 +151,20 @@ impl System {
 
     // ── Output accessors ──────────────────────────────────────────────────
 
-    /// The current framebuffer: 224×144 monochrome shade indices, row-major.
-    pub fn framebuffer(&self) -> &[u8] {
+    /// The current framebuffer: 224×144 [`Rgb444`](crate::ppu::Rgb444) colors,
+    /// row-major.
+    pub fn framebuffer(&self) -> &[u16] {
         self.bus.framebuffer()
+    }
+
+    /// The emulated hardware model.
+    pub fn model(&self) -> HardwareModel {
+        self.bus.model()
+    }
+
+    /// Override the emulated hardware model (Mono / Color / Crystal).
+    pub fn set_model(&mut self, model: HardwareModel) {
+        self.bus.set_model(model);
     }
 
     /// Interleaved stereo audio samples accumulated since the last clear.
@@ -160,6 +175,27 @@ impl System {
     /// Drop buffered audio samples (call after the frontend consumes them).
     pub fn clear_audio_samples(&mut self) {
         self.bus.clear_audio_samples();
+    }
+
+    /// Inject an absolute date/time into the cartridge RTC (no-op without one).
+    ///
+    /// The frontend calls this once from the host clock at ROM load; the core
+    /// never reads wall-clock time itself, keeping execution deterministic for
+    /// RetroAchievements. Components are decimal (not BCD): `year` is the
+    /// two-digit calendar year within 2000–2099, `weekday` is 0–6 (0 = Sunday).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_rtc_datetime(
+        &mut self,
+        year: u8,
+        month: u8,
+        day: u8,
+        weekday: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+    ) {
+        self.bus
+            .set_rtc_datetime(year, month, day, weekday, hour, minute, second);
     }
 
     /// The cartridge's persistent save bytes (for the frontend to write to disk).

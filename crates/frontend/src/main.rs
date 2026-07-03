@@ -23,6 +23,7 @@ use input::Button;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode};
 use swanium_core::keypad::KeyState;
 use swanium_core::system::System;
+use swanium_core::HardwareModel;
 
 /// Polling interval for the frame-pacing timer.
 ///
@@ -339,12 +340,28 @@ fn load_into(
     match std::fs::read(path) {
         Ok(bytes) => {
             tracing::info!(rom = %path.display(), bytes = bytes.len(), "loaded ROM");
-            *system.borrow_mut() = Some(System::from_rom(bytes));
+            let mut sys = System::from_rom(bytes);
+            // Run `.wsc` images as WonderSwan Color hardware. Colour support is a
+            // property of the *console*, not the cartridge header: real Color games
+            // ship with the header's "Color required" flag clear (e.g. Final
+            // Fantasy WSC), so the file extension is the reliable model signal here.
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("wsc"))
+            {
+                sys.set_model(HardwareModel::Color);
+            }
+            let kind = if sys.model().is_color() {
+                "Color"
+            } else {
+                "Mono"
+            };
+            *system.borrow_mut() = Some(sys);
             *last_dir.borrow_mut() = path.parent().map(Path::to_path_buf);
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("ROM");
             *rom_label.borrow_mut() = name.to_string();
             window.set_window_title(format!("Swanium — {name}").into());
-            window.set_status_text(format!("{name} — running").into());
+            window.set_status_text(format!("{name} [{kind}] — running").into());
             window.set_has_rom(true);
         }
         Err(e) => tracing::error!(rom = %path.display(), "could not load ROM: {e}"),

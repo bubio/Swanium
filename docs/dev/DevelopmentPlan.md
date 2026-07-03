@@ -264,16 +264,20 @@ video               audio                input
 **対応フェーズ**: 1・2 はPPUドット単位駆動へのリファクタ時（cycle-accuracy強化フェーズ）。
 3・4 は任意タイミング（Phase 7のフロントエンド実プレイ前に1・2・3を推奨）。
 
-**既知の不具合（実機比較）**:
--   **背景タイルマップ更新タイミング（Lode Runner 等のストーリー画面）**: SCR2（前面・静止画）に
-    SCR1（背面・スクロールするテキスト）が縦 48px 周期で繰り返し透けて重なる。`P` キーのデバッグ
-    ダンプ（frontend）で確認したところ、ウィンドウ/ラスター分割/ライン一致割り込みは未使用で、
-    レイヤー合成（SCR2 はピクセル0で透明）自体は正しい。原因は SCR1 タイルマップに本来1回だけ
-    出るべきテキストが画面全体に繰り返し書き込まれていること。このゲームは GDMA + GDMA完了割り込み
-    （INT_ENABLE bit3）でタイルマップを更新しており、**GDMA 転送・タイルマップ更新・フレーム駆動の
-    タイミング精度**の問題と推定。cycle-accuracy 強化フェーズ（PPUドット単位駆動・逐次同期の精緻化）で
-    再調査する。デバッグ用に `System::run_frame_traced` / `Bus::peek_io` / `Bus::debug_bg_sample` と
-    frontend の `P` キーダンプを用意済み。
+**解決済みの不具合（実機比較）**:
+-   **背景の透け重なり（Lode Runner 等のストーリー画面）** — 10a8146 で解決。SCR2（前面・静止画）に
+    SCR1（背面・スクロールするテキスト）が縦 48px 周期で繰り返し透けて重なっていた。当初は GDMA 転送・
+    タイルマップ更新・フレーム駆動のタイミング精度の問題と推定していたが、実際の根本原因は
+    **モノクロパレットの透過ルールと背景色（backdrop）の未対応**だった:
+    -   SCR1 を常に不透明として合成していた（本来は透過ピクセルなら下位＝背景色を残すべき）。
+    -   ピクセル0の透明判定を「SCR2 のみ・pixel==0 一律」で行っていた。実機（WSdev `Display`）は
+        2bpp モードで palette color zero を**パレット 0–3 と 8–11 では不透明、それ以外では透明**とする。
+    -   全レイヤー透明時の背景色（DISP_CTRL 上位バイトの濃淡プールインデックス）が未実装で shade 0 固定だった。
+    -   修正: `PaletteResolver` トレイトに `transparent(palette, pixel)` と `backdrop(ports)` を追加し、
+        SCR1/SCR2/スプライトすべてを resolver の透過判定で合成、初期値を backdrop 濃淡にした
+        （`crates/core/src/ppu/palette.rs` / `mod.rs`）。Color 実装（Phase 8）でも同じ seam で差し替え可能。
+    -   デバッグ用の `System::run_frame_traced` / `Bus::peek_io` / `Bus::debug_bg_sample` と
+        frontend の `P` キーダンプは調査ツールとして引き続き利用可能。
 
 ---
 
@@ -531,6 +535,114 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 **テスト方法**
 -   Color版テストROM（入手できれば）での検証
 -   既存モノクロ回帰テストがColorモード追加後も通ることの確認
+
+**設計上の確定事項（Phase 8 着手時）**
+-   **フレームバッファ形式の統一（RGB444 `u16`）**: 従来の「濃淡インデックス `[u8]`（0–15）」を
+    **12bit RGB（RGB444、`0x0RGB`）の `[u16]`** に統一した。カラーはネイティブの12bit色、モノクロは
+    グレー階調をこの形式に載せる（`PaletteResolver::resolve`/`backdrop` が `Rgb444` を返す）。
+    `crates/video` は `rgb444_to_rgba` で 444→888 展開。**モノクロは明度が反転する点に注意**:
+    RGB444 は「0=暗・15=明」だが濃淡は「0=白（明）」なので、モノ resolver は `grey_rgb444(shade)`
+    ＝ `15 - shade` を各チャネルに複製する（画面上の見えは Phase 8 以前と一致）。
+-   **`HardwareModel::{Mono, Color, Crystal}`**: `crates/core/src/model.rs` に導入。`Bus`/`System` が
+    保持し、`from_rom` はヘッダの Color 必須フラグから既定を決定（`from_color_flag`）、
+    `set_model` で上書き可能（Color対応ROMをCrystalで動かす等）。
+-   **RTC の決定論制約**: core-crate 方針・§7（RA対応）に従い、RTC の現在時刻は core 内で壁時計
+    （`std::time`）を読まない。**時刻は frontend から注入する**（またはエミュクロックで進める）設計とする。
+
+**サブフェーズ分解（実装単位）**
+
+| サブ | 内容 | 状態 |
+|---|---|---|
+| 8a | `HardwareModel` enum 導入 + フレームバッファ RGB444 `u16` 統一（`PaletteResolver`/PPU/Bus/System/video）+ mono 回帰維持 | ✅ 完了 |
+| 8b | `ColorPaletteResolver`（`0xFE00` の 12bit RGB パレットRAM、16パレット×16色）+ `render_scanline` の resolver をモデルで選択 + port `0x60` bit7（カラー/mono-compat）切替 | ✅ 完了 |
+| 8c | カラータイル形式: 4bpp タイル・タイルバンク（tilemap bit13）・第2タイルバンク。`TileMapEntry`/`tile_pixel` の bpp 対応 | ✅ 完了 |
+| 8d | WSC メモリ拡張: `0x4000–0xFFFF` を WRAM にマップ、display mode ポート(`0x60`)配線 | ✅ 完了 |
+| 8e | RTC 実装: BCD 日時・アラーム・`0xCA/0xCB` コマンドプロトコル・計時（時刻注入） | ✅ 完了 |
+| 8f | Color APU 拡張（Hyper Voice 等）: 最小 or 後続課題に分離 | ⏳ |
+| 8g | テスト整備 + mono 回帰確認、`Status.md`/本書更新 | ⏳ |
+
+**実装メモ（8b）**
+-   `ColorPaletteResolver`（`crates/core/src/ppu/palette.rs`）は内蔵RAMのパレット領域
+    `wram[0xFE00..]` を借用し、`PaletteResolver` の `ports` のみのシグネチャを維持したまま色を返す
+    （mono 側は無改修）。色は `PALETTE_RAM_BASE + (palette*16 + color)*2` の2バイトLE、下位12bitが
+    `0x0RGB`。色インデックスはタイルピクセル（2bppなら0–3、4bppは8cで0–15）。
+-   `Bus::render_scanline` は `color_rendering_enabled()`＝`model.is_color() && (ports[0x60] & 0x80)`
+    で resolver を選択。Color機でも port `0x60` bit7 が未セットなら mono 濃淡パスを使う（mono互換）。
+-   **未検証の前提（実機/テストROMで要確認）**:
+    -   **透明規則**: カラーモードは「各パレットの色0が透明」（monoの 0–3/8–11 例外は不適用）と仮定。
+    -   **背景色(backdrop)**: port `0x01` の8bitを 256色パレットRAMへのインデックス（上位ニブル=パレット、
+        下位ニブル=色）と解釈。
+    -   **port `0x60` bit7 = カラーモード**。通常はブートROMが設定するため、ブートROM無起動時は
+        Colorタイトル自身が設定する必要がある。
+
+**実装メモ（8c）**
+-   `TileMode`（`ppu/mod.rs`、`pub(crate)`）を port `0x60` から導出（bit7=color / bit6=4bpp / bit5=packed）。
+    `render_scanline` の各サンプラ（`sample_background`/`sample_sprite`）が内部で `TileMode::from_ports`
+    を呼び、2bpp/4bpp・planar/packed を切替。モノクロ（0x60=0）は 2bpp planar・非バンクで従来どおり。
+-   **タイルデータ配置**: 2bpp は `0x2000`・16バイト/タイル、4bpp は `0x4000`・32バイト/タイル。
+    バンクはインデックス線形加算（実効タイル = tile + 512×bank）で表現。
+-   **タイルマップのバンク**: color モードのみ bit13 を第2バンク選択として解釈（`TileMapEntry::bank`）。
+    mono では無視。**スプライトはバンク無し**（属性 bit13 は priority）、タイルは 0–511 だが 2bpp/4bpp 形式は
+    背景と共通。
+-   **未検証の前提**: 4bpp planar のプレーン並び（行あたり4バイト＝plane0–3）・packed の左右ニブル
+    （高位=左）は WSdev 記述準拠だが実機/テストROM未確認。タイルバンク/4bppベースアドレスも同様。
+
+**実装メモ（8d）**
+-   内蔵RAM は元々 64 KiB（`wram: Box<[u8; 0x10000]>`）確保済みで、ギャップは *CPU/GDMA から
+    `0x4000–0xFFFF` へのアクセスが常に open bus 扱い* だった点。`Bus::read_wram`/`write_wram` を新設し、
+    上位 48 KiB（0x04000–0x0FFFF、パレットRAM `0xFE00`・4bppタイルバンク `0x4000` を含む）を
+    `model.is_color()` でゲート。`read_u8`/`write_u8`/`read_u8_phys`/GDMA 書き込みを全てこの経路に統一。
+-   **mono では書き込みも破棄**（read マスクだけでなく実際にバッファへ書かない）。テストで
+    「mono で `0x4000` に書く → Color へ昇格 → 0 が読める」ことを検証（`mono_write_to_upper_window_is_dropped…`）。
+-   **port `0x60`**: 意味を持つ3ビット（bit7=カラー→`color_rendering_enabled`、bit6=4bpp / bit5=packed→
+    `TileMode`）は 8b/8c で既に全消費済み。残りビットは未使用/予約のため追加配線なし。書き込みは既定の
+    ポートシャドウ経路で保持される。
+
+**実装メモ（8e）**
+-   **RTC デバイス**（`crates/core/src/bus/cart/rtc.rs`）: BCD 日時7レジスタ（年=2000+yy／月／日／曜日／
+    時／分／秒）＋ステータス＋アラーム時分を plain data で保持。`Cartridge` の `Option<Rtc>` を実体化。
+-   **決定論制約（壁時計を core に持たない）**: §7（RA対応）方針に従い `std::time` を一切読まない。
+    -   **時刻注入**: frontend が ROM ロード時に一度 `System::set_rtc_datetime`（十進コンポーネント）で
+        現在時刻を注入。未注入時は固定エポック **2000-01-01 00:00:00（土曜=weekday 6）** から開始し、
+        ヘッドレス実行の再現性を担保。
+    -   **フリーラン計時**: `System::drive_frame` が毎フレーム `Bus::tick_rtc(CYCLES_PER_FRAME)` を呼び、
+        `Rtc` が master-clock サイクルを累積。`MASTER_CLOCK_HZ`（=1秒）ごとに秒を BCD 桁上げ（分/時/日/月/
+        年/曜日、閏年は 2000–2099 の範囲で `year % 4 == 0`）。サブ秒剰余を保持し平均レートを一致させる。
+-   **コマンドプロトコル（ポート 0xCA=コマンド/ステータス, 0xCB=データ）**: `Bus::read_io`/`write_io` は
+    `cart.has_rtc()` の時のみ 0xCA/0xCB を RTC へルーティング（非搭載カートは従来どおりポートシャドウ）。
+    0xCA 読みは「ready ビット(bit7)＋コマンド」。0xCB はアクティブコマンドのペイロードを内部ポインタで
+    順次 read/write（末尾でラップ）。対応コマンド: RESET(0x10) / STATUS r/w(0x12,0x13) /
+    DATETIME r/w(0x14,0x15、7バイト) / ALARM r/w(0x18,0x19、2バイト)。
+-   **ヘッダ RTC 検出**: フッタ flags バイト（0x0C）bit1 を RTC 有無として解釈（`CartridgeHeader.rtc`）。
+    既存の synthetic テスト ROM は 0 のため無回帰。
+-   **未検証の前提（実機/テストROMで要確認）**: コマンドバイト値・DATETIME/ALARM のバイト順・0xCA の
+    ready ビット意味・フッタ 0x0C bit1 の RTC ビット位置は WSdev/エミュレータ資料準拠だが実機未確認
+    （Color RTC テストROM 未入手）。
+-   **今回のスコープ外（後続課題）**: アラームはレジスタ保持のみで、一致時のカートリッジ IRQ 配線は未実装
+    （WS カート RTC 割り込み経路が未検証のため）。RTC 状態を含む複合セーブ（バージョン付きフレーミング）も
+    §「セーブデータ形式」の方針どおり将来課題。
+
+**実装メモ（8 追補: HW_FLAGS 0xA0 と実 WSC ゲームのカラー起動）**
+-   **背景**: 実 WSC ROM（Final Fantasy 等）を Color モデルで走らせても色が出ない事象を調査。原因は
+    「カラー配線の欠陥」ではなく、**WSC のパワーオン/BIOS 初期状態を提示していなかった**こと。実機/他エミュは
+    内蔵 BIOS 初期化後の状態をゲームに渡すが、本実装はカートのリセットベクタへコールドジャンプするだけだった。
+-   **決定的レジスタ = port `0xA0`（HW_FLAGS）**: Mednafen `gfx.c` は `readport(0xA0) = wsc ? 0x87 : 0x86`
+    （bit0＝カラー機フラグ、他は固定システムビット）。ゲームは起動時に `IN AL,0xA0` で本体種別を読み、
+    WSC ならカラー経路へ分岐する。本実装は 0xA0 に 0 を返していたため、FF は起動直後の初期化ルーチンで
+    停止（f000:0046 の遅延ループから先へ進まない）、他ゲームも mono 互換描画になっていた。
+-   **修正**: `Bus::read_io` の 0xA0 を計算読み（`model.is_color()` なら 0x87、mono は 0x86）に。書き込みは無視。
+    これ**一箇所**で FF / Dark Eyes / Dragonball / Digimon Tamers が**カラーモードで起動**（port 0x60 bit7 を
+    自らセット、パレットRAM 0xFE00 に色を書き、フルカラー描画）することを実 ROM で確認。
+-   **カラー有効化ビットの再確認**: ares の PPU 定義 `color() = system.mode().bit(2)`（`system.mode()`＝port 0x60
+    bits5–7）より、**カラー有効化＝port 0x60 bit7** が確定。**8b の想定は正しかった**（一度「誤りかも」と疑ったが
+    実機資料と一致）。`depth()=(mode.bit(1,2)!=3?2:4)`（4bpp は bit6&bit7）、`packed()=(mode==7)`（bits5,6,7）も
+    8c と整合。
+-   **frontend 側**: `.wsc` 拡張子を Color 本体として起動（`System::set_model(Color)`）。実機同様、カラー可否は
+    カートのヘッダフラグではなく本体モデルで決まる（FF WSC はフッタ 0x07 の Color 必須ビットが 0）。ステータスバーに
+    認識モデル（`[Color]`/`[Mono]`）を表示。
+-   **未検証/残課題**: 0xA0 の bit1/bit2/bit7 の正確な意味は未精査（値 0x86/0x87 は Mednafen 準拠で固定）。
+    startio[] 相当の他ポート初期値（0x02=0x9D, 0x03=0xBB, 0x14=0x01, 0xB5=0x40 等）は未適用だが、上記 4 本の起動には
+    不要だった。今後ゲーム互換で必要になれば追加する。
 
 ---
 

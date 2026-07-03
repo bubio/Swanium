@@ -111,11 +111,13 @@ impl Cartridge {
             SaveType::None => (Vec::new(), None),
         };
 
+        let rtc = header.is_some_and(|h| h.rtc).then(Rtc::new);
+
         Self {
             rom,
             sram,
             eeprom,
-            rtc: None,
+            rtc,
             mapper,
             header,
             linear_off: 0xFF,
@@ -255,11 +257,16 @@ impl Cartridge {
     }
 
     /// The cartridge's real-time clock, if present.
-    ///
-    /// Always `None` in Phase 6: the [`Rtc`] interface is defined here, but
-    /// header-based detection and timekeeping are implemented in Phase 8.
     pub fn rtc(&self) -> Option<&Rtc> {
         self.rtc.as_ref()
+    }
+
+    /// Mutable access to the cartridge's real-time clock, if present.
+    ///
+    /// Used by the bus to service the 0xCA/0xCB command protocol and to advance
+    /// the clock off the emulated master clock.
+    pub fn rtc_mut(&mut self) -> Option<&mut Rtc> {
+        self.rtc.as_mut()
     }
 
     // ── Save-data serialisation ───────────────────────────────────────────

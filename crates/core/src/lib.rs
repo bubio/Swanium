@@ -8,5 +8,8 @@ pub mod apu;
 pub mod bus;
 pub mod cpu;
 pub mod keypad;
+pub mod model;
 pub mod ppu;
 pub mod system;
+
+pub use model::HardwareModel;

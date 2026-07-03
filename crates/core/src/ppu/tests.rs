@@ -1,6 +1,7 @@
 use super::{
-    tile_pixel, DisplayControl, MonoPaletteResolver, PaletteResolver, Ppu, SpriteEntry,
-    TileMapEntry, FRAMEBUFFER_LEN, SCREEN_HEIGHT, SCREEN_WIDTH,
+    tile_pixel, tile_pixel_4bpp, ColorPaletteResolver, DisplayControl, MonoPaletteResolver,
+    PaletteResolver, Ppu, SpriteEntry, TileMapEntry, TileMode, FRAMEBUFFER_LEN, SCREEN_HEIGHT,
+    SCREEN_WIDTH,
 };
 
 /// Configure palette 0 and the shade pool as an identity map, so a tile pixel
@@ -11,6 +12,14 @@ fn set_identity_palette(ports: &mut [u8]) {
     ports[0x21] = 0x32; //            color2=2, color3=3
     ports[0x1C] = 0x10; // shade pool: pool0=0, pool1=1
     ports[0x1D] = 0x32; //             pool2=2, pool3=3
+}
+
+/// The RGB444 framebuffer value a monochrome `shade` (0–15) resolves to. The
+/// mono resolver inverts brightness (shade 0 = white = 0x0FFF); see
+/// [`super::palette::grey_rgb444`].
+fn grey(shade: u8) -> u16 {
+    let n = (15 - (shade & 0x0F)) as u16;
+    (n << 8) | (n << 4) | n
 }
 
 // ── Framebuffer ──────────────────────────────────────────────────────────────
@@ -225,7 +234,7 @@ fn scr1_renders_tile_pixel_at_origin() {
     let (wram, ports) = setup_scr1_single_tile(0, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -233,16 +242,16 @@ fn scr1_renders_second_pixel_of_tile() {
     let (wram, ports) = setup_scr1_single_tile(0, (0b0100_0000, 0b0100_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[1], 3);
+    assert_eq!(ppu.framebuffer()[1], grey(3));
 }
 
 #[test]
-fn scr1_disabled_leaves_framebuffer_zero() {
+fn scr1_disabled_shows_backdrop() {
     let (wram, mut ports) = setup_scr1_single_tile(0, (0b1000_0000, 0b0000_0000));
     ports[0x00] = 0x00; // all layers disabled
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -259,7 +268,7 @@ fn scr1_scroll_x_shifts_sampled_column() {
     write_tile_row(&mut wram, 5, 0, 0b1000_0000, 0b1000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 3);
+    assert_eq!(ppu.framebuffer()[0], grey(3));
 }
 
 #[test]
@@ -274,7 +283,7 @@ fn scr1_horizontal_flip_mirrors_tile() {
     write_tile_row(&mut wram, 0, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[7], 1);
+    assert_eq!(ppu.framebuffer()[7], grey(1));
 }
 
 #[test]
@@ -292,7 +301,7 @@ fn scr2_palette_4_pixel_0_lets_scr1_show_through() {
     write_map_entry(&mut wram, 0x800, 0, 0, 4 << 9); // SCR2 palette 4, tile 0
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -308,7 +317,7 @@ fn scr2_palette_0_pixel_0_masks_scr1() {
     write_map_entry(&mut wram, 0x800, 0, 0, 0); // SCR2 palette 0, tile 0 pixel 0
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -324,7 +333,7 @@ fn scr2_opaque_pixel_overrides_scr1() {
     write_tile_row(&mut wram, 2, 0, 0b1000_0000, 0b1000_0000); // SCR2 x0 = 3
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 3);
+    assert_eq!(ppu.framebuffer()[0], grey(3));
 }
 
 #[test]
@@ -352,7 +361,7 @@ fn mono_resolver_maps_pixel_through_palette_and_pool() {
     let mut ports = [0u8; 0x100];
     ports[0x20] = 0x50; // pixel0 → pool0, pixel1 → pool5 (high nibble of low byte)
     ports[0x1E] = 0xA0; // pool4 = 0, pool5 = 0x0A (high nibble of byte 0x1E)
-    assert_eq!(MonoPaletteResolver.resolve(&ports, 0, 1), 0x0A);
+    assert_eq!(MonoPaletteResolver.resolve(&ports, 0, 1), grey(0x0A));
 }
 
 #[test]
@@ -361,7 +370,7 @@ fn mono_resolver_uses_high_byte_for_pixel_2_and_3() {
     let mut ports = [0u8; 0x100];
     ports[0x21] = 0x03; // pixel2 → pool3
     ports[0x1D] = 0xC0; // pool2 = 0, pool3 = 0x0C
-    assert_eq!(MonoPaletteResolver.resolve(&ports, 0, 2), 0x0C);
+    assert_eq!(MonoPaletteResolver.resolve(&ports, 0, 2), grey(0x0C));
 }
 
 #[test]
@@ -370,13 +379,13 @@ fn mono_resolver_selects_palette_by_index() {
     let mut ports = [0u8; 0x100];
     ports[0x22] = 0x07; // palette 1, pixel0 → pool7
     ports[0x1F] = 0xF0; // pool6 = 0, pool7 = 0x0F
-    assert_eq!(MonoPaletteResolver.resolve(&ports, 1, 0), 0x0F);
+    assert_eq!(MonoPaletteResolver.resolve(&ports, 1, 0), grey(0x0F));
 }
 
 #[test]
-fn mono_resolver_returns_zero_shade_for_zeroed_registers() {
+fn mono_resolver_returns_white_for_zeroed_registers() {
     let ports = [0u8; 0x100];
-    assert_eq!(MonoPaletteResolver.resolve(&ports, 3, 2), 0);
+    assert_eq!(MonoPaletteResolver.resolve(&ports, 3, 2), grey(0));
 }
 
 #[test]
@@ -405,7 +414,7 @@ fn mono_resolver_backdrop_uses_display_control_high_byte_pool_index() {
     let mut ports = [0u8; 0x100];
     ports[0x01] = 5; // backdrop selects shade-pool index 5
     ports[0x1E] = 0xB0; // pool4 = 0, pool5 = shade 0x0B
-    assert_eq!(MonoPaletteResolver.backdrop(&ports), 0x0B);
+    assert_eq!(MonoPaletteResolver.backdrop(&ports), grey(0x0B));
 }
 
 #[test]
@@ -418,7 +427,7 @@ fn transparent_screen_pixel_falls_back_to_backdrop_shade() {
     write_map_entry(&mut wram, 0, 0, 0, 4 << 9); // palette 4, tile 0 pixel 0 => transparent
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0x0C);
+    assert_eq!(ppu.framebuffer()[0], grey(0x0C));
 }
 
 #[test]
@@ -434,7 +443,7 @@ fn scr1_pixel_resolves_through_nonidentity_palette() {
     write_tile_row(&mut wram, 0, 0, 0b1000_0000, 0b0000_0000); // x0 pixel = 1
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0x07);
+    assert_eq!(ppu.framebuffer()[0], grey(0x07));
 }
 
 // ── Sprite attribute-entry decode ─────────────────────────────────────────────
@@ -514,7 +523,7 @@ fn sprite_renders_pixel_at_its_position() {
     let (wram, ports) = setup_single_sprite(1, 0, 0, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -522,7 +531,7 @@ fn sprite_offset_by_x_position() {
     let (wram, ports) = setup_single_sprite(1, 0, 10, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[10], 1);
+    assert_eq!(ppu.framebuffer()[10], grey(1));
 }
 
 #[test]
@@ -533,7 +542,7 @@ fn sprite_transparent_pixel_not_drawn() {
     let (wram, ports) = setup_single_sprite(1 | (4 << 9), 0, 0, (0b0000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -546,7 +555,7 @@ fn sprite_palette_8_color_zero_is_opaque() {
     // shade 0, so an opaque sprite color-zero pixel overrides the backdrop.
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -556,7 +565,7 @@ fn sprite_palette_12_color_zero_is_transparent() {
     ports[0x1F] = 0xC0; // pool7 = shade 0x0C
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0x0C);
+    assert_eq!(ppu.framebuffer()[0], grey(0x0C));
 }
 
 #[test]
@@ -564,7 +573,7 @@ fn sprite_not_drawn_on_scanline_above_it() {
     let (wram, ports) = setup_single_sprite(1, 8, 0, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver); // line 0, sprite at y=8
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -573,7 +582,7 @@ fn sprite_horizontal_flip_mirrors_within_cell() {
     let (wram, ports) = setup_single_sprite(1 | (1 << 14), 0, 0, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[7], 1);
+    assert_eq!(ppu.framebuffer()[7], grey(1));
 }
 
 #[test]
@@ -582,7 +591,7 @@ fn sprite_vertical_flip_mirrors_rows() {
     let (wram, ports) = setup_single_sprite(1 | (1 << 15), 0, 0, (0b1000_0000, 0b0000_0000));
     let mut ppu = Ppu::new();
     ppu.render_scanline(7, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[7 * SCREEN_WIDTH], 1);
+    assert_eq!(ppu.framebuffer()[7 * SCREEN_WIDTH], grey(1));
 }
 
 #[test]
@@ -605,7 +614,7 @@ fn sprite_priority_1_draws_over_scr2() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -626,7 +635,7 @@ fn sprite_priority_0_drawn_behind_scr2() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000); // sprite pixel 1
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 3);
+    assert_eq!(ppu.framebuffer()[0], grey(3));
 }
 
 // ── Window masking (4e) ───────────────────────────────────────────────────────
@@ -676,7 +685,7 @@ fn scr2_inside_window_shows_pixel_within_bounds() {
     let (wram, ports) = setup_scr2_windowed(false);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[5], 3); // x=5 is inside [4,7]
+    assert_eq!(ppu.framebuffer()[5], grey(3)); // x=5 is inside [4,7]
 }
 
 #[test]
@@ -684,7 +693,7 @@ fn scr2_inside_window_hides_pixel_outside_bounds() {
     let (wram, ports) = setup_scr2_windowed(false);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0); // x=0 is outside [4,7]
+    assert_eq!(ppu.framebuffer()[0], grey(0)); // x=0 is outside [4,7]
 }
 
 #[test]
@@ -692,7 +701,7 @@ fn scr2_outside_window_shows_pixel_beyond_bounds() {
     let (wram, ports) = setup_scr2_windowed(true);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 3); // x=0 is outside → shown in outside mode
+    assert_eq!(ppu.framebuffer()[0], grey(3)); // x=0 is outside → shown in outside mode
 }
 
 #[test]
@@ -700,7 +709,7 @@ fn scr2_outside_window_hides_pixel_within_bounds() {
     let (wram, ports) = setup_scr2_windowed(true);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[5], 0); // x=5 is inside → hidden in outside mode
+    assert_eq!(ppu.framebuffer()[5], grey(0)); // x=5 is inside → hidden in outside mode
 }
 
 #[test]
@@ -722,7 +731,7 @@ fn windowed_sprite_hidden_outside_sprite_window() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 0);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
 }
 
 #[test]
@@ -742,7 +751,7 @@ fn windowed_sprite_shown_inside_sprite_window() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -762,7 +771,7 @@ fn non_windowed_sprite_unaffected_by_sprite_window() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], 1);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
@@ -772,4 +781,231 @@ fn sprite_entry_decodes_window_attribute() {
     wram[0] = word as u8;
     wram[1] = (word >> 8) as u8;
     assert!(SpriteEntry::decode(&wram, 0).window);
+}
+
+// ── WonderSwan Color palette resolution (8b) ──────────────────────────────────
+
+/// Write a 12-bit RGB444 color into the color palette RAM at 0xFE00.
+fn write_palette_color(wram: &mut [u8], palette: u8, color: u8, rgb444: u16) {
+    let addr = 0xFE00 + ((palette as usize) * 16 + color as usize) * 2;
+    let [lo, hi] = (rgb444 & 0x0FFF).to_le_bytes();
+    wram[addr] = lo;
+    wram[addr + 1] = hi;
+}
+
+#[test]
+fn color_resolver_reads_palette_ram_color() {
+    let mut wram = vec![0u8; 0x10000];
+    write_palette_color(&mut wram, 3, 2, 0x0ABC);
+    let resolver = ColorPaletteResolver::new(&wram);
+    assert_eq!(resolver.resolve(&[0u8; 0x100], 3, 2), 0x0ABC);
+}
+
+#[test]
+fn color_resolver_masks_stored_value_to_12_bits() {
+    let mut wram = vec![0u8; 0x10000];
+    // Store a full 16-bit word; only the low 12 bits are a valid color.
+    let addr = 0xFE00 + 2;
+    [wram[addr], wram[addr + 1]] = 0xFABCu16.to_le_bytes();
+    let resolver = ColorPaletteResolver::new(&wram);
+    assert_eq!(resolver.resolve(&[0u8; 0x100], 0, 1), 0x0ABC);
+}
+
+#[test]
+fn color_resolver_pixel_zero_is_transparent_for_all_palettes() {
+    let wram = vec![0u8; 0x10000];
+    let resolver = ColorPaletteResolver::new(&wram);
+    for palette in 0..16 {
+        assert!(resolver.transparent(palette, 0));
+    }
+}
+
+#[test]
+fn color_resolver_nonzero_pixel_is_opaque() {
+    let wram = vec![0u8; 0x10000];
+    let resolver = ColorPaletteResolver::new(&wram);
+    assert!(!resolver.transparent(0, 1));
+}
+
+#[test]
+fn color_resolver_backdrop_indexes_palette_ram_by_port_0x01() {
+    let mut wram = vec![0u8; 0x10000];
+    // port 0x01 = 0x25 → palette 2, color 5.
+    write_palette_color(&mut wram, 2, 5, 0x0123);
+    let mut ports = [0u8; 0x100];
+    ports[0x01] = 0x25;
+    let resolver = ColorPaletteResolver::new(&wram);
+    assert_eq!(resolver.backdrop(&ports), 0x0123);
+}
+
+#[test]
+fn color_resolver_renders_scr1_pixel_from_palette_ram() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x07] = 0x00; // SCR1 map base 0
+    write_map_entry(&mut wram, 0, 0, 0, 5 << 9); // tile 0, palette 5
+    write_tile_row(&mut wram, 0, 0, 0b1000_0000, 0b0000_0000); // x0 pixel = 1
+    write_palette_color(&mut wram, 5, 1, 0x0F0F); // palette 5 color 1
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0F0F);
+}
+
+// ── Color tile formats (8c) ───────────────────────────────────────────────────
+
+/// Write one planar 4bpp tile row (4 plane bytes) into WRAM tile data at 0x4000.
+fn write_tile_row_4bpp_planar(wram: &mut [u8], tile_idx: usize, row: usize, planes: [u8; 4]) {
+    let addr = 0x4000 + tile_idx * 32 + row * 4;
+    wram[addr..addr + 4].copy_from_slice(&planes);
+}
+
+/// Write one packed 4bpp tile row (4 bytes, two pixels each) into WRAM at 0x4000.
+fn write_tile_row_4bpp_packed(wram: &mut [u8], tile_idx: usize, row: usize, bytes: [u8; 4]) {
+    let addr = 0x4000 + tile_idx * 32 + row * 4;
+    wram[addr..addr + 4].copy_from_slice(&bytes);
+}
+
+#[test]
+fn tilemap_entry_decodes_bank_bit() {
+    assert!(TileMapEntry::decode(1 << 13).bank);
+}
+
+#[test]
+fn tilemap_entry_no_bank_when_clear() {
+    assert!(!TileMapEntry::decode(0x0000).bank);
+}
+
+#[test]
+fn tile_mode_mono_is_2bpp_unbanked() {
+    let mode = TileMode::from_ports(&[0u8; 0x100]);
+    assert_eq!(
+        mode,
+        TileMode {
+            bpp4: false,
+            packed: false,
+            banked: false
+        }
+    );
+}
+
+#[test]
+fn tile_mode_color_2bpp_is_banked() {
+    let mut ports = [0u8; 0x100];
+    ports[0x60] = 0x80; // color, 2bpp
+    let mode = TileMode::from_ports(&ports);
+    assert_eq!(
+        mode,
+        TileMode {
+            bpp4: false,
+            packed: false,
+            banked: true
+        }
+    );
+}
+
+#[test]
+fn tile_mode_color_4bpp_planar() {
+    let mut ports = [0u8; 0x100];
+    ports[0x60] = 0x80 | 0x40; // color, 4bpp, planar
+    let mode = TileMode::from_ports(&ports);
+    assert_eq!(
+        mode,
+        TileMode {
+            bpp4: true,
+            packed: false,
+            banked: true
+        }
+    );
+}
+
+#[test]
+fn tile_mode_color_4bpp_packed() {
+    let mut ports = [0u8; 0x100];
+    ports[0x60] = 0x80 | 0x40 | 0x20; // color, 4bpp, packed
+    let mode = TileMode::from_ports(&ports);
+    assert_eq!(
+        mode,
+        TileMode {
+            bpp4: true,
+            packed: true,
+            banked: true
+        }
+    );
+}
+
+#[test]
+fn tile_mode_4bpp_bit_ignored_without_color() {
+    let mut ports = [0u8; 0x100];
+    ports[0x60] = 0x40; // 4bpp bit set but color bit clear
+    let mode = TileMode::from_ports(&ports);
+    assert_eq!(
+        mode,
+        TileMode {
+            bpp4: false,
+            packed: false,
+            banked: false
+        }
+    );
+}
+
+#[test]
+fn tile_pixel_4bpp_planar_combines_four_planes() {
+    let mut wram = vec![0u8; 0x10000];
+    // leftmost pixel set in planes 0 and 2 → value 0b0101 = 5.
+    write_tile_row_4bpp_planar(&mut wram, 0, 0, [0b1000_0000, 0, 0b1000_0000, 0]);
+    assert_eq!(tile_pixel_4bpp(&wram, false, 0, 0, 0), 5);
+}
+
+#[test]
+fn tile_pixel_4bpp_planar_all_planes_is_15() {
+    let mut wram = vec![0u8; 0x10000];
+    write_tile_row_4bpp_planar(&mut wram, 0, 0, [0x80, 0x80, 0x80, 0x80]);
+    assert_eq!(tile_pixel_4bpp(&wram, false, 0, 0, 0), 15);
+}
+
+#[test]
+fn tile_pixel_4bpp_packed_high_nibble_is_left_pixel() {
+    let mut wram = vec![0u8; 0x10000];
+    write_tile_row_4bpp_packed(&mut wram, 0, 0, [0xAB, 0, 0, 0]);
+    assert_eq!(tile_pixel_4bpp(&wram, true, 0, 0, 0), 0xA); // tx=0 → high nibble
+}
+
+#[test]
+fn tile_pixel_4bpp_packed_low_nibble_is_right_pixel() {
+    let mut wram = vec![0u8; 0x10000];
+    write_tile_row_4bpp_packed(&mut wram, 0, 0, [0xAB, 0, 0, 0]);
+    assert_eq!(tile_pixel_4bpp(&wram, true, 0, 1, 0), 0xB); // tx=1 → low nibble
+}
+
+#[test]
+fn color_2bpp_bank_bit_selects_second_tile_bank() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x60] = 0x80; // color 2bpp (banking active)
+                        // map entry: tile 1, palette 0, bank bit set → effective tile 513
+    write_map_entry(&mut wram, 0, 0, 0, 1 | (1 << 13));
+    write_tile_row(&mut wram, 513, 0, 0b1000_0000, 0b0000_0000); // tile 513 x0 = 1
+    write_palette_color(&mut wram, 0, 1, 0x0ABC);
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0ABC);
+}
+
+#[test]
+fn color_4bpp_renders_pixel_from_second_tile_bank_area() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x60] = 0x80 | 0x40; // color 4bpp planar
+    write_map_entry(&mut wram, 0, 0, 0, 2 << 9); // tile 0, palette 2
+    write_tile_row_4bpp_planar(&mut wram, 0, 0, [0b1000_0000, 0, 0b1000_0000, 0]); // x0 = 5
+    write_palette_color(&mut wram, 2, 5, 0x0DEF);
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0DEF);
 }

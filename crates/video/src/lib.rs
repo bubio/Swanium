@@ -1,12 +1,14 @@
 //! Conversion of the emulator core's framebuffer into an RGBA8 image.
 //!
-//! The core produces a `224 × 144` buffer of monochrome *shade indices*
-//! (`0`–`15`, see [`swanium_core::system::System::framebuffer`]). This crate
-//! turns those indices into packed `RGBA8888` pixels the GPU can upload as a
-//! texture. The actual wgpu surface, swap chain, and scaling pipeline are wired
-//! in a later step (see `docs/dev/DevelopmentPlan.md` Phase 7 後続課題); keeping
-//! the pixel conversion here as a pure, testable function lets the rest of the
-//! frontend and CI exercise the data path without a GPU.
+//! The core produces a `224 × 144` buffer of 12-bit RGB colors (RGB444,
+//! packed `0x0RGB`; see [`swanium_core::system::System::framebuffer`]) — the
+//! WonderSwan Color's native depth. Monochrome output uses the same buffer with
+//! grey values. This crate expands each RGB444 color into a packed `RGBA8888`
+//! pixel the GPU can upload as a texture. The actual wgpu surface, swap chain,
+//! and scaling pipeline are wired in a later step (see
+//! `docs/dev/DevelopmentPlan.md` Phase 7 後続課題); keeping the pixel conversion
+//! here as a pure, testable function lets the rest of the frontend and CI
+//! exercise the data path without a GPU.
 
 /// Visible screen width in pixels.
 pub const SCREEN_WIDTH: usize = 224;
@@ -14,50 +16,48 @@ pub const SCREEN_WIDTH: usize = 224;
 /// Visible screen height in pixels.
 pub const SCREEN_HEIGHT: usize = 144;
 
-/// Number of distinct monochrome shades the core emits (`0`–`15`).
-pub const SHADE_LEVELS: u8 = 16;
-
 /// Bytes per RGBA8 pixel.
 pub const BYTES_PER_PIXEL: usize = 4;
 
-/// Map a monochrome shade index (`0` = lightest, `15` = darkest) to an opaque
-/// RGBA8 grey. Indices above the maximum are clamped to the darkest shade.
+/// Expand a 12-bit RGB444 color (`0x0RGB`) into an opaque RGBA8 pixel.
 ///
-/// Shade `0` is white (`0xFF`) and shade `15` is black (`0x00`); intermediate
-/// shades are spread evenly (`255 − shade × 17`, since `15 × 17 = 255`).
-pub fn shade_to_rgba(shade: u8) -> [u8; 4] {
-    let clamped = shade.min(SHADE_LEVELS - 1);
-    let grey = 255 - clamped * 17;
-    [grey, grey, grey, 0xFF]
+/// Each 4-bit channel is scaled to 8 bits by `n × 17` (so `0x0` → `0x00` and
+/// `0xF` → `0xFF`); bits above the low 12 are ignored. The alpha byte is always
+/// `0xFF`.
+pub fn rgb444_to_rgba(color: u16) -> [u8; 4] {
+    let r = ((color >> 8) & 0x0F) as u8 * 17;
+    let g = ((color >> 4) & 0x0F) as u8 * 17;
+    let b = (color & 0x0F) as u8 * 17;
+    [r, g, b, 0xFF]
 }
 
-/// Convert a framebuffer of shade indices into a freshly allocated RGBA8 buffer.
+/// Convert a framebuffer of RGB444 colors into a freshly allocated RGBA8 buffer.
 ///
 /// The returned vector has `framebuffer.len() * 4` bytes. Prefer
 /// [`write_rgba`] in a hot loop to reuse an existing allocation.
-pub fn framebuffer_to_rgba(framebuffer: &[u8]) -> Vec<u8> {
+pub fn framebuffer_to_rgba(framebuffer: &[u16]) -> Vec<u8> {
     let mut out = vec![0u8; framebuffer.len() * BYTES_PER_PIXEL];
     write_rgba(framebuffer, &mut out);
     out
 }
 
-/// Convert a framebuffer of shade indices into `out`, reusing its allocation.
+/// Convert a framebuffer of RGB444 colors into `out`, reusing its allocation.
 ///
 /// # Panics
 ///
 /// Panics if `out` is shorter than `framebuffer.len() * 4`.
-pub fn write_rgba(framebuffer: &[u8], out: &mut [u8]) {
+pub fn write_rgba(framebuffer: &[u16], out: &mut [u8]) {
     assert!(
         out.len() >= framebuffer.len() * BYTES_PER_PIXEL,
         "output buffer too small: {} < {}",
         out.len(),
         framebuffer.len() * BYTES_PER_PIXEL
     );
-    for (shade, pixel) in framebuffer
+    for (color, pixel) in framebuffer
         .iter()
         .zip(out.chunks_exact_mut(BYTES_PER_PIXEL))
     {
-        pixel.copy_from_slice(&shade_to_rgba(*shade));
+        pixel.copy_from_slice(&rgb444_to_rgba(*color));
     }
 }
 
@@ -66,33 +66,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shade_zero_is_white() {
-        assert_eq!(shade_to_rgba(0), [0xFF, 0xFF, 0xFF, 0xFF]);
+    fn white_rgb444_is_white() {
+        assert_eq!(rgb444_to_rgba(0x0FFF), [0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
-    fn shade_max_is_black() {
-        assert_eq!(shade_to_rgba(15), [0x00, 0x00, 0x00, 0xFF]);
+    fn black_rgb444_is_black() {
+        assert_eq!(rgb444_to_rgba(0x0000), [0x00, 0x00, 0x00, 0xFF]);
     }
 
     #[test]
-    fn shade_is_always_opaque() {
-        assert_eq!(shade_to_rgba(7)[3], 0xFF);
+    fn channels_map_to_their_positions() {
+        // Pure red, green, blue at full 4-bit intensity.
+        assert_eq!(rgb444_to_rgba(0x0F00), [0xFF, 0x00, 0x00, 0xFF]);
+        assert_eq!(rgb444_to_rgba(0x00F0), [0x00, 0xFF, 0x00, 0xFF]);
+        assert_eq!(rgb444_to_rgba(0x000F), [0x00, 0x00, 0xFF, 0xFF]);
     }
 
     #[test]
-    fn shade_above_max_clamps_to_black() {
-        assert_eq!(shade_to_rgba(99), [0x00, 0x00, 0x00, 0xFF]);
+    fn conversion_is_always_opaque() {
+        assert_eq!(rgb444_to_rgba(0x0777)[3], 0xFF);
     }
 
     #[test]
-    fn shade_is_monotonically_darker() {
-        assert!(shade_to_rgba(3)[0] > shade_to_rgba(8)[0]);
+    fn high_nibble_is_ignored() {
+        assert_eq!(rgb444_to_rgba(0xF000), rgb444_to_rgba(0x0000));
     }
 
     #[test]
     fn framebuffer_to_rgba_has_four_bytes_per_pixel() {
-        let fb = vec![0u8; SCREEN_WIDTH * SCREEN_HEIGHT];
+        let fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
         assert_eq!(
             framebuffer_to_rgba(&fb).len(),
             SCREEN_WIDTH * SCREEN_HEIGHT * 4
@@ -101,22 +104,22 @@ mod tests {
 
     #[test]
     fn framebuffer_to_rgba_converts_first_pixel() {
-        let mut fb = vec![0u8; SCREEN_WIDTH * SCREEN_HEIGHT];
-        fb[0] = 15;
-        assert_eq!(&framebuffer_to_rgba(&fb)[0..4], &[0x00, 0x00, 0x00, 0xFF]);
+        let mut fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        fb[0] = 0x0FFF;
+        assert_eq!(&framebuffer_to_rgba(&fb)[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
     fn write_rgba_reuses_buffer() {
-        let fb = [0u8, 15];
+        let fb = [0x0000u16, 0x0FFF];
         let mut out = vec![0u8; 8];
         write_rgba(&fb, &mut out);
-        assert_eq!(out, vec![0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFF]);
+        assert_eq!(out, vec![0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
     #[should_panic(expected = "output buffer too small")]
     fn write_rgba_panics_on_small_buffer() {
-        write_rgba(&[0u8; 4], &mut [0u8; 4]);
+        write_rgba(&[0u16; 4], &mut [0u8; 4]);
     }
 }

@@ -52,7 +52,12 @@ fn background_tile_reaches_framebuffer_after_a_frame() {
     bus.write_u8(0x2001, 0b0000_0000);
 
     system.run_frame(KeyState::NONE);
-    assert_eq!(system.framebuffer()[0], 1);
+    // Mono shade 1 as an RGB444 grey (the resolver inverts brightness).
+    let grey1 = {
+        let n = (15 - 1u16) & 0x0F;
+        (n << 8) | (n << 4) | n
+    };
+    assert_eq!(system.framebuffer()[0], grey1);
 }
 
 #[test]
