@@ -211,10 +211,22 @@ impl Ppu {
         };
         let line_sprites = &line_sprites[..sprite_count];
 
+        // Resolve each enabled background layer for the whole line up front,
+        // decoding tile-map entries and tile rows once per 8-pixel span instead
+        // of per pixel (see fill_background_line).
+        let mut scr1_line = [BgSample::default(); SCREEN_WIDTH];
+        if dc.scr1_enabled {
+            fill_background_line(wram, ports, BgLayer::Scr1, line, mode, &mut scr1_line);
+        }
+        let mut scr2_line = [BgSample::default(); SCREEN_WIDTH];
+        if dc.scr2_enabled {
+            fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
+        }
+
         for x in 0..SCREEN_WIDTH {
             let mut color = resolver.backdrop(ports);
             if dc.scr1_enabled {
-                let s = sample_background(wram, ports, BgLayer::Scr1, x, line);
+                let s = scr1_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
@@ -235,7 +247,7 @@ impl Ppu {
                 }
             }
             if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
-                let s = sample_background(wram, ports, BgLayer::Scr2, x, line);
+                let s = scr2_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
@@ -321,6 +333,47 @@ impl TileMode {
             tile_pixel(wram, tile, tx, ty)
         }
     }
+
+    /// Read the bytes of one tile row so a whole 8-pixel span can be extracted
+    /// without re-reading WRAM per pixel (see [`fill_background_line`]). Only
+    /// the first two bytes are meaningful in 2bpp; all four in 4bpp.
+    fn read_row(self, wram: &[u8], tile: u16, ty: usize) -> [u8; 4] {
+        if self.bpp4 {
+            let b = TILE_DATA_BASE_4BPP + tile as usize * TILE_BYTES_4BPP + ty * 4;
+            [wram[b], wram[b + 1], wram[b + 2], wram[b + 3]]
+        } else {
+            let b = TILE_DATA_BASE + tile as usize * TILE_BYTES + ty * 2;
+            [wram[b], wram[b + 1], 0, 0]
+        }
+    }
+
+    /// Extract the pixel at in-row column `tx` (0–7) from a row previously read
+    /// by [`read_row`](Self::read_row). Bit-for-bit equivalent to
+    /// [`pixel`](Self::pixel) for the same tile row.
+    fn pixel_in_row(self, row: &[u8; 4], tx: usize) -> u8 {
+        if self.bpp4 {
+            if self.packed {
+                let byte = row[tx >> 1];
+                if tx & 1 == 0 {
+                    byte >> 4
+                } else {
+                    byte & 0x0F
+                }
+            } else {
+                let bit = 7 - tx;
+                let mut px = 0u8;
+                for (plane, &b) in row.iter().enumerate() {
+                    px |= ((b >> bit) & 1) << plane;
+                }
+                px
+            }
+        } else {
+            let bit = 7 - tx;
+            let lo = (row[0] >> bit) & 1;
+            let hi = (row[1] >> bit) & 1;
+            (hi << 1) | lo
+        }
+    }
 }
 
 impl Ppu {
@@ -342,7 +395,7 @@ impl Ppu {
 }
 
 /// A decoded 16-bit tile-map entry (internal to the `ppu` module).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TileMapEntry {
     /// Tile number (9 bits, 0–511); combined with [`bank`](Self::bank) in color
     /// mode to address up to 1024 tiles.
@@ -371,7 +424,7 @@ impl TileMapEntry {
 }
 
 /// A sampled background pixel: the raw 2-bit value plus its palette index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct BgSample {
     pixel: u8,
     palette: u8,
@@ -473,6 +526,63 @@ fn sample_background(
     BgSample {
         pixel: mode.pixel(wram, mode.bg_tile(&entry), tx, ty),
         palette: entry.palette,
+    }
+}
+
+/// Fill `out` with a whole background scanline for `layer` in one pass.
+///
+/// Equivalent to calling [`sample_background`] for every `screen_x`, but the
+/// tile-map entry and the tile's row bytes are decoded once per 8-pixel tile
+/// span (they only change at tile boundaries) rather than per pixel — the
+/// dominant remaining PPU cost after the sprite fix (see `docs/dev/Profiling.md`).
+/// `mode` is hoisted from the caller so it is computed once per line, not per
+/// pixel.
+fn fill_background_line(
+    wram: &[u8],
+    ports: &[u8],
+    layer: BgLayer,
+    line: u8,
+    mode: TileMode,
+    out: &mut [BgSample; SCREEN_WIDTH],
+) {
+    let (scroll_x, scroll_y) = match layer {
+        BgLayer::Scr1 => (ports[SCR1_SCROLL_X], ports[SCR1_SCROLL_Y]),
+        BgLayer::Scr2 => (ports[SCR2_SCROLL_X], ports[SCR2_SCROLL_Y]),
+    };
+    let bg_y = (line as u16 + scroll_y as u16) & BG_WRAP_MASK;
+    let map_row = (bg_y >> 3) as usize;
+    let base = map_base(ports, layer);
+
+    // Cached state for the current tile column; recomputed only when the span
+    // changes. `cur_col = usize::MAX` forces a load on the first pixel.
+    let mut cur_col = usize::MAX;
+    let mut palette = 0u8;
+    let mut hflip = false;
+    let mut row_bytes = [0u8; 4];
+
+    for (x, slot) in out.iter_mut().enumerate() {
+        let bg_x = (x as u16 + scroll_x as u16) & BG_WRAP_MASK;
+        let col = (bg_x >> 3) as usize;
+        if col != cur_col {
+            cur_col = col;
+            let entry = tilemap_entry(wram, base, col, map_row);
+            palette = entry.palette;
+            hflip = entry.hflip;
+            let ty = if entry.vflip {
+                7 - (bg_y & 7) as usize
+            } else {
+                (bg_y & 7) as usize
+            };
+            row_bytes = mode.read_row(wram, mode.bg_tile(&entry), ty);
+        }
+        let mut tx = (bg_x & 7) as usize;
+        if hflip {
+            tx = 7 - tx;
+        }
+        *slot = BgSample {
+            pixel: mode.pixel_in_row(&row_bytes, tx),
+            palette,
+        };
     }
 }
 
