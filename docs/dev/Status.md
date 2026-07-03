@@ -125,3 +125,17 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   bit 7 (`color() = mode.bit(2)`), i.e. the 8b assumption was correct. The frontend runs `.wsc` images as
   Color (`set_model`) and shows the model in the status bar. See DevelopmentPlan 実装メモ（8 追補）.
 - **8f–8g (pending)**: Color APU extensions (Hyper Voice); test consolidation + final doc pass.
+
+## Tooling — profiling & benchmarks
+
+Performance measurement infrastructure (see `docs/dev/Profiling.md`):
+
+- **In-core frame profiler** — `swanium-core`'s `profiling` feature (off by default, zero overhead,
+  fully deterministic) accumulates per-subsystem wall-clock time (CPU / PPU / APU / DMA) inside
+  `System::drive_frame`; read it via `System::profile_snapshot()` (`crates/core/src/profile.rs`).
+  The `profile` example (`cargo run -p swanium-core --features profiling --example profile --release`)
+  prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM.
+- **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`
+  plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
+- **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
+  `[profile.release]` and `[profile.bench]`.
