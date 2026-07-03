@@ -287,6 +287,10 @@ impl Bus {
 
     /// Execute a pending GDMA transfer synchronously (if armed via port 0x48).
     ///
+    /// Normally invoked from the port-0x48 write handler the instant a game arms
+    /// the transfer, mirroring the hardware's synchronous, CPU-stalling burst.
+    /// Kept public for tests that arm and drive GDMA directly.
+    ///
     /// Returns the approximate number of CPU cycles consumed by the transfer
     /// (0 if GDMA was not active). Fires [`IrqSource::GdmaComplete`] on
     /// completion.
@@ -616,6 +620,18 @@ impl MemoryBus for Bus {
             0x44 => self.ports[0x44] = value & 0xFE,
             // GDMA counter: bit 0 forced to 0
             0x46 => self.ports[0x46] = value & 0xFE,
+            // GDMA control: writing bit 7 starts a synchronous burst transfer,
+            // exactly as on hardware where OUT to this port stalls the CPU for
+            // the duration of the copy. Executing it here — rather than deferring
+            // to a per-scanline tick — is required for correctness: a game that
+            // triggers several GDMAs within one scanline's CPU budget (e.g. Lode
+            // Runner updating its tilemap row by row) would otherwise have all but
+            // the last transfer silently dropped, since each arm overwrites the
+            // shared GDMA register file (0x40–0x48).
+            0x48 => {
+                self.ports[0x48] = value;
+                self.tick_gdma();
+            }
             // SDMA source segment: bits 4-7 ignored
             0x4C => self.ports[0x4C] = value & 0x0F,
             0x4D => {}

@@ -267,15 +267,18 @@ fn int_cause_clear_leaves_other_bits_intact() {
 
 fn setup_gdma_ctrl_read() -> (u8, Bus) {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    // 0xC0 = start (bit 7) + decrement direction (bit 6). With length 0 the
+    // burst auto-completes instantly, so the busy bit (7) is already clear by
+    // the time the CPU reads the register back; only the direction bit remains.
     bus.write_io(0x48, 0xC0);
     let first = bus.read_io(0x48);
     (first, bus)
 }
 
 #[test]
-fn gdma_ctrl_first_read_returns_written_value() {
+fn gdma_ctrl_first_read_returns_direction_bit_after_autocompletion() {
     let (first, _) = setup_gdma_ctrl_read();
-    assert_eq!(first, 0xC0);
+    assert_eq!(first, 0x40);
 }
 
 #[test]
@@ -577,6 +580,41 @@ fn gdma_clears_enable_bit_after_transfer() {
     bus.tick_gdma();
     // ctrl should be cleared after completion
     assert_eq!(bus.read_io(0x48), 0x00);
+}
+
+/// Regression: arming GDMA via port 0x48 must transfer synchronously, so two
+/// arms in quick succession (as a game updating several tilemap regions per
+/// frame does) both land. Before GDMA ran on the port write, execution was
+/// deferred to a single per-scanline tick and every transfer but the last was
+/// silently dropped — the root cause of the Lode Runner tilemap corruption.
+#[test]
+fn back_to_back_gdma_arms_both_complete() {
+    let mut rom = vec![0u8; 0x10000];
+    rom[0xFFF0] = 0x11;
+    rom[0xFFF1] = 0x22;
+    let mut bus = Bus::new(rom);
+    bus.write_io(0x42, 0x0F); // src segment 0xF (→ ROM at 0xFxxxx)
+
+    // First transfer: 2 bytes from 0xFFFF0 → WRAM 0x0010, armed with no
+    // intervening tick_gdma() call.
+    bus.write_io(0x40, 0xF0);
+    bus.write_io(0x41, 0xFF);
+    bus.write_io(0x44, 0x10);
+    bus.write_io(0x45, 0x00);
+    bus.write_io(0x46, 2);
+    bus.write_io(0x48, 0x80);
+
+    // Second transfer: same source to a different destination 0x0030.
+    bus.write_io(0x40, 0xF0);
+    bus.write_io(0x41, 0xFF);
+    bus.write_io(0x44, 0x30);
+    bus.write_io(0x45, 0x00);
+    bus.write_io(0x46, 2);
+    bus.write_io(0x48, 0x80);
+
+    // Both destinations received the bytes; the first was not clobbered.
+    assert_eq!([bus.read_u8(0x0010), bus.read_u8(0x0011)], [0x11, 0x22]);
+    assert_eq!([bus.read_u8(0x0030), bus.read_u8(0x0031)], [0x11, 0x22]);
 }
 
 // ── PPU integration ──────────────────────────────────────────────────────────
