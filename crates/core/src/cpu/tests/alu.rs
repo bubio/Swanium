@@ -11,7 +11,7 @@ fn add_al_imm8_sets_carry_and_aux_carry() {
     assert!(!cpu.flags.zero);
     assert!(!cpu.flags.sign);
     assert!(cpu.flags.parity); // 0x03 has even popcount
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn inc_ax_sets_overflow_at_signed_boundary_but_not_carry() {
     assert!(cpu.flags.overflow);
     assert!(cpu.flags.aux_carry);
     assert!(cpu.flags.carry, "INC must not modify CF");
-    assert_eq!(cycles, 2);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -112,5 +112,5 @@ fn add_rm16_r16_register_form() {
     );
     assert_eq!(cpu.regs.bx, 0x0015);
     assert_eq!(cpu.regs.ax, 0x0010, "source register must be unchanged");
-    assert_eq!(cycles, 3);
+    assert_eq!(cycles, 1);
 }

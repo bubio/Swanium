@@ -6,7 +6,7 @@ fn shl_rm8_by_1_sets_carry_from_vacated_bit() {
     let (cpu, cycles, _) = run_with(|cpu| cpu.regs.ax = 0x0081, &[0xD0, 0xE0]);
     assert_eq!(cpu.regs.ax & 0xFF, 0x02);
     assert!(cpu.flags.carry);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn mul_rm8_sets_carry_and_overflow_when_result_overflows_al() {
     assert_eq!(cpu.regs.ax, 0x0100);
     assert!(cpu.flags.carry);
     assert!(cpu.flags.overflow);
-    assert_eq!(cycles, 72);
+    assert_eq!(cycles, 3);
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn loop_decrements_cx_and_branches_while_nonzero() {
     let (cpu, cycles, _) = run_with(|cpu| cpu.regs.cx = 0x0002, &[0xE2, 0xFE]);
     assert_eq!(cpu.regs.cx, 1);
     assert_eq!(cpu.regs.ip, 0);
-    assert_eq!(cycles, 17);
+    assert_eq!(cycles, 5);
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn loop_does_not_branch_when_cx_reaches_zero() {
     let (cpu, cycles, _) = run_with(|cpu| cpu.regs.cx = 0x0001, &[0xE2, 0xFE]);
     assert_eq!(cpu.regs.cx, 0);
     assert_eq!(cpu.regs.ip, 2);
-    assert_eq!(cycles, 5);
+    assert_eq!(cycles, 2);
 }
 
 #[test]

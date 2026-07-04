@@ -191,7 +191,7 @@ impl System {
         while spent < budget {
             if self.cpu.flags.interrupt {
                 if let Some(vector) = self.bus.pending_irq() {
-                    self.cpu.handle_irq(&mut self.bus, vector);
+                    spent += self.cpu.handle_irq(&mut self.bus, vector);
                 }
             }
             spent += self.cpu.step(&mut self.bus);

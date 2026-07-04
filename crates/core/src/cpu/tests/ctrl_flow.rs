@@ -1,4 +1,6 @@
-use super::run_with;
+use super::{run_with, FlatMemory};
+use crate::cpu::timing::IRQ_ACK;
+use crate::cpu::Cpu;
 
 #[test]
 fn jmp_short_advances_ip_by_signed_offset() {
@@ -6,7 +8,7 @@ fn jmp_short_advances_ip_by_signed_offset() {
     // IP=2, so the landing address is 2 + 5 = 7.
     let (cpu, cycles, _) = run_with(|_| {}, &[0xEB, 0x05]);
     assert_eq!(cpu.regs.ip, 7);
-    assert_eq!(cycles, 8);
+    assert_eq!(cycles, 4);
 }
 
 #[test]
@@ -21,7 +23,7 @@ fn jz_taken_when_zero_flag_set() {
     // JZ +0x03 (0x74 0x03), taken.
     let (cpu, cycles, _) = run_with(|cpu| cpu.flags.zero = true, &[0x74, 0x03]);
     assert_eq!(cpu.regs.ip, 5);
-    assert_eq!(cycles, 16);
+    assert_eq!(cycles, 4);
 }
 
 #[test]
@@ -29,7 +31,7 @@ fn jz_not_taken_when_zero_flag_clear() {
     // JZ +0x03 (0x74 0x03), not taken: IP only advances past the instruction.
     let (cpu, cycles, _) = run_with(|cpu| cpu.flags.zero = false, &[0x74, 0x03]);
     assert_eq!(cpu.regs.ip, 2);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 1);
 }
 
 #[test]
@@ -54,7 +56,7 @@ fn call_pushes_return_address_and_jumps() {
     assert_eq!(cpu.regs.ip, 0x13);
     assert_eq!(cpu.regs.sp, 0xFFFC);
     assert_eq!(mem.read_u16(0xFFFC), 3);
-    assert_eq!(cycles, 16);
+    assert_eq!(cycles, 5);
 }
 
 #[test]
@@ -79,7 +81,7 @@ fn ret_pops_return_address() {
 fn hlt_sets_halted_and_subsequent_steps_are_idempotent() {
     let (mut cpu, cycles, _) = run_with(|_| {}, &[0xF4]);
     assert!(cpu.halted);
-    assert_eq!(cycles, 2);
+    assert_eq!(cycles, 9);
     let mut mem = super::FlatMemory::new();
     let again = cpu.step(&mut mem);
     assert_eq!(again, 1);
@@ -105,4 +107,35 @@ fn flag_instructions_clc_stc_cli_sti_cld_std() {
 
     let (cpu, _, _) = run_with(|cpu| cpu.flags.direction = false, &[0xFD]); // STD
     assert!(cpu.flags.direction);
+}
+
+#[test]
+fn handle_irq_dispatches_and_reports_acknowledge_cost() {
+    // Interrupt vector 0x20 → handler at 0x1234:0x5678 (IVT entry at 0x20*4).
+    let mut mem = FlatMemory::new();
+    mem.load(0x80, &[0x78, 0x56, 0x34, 0x12]);
+    let mut cpu = Cpu::new();
+    cpu.reset(0x1000, 0x2000);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0xFFFE;
+    cpu.flags.interrupt = true;
+
+    let cost = cpu.handle_irq(&mut mem, 0x20);
+
+    // The acknowledge/dispatch cost is what `System::run_cpu_cycles` bills a
+    // maskable IRQ; the fix for FF4's black-screen relied on this being a small
+    // V30 value rather than the 8086's ~32/51.
+    assert_eq!(cost, IRQ_ACK);
+    // Jumped to the vector, cleared IF, and pushed FLAGS/CS/IP (SP -= 6).
+    assert_eq!((cpu.regs.cs, cpu.regs.ip), (0x1234, 0x5678));
+    assert!(!cpu.flags.interrupt);
+    assert_eq!(cpu.regs.sp, 0xFFF8);
+}
+
+#[test]
+fn software_int_reports_full_cost_without_double_counting_acknowledge() {
+    // INT 0x21 (0xCD 0x21): the opcode reports its own total cost and ignores
+    // handle_irq's return, so it is not double-charged the acknowledge cost.
+    let (_, cycles, _) = run_with(|_| {}, &[0xCD, 0x21]);
+    assert_eq!(cycles, 10);
 }
