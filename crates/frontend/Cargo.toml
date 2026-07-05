@@ -16,3 +16,6 @@ input = { path = "../input" }
 tracing = "0.1"
 slint = "1"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "pollster"] }
+
+[build-dependencies]
+slint-build = "1"

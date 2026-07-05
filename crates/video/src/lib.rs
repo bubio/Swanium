@@ -61,6 +61,77 @@ pub fn write_rgba(framebuffer: &[u16], out: &mut [u8]) {
     }
 }
 
+/// Convert the framebuffer into `out`, rotated 90° clockwise.
+///
+/// Used for vertical-orientation games: the core always renders a
+/// [`SCREEN_WIDTH`]×[`SCREEN_HEIGHT`] (224×144) buffer, and this produces the
+/// 144×224 image the player sees with the console turned on its side. The
+/// destination is written row-major at the rotated dimensions (width
+/// [`SCREEN_HEIGHT`], height [`SCREEN_WIDTH`]).
+///
+/// A source pixel `(sx, sy)` maps to destination `(SCREEN_HEIGHT-1-sy, sx)`.
+///
+/// # Panics
+///
+/// Panics if `framebuffer` is not exactly `SCREEN_WIDTH * SCREEN_HEIGHT` long,
+/// or if `out` is shorter than `framebuffer.len() * 4`.
+pub fn write_rgba_rotated_cw(framebuffer: &[u16], out: &mut [u8]) {
+    assert_eq!(
+        framebuffer.len(),
+        SCREEN_WIDTH * SCREEN_HEIGHT,
+        "rotation expects a full {SCREEN_WIDTH}×{SCREEN_HEIGHT} framebuffer"
+    );
+    assert!(
+        out.len() >= framebuffer.len() * BYTES_PER_PIXEL,
+        "output buffer too small: {} < {}",
+        out.len(),
+        framebuffer.len() * BYTES_PER_PIXEL
+    );
+    // Destination is SCREEN_HEIGHT wide by SCREEN_WIDTH tall. Walk it row-major
+    // so writes to `out` stay sequential; gather each pixel from the source.
+    for (dy, sx) in (0..SCREEN_WIDTH).enumerate() {
+        for (dx, inv_sy) in (0..SCREEN_HEIGHT).enumerate() {
+            let sy = SCREEN_HEIGHT - 1 - inv_sy;
+            let color = framebuffer[sy * SCREEN_WIDTH + sx];
+            let dst = (dy * SCREEN_HEIGHT + dx) * BYTES_PER_PIXEL;
+            out[dst..dst + BYTES_PER_PIXEL].copy_from_slice(&rgb444_to_rgba(color));
+        }
+    }
+}
+
+/// Convert the framebuffer into `out`, rotated 90° counter-clockwise.
+///
+/// The counter-clockwise twin of [`write_rgba_rotated_cw`]: same 144×224
+/// destination, but a source pixel `(sx, sy)` maps to destination
+/// `(sy, SCREEN_WIDTH-1-sx)`.
+///
+/// # Panics
+///
+/// Panics if `framebuffer` is not exactly `SCREEN_WIDTH * SCREEN_HEIGHT` long,
+/// or if `out` is shorter than `framebuffer.len() * 4`.
+pub fn write_rgba_rotated_ccw(framebuffer: &[u16], out: &mut [u8]) {
+    assert_eq!(
+        framebuffer.len(),
+        SCREEN_WIDTH * SCREEN_HEIGHT,
+        "rotation expects a full {SCREEN_WIDTH}×{SCREEN_HEIGHT} framebuffer"
+    );
+    assert!(
+        out.len() >= framebuffer.len() * BYTES_PER_PIXEL,
+        "output buffer too small: {} < {}",
+        out.len(),
+        framebuffer.len() * BYTES_PER_PIXEL
+    );
+    // Destination is SCREEN_HEIGHT wide by SCREEN_WIDTH tall. Walk it row-major.
+    for (inv_dy, sx) in (0..SCREEN_WIDTH).enumerate() {
+        let dy = SCREEN_WIDTH - 1 - inv_dy;
+        for (dx, sy) in (0..SCREEN_HEIGHT).enumerate() {
+            let color = framebuffer[sy * SCREEN_WIDTH + sx];
+            let dst = (dy * SCREEN_HEIGHT + dx) * BYTES_PER_PIXEL;
+            out[dst..dst + BYTES_PER_PIXEL].copy_from_slice(&rgb444_to_rgba(color));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +192,76 @@ mod tests {
     #[should_panic(expected = "output buffer too small")]
     fn write_rgba_panics_on_small_buffer() {
         write_rgba(&[0u16; 4], &mut [0u8; 4]);
+    }
+
+    #[test]
+    fn rotated_output_has_same_pixel_count() {
+        let fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        let mut out = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        write_rgba_rotated_cw(&fb, &mut out);
+        assert_eq!(out.len(), SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL);
+    }
+
+    #[test]
+    fn rotated_top_left_source_lands_bottom_left_of_rotated_image() {
+        // Source (0,0) → destination (SCREEN_HEIGHT-1, 0): rotating CW, the
+        // original top-left corner ends up at the bottom-left of the new image.
+        let mut fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        fb[0] = 0x0F00; // pure red
+        let mut out = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        write_rgba_rotated_cw(&fb, &mut out);
+        // Rotated image is SCREEN_HEIGHT wide; dst (dx, dy) = (SCREEN_HEIGHT-1, 0),
+        // i.e. row 0, column SCREEN_HEIGHT-1.
+        let dst = (SCREEN_HEIGHT - 1) * BYTES_PER_PIXEL;
+        assert_eq!(&out[dst..dst + 4], &[0xFF, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn rotated_top_right_source_lands_top_left_of_rotated_image() {
+        // Source (SCREEN_WIDTH-1, 0) → destination (SCREEN_HEIGHT-1, SCREEN_WIDTH-1).
+        let mut fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        fb[SCREEN_WIDTH - 1] = 0x00F0; // pure green
+        let mut out = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        write_rgba_rotated_cw(&fb, &mut out);
+        let dst = ((SCREEN_HEIGHT - 1) + (SCREEN_WIDTH - 1) * SCREEN_HEIGHT) * BYTES_PER_PIXEL;
+        assert_eq!(&out[dst..dst + 4], &[0x00, 0xFF, 0x00, 0xFF]);
+    }
+
+    #[test]
+    #[should_panic(expected = "full")]
+    fn write_rgba_rotated_cw_panics_on_wrong_size() {
+        write_rgba_rotated_cw(&[0u16; 4], &mut [0u8; 16]);
+    }
+
+    #[test]
+    fn rotated_ccw_top_left_source_lands_top_right_of_rotated_image() {
+        // Source (0,0) → destination (0, SCREEN_WIDTH-1): rotating CCW, the
+        // original top-left corner ends up at the top-right of the new image.
+        let mut fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        fb[0] = 0x0F00; // pure red
+        let mut out = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        write_rgba_rotated_ccw(&fb, &mut out);
+        // Rotated image is SCREEN_HEIGHT wide; dst (dx, dy) = (0, SCREEN_WIDTH-1).
+        let dst = ((SCREEN_WIDTH - 1) * SCREEN_HEIGHT) * BYTES_PER_PIXEL;
+        assert_eq!(&out[dst..dst + 4], &[0xFF, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn cw_and_ccw_are_mirror_images_of_each_other() {
+        // Rotating CW then reading a pixel that CCW would place at the opposite
+        // corner: the two rotations must not coincide for an asymmetric input.
+        let mut fb = vec![0u16; SCREEN_WIDTH * SCREEN_HEIGHT];
+        fb[0] = 0x0FFF;
+        let mut cw = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        let mut ccw = vec![0u8; fb.len() * BYTES_PER_PIXEL];
+        write_rgba_rotated_cw(&fb, &mut cw);
+        write_rgba_rotated_ccw(&fb, &mut ccw);
+        assert_ne!(cw, ccw);
+    }
+
+    #[test]
+    #[should_panic(expected = "full")]
+    fn write_rgba_rotated_ccw_panics_on_wrong_size() {
+        write_rgba_rotated_ccw(&[0u16; 4], &mut [0u8; 16]);
     }
 }

@@ -1,0 +1,46 @@
+// "About" window: name, version, and a one-line description.
+//
+// The Rust side fills `version` from `CARGO_PKG_VERSION`.
+
+import { Button, VerticalBox } from "std-widgets.slint";
+
+export component AboutWindow inherits Window {
+    in property <string> version;
+    callback close-about();
+
+    title: "About Swanium";
+    preferred-width: 360px;
+    preferred-height: 220px;
+
+    VerticalBox {
+        alignment: center;
+        Text {
+            text: "Swanium";
+            font-size: 24px;
+            font-weight: 800;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Version " + root.version;
+            horizontal-alignment: center;
+            color: #999999;
+        }
+        Text {
+            text: "A cross-platform WonderSwan / WonderSwan Color emulator written in Rust.";
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "https://github.com/bubio/Swanium";
+            horizontal-alignment: center;
+            color: #6699cc;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Button {
+                text: "Close";
+                clicked => { root.close-about(); }
+            }
+        }
+    }
+}

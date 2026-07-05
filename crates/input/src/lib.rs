@@ -59,6 +59,50 @@ impl Button {
         Button::B,
     ];
 
+    /// A stable, machine-readable name for this button.
+    ///
+    /// Used as the key when persisting host-input bindings to the config file
+    /// (which cannot reference this enum directly — see
+    /// `common::config::Config::keyboard_bindings`). Round-trips through
+    /// [`Button::from_name`].
+    pub fn name(self) -> &'static str {
+        match self {
+            Button::X1 => "X1",
+            Button::X2 => "X2",
+            Button::X3 => "X3",
+            Button::X4 => "X4",
+            Button::Y1 => "Y1",
+            Button::Y2 => "Y2",
+            Button::Y3 => "Y3",
+            Button::Y4 => "Y4",
+            Button::Start => "Start",
+            Button::A => "A",
+            Button::B => "B",
+        }
+    }
+
+    /// Parse a [`Button`] from its [`name`](Button::name), or `None` if unknown.
+    pub fn from_name(name: &str) -> Option<Button> {
+        Button::ALL.into_iter().find(|b| b.name() == name)
+    }
+
+    /// A short human-facing label for this button (for settings UIs).
+    pub fn label(self) -> &'static str {
+        match self {
+            Button::X1 => "X1 (↑)",
+            Button::X2 => "X2 (→)",
+            Button::X3 => "X3 (↓)",
+            Button::X4 => "X4 (←)",
+            Button::Y1 => "Y1",
+            Button::Y2 => "Y2",
+            Button::Y3 => "Y3",
+            Button::Y4 => "Y4",
+            Button::Start => "Start",
+            Button::A => "A",
+            Button::B => "B",
+        }
+    }
+
     /// The single-key [`KeyState`] this button corresponds to.
     pub fn key(self) -> KeyState {
         match self {
@@ -141,6 +185,18 @@ mod tests {
     #[test]
     fn all_lists_eleven_keys() {
         assert_eq!(Button::ALL.len(), 11);
+    }
+
+    #[test]
+    fn name_round_trips_for_every_button() {
+        for button in Button::ALL {
+            assert_eq!(Button::from_name(button.name()), Some(button));
+        }
+    }
+
+    #[test]
+    fn from_name_rejects_unknown() {
+        assert_eq!(Button::from_name("Nope"), None);
     }
 
     #[test]

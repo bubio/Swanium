@@ -1,0 +1,200 @@
+// Main emulator window: native menu bar, screen area, and status bar.
+//
+// The Rust side (`crates/frontend/src/main.rs`) drives every `in property`
+// and implements every `callback`. Settings and About are separate top-level
+// windows, re-exported here so `slint::include_modules!()` exposes them too.
+
+import { SettingsWindow, BindingRow } from "settings.slint";
+import { AboutWindow } from "about.slint";
+
+export { SettingsWindow, BindingRow, AboutWindow }
+
+// Texture-sampling filter, mirrored by `common::config::RendererKind`.
+export enum Renderer { Nearest, Linear }
+
+export component MainWindow inherits Window {
+    in property <image> frame;
+    in property <length> view-width;
+    in property <length> view-height;
+    in property <length> status-bar-height;
+    in property <bool> has-rom;
+    in property <string> window-title: "Swanium";
+    in property <string> status-text: "No ROM loaded — press O or use File ▸ Open ROM";
+
+    // View state, reflected in the menu checkmarks.
+    in property <int> current-scale: 3;
+    in property <bool> fullscreen;
+    // Rotation: 0 = none, 1 = right (CW), 2 = left (CCW).
+    in property <int> rotation;
+    in property <Renderer> renderer: Renderer.Nearest;
+    // Recent-ROM display names, most-recent first (opened by index).
+    in property <[string]> recent-files;
+
+    callback key-event(string, bool);
+    callback open-rom();
+    callback open-recent(int);
+    callback clear-recent();
+    callback set-scale(int);
+    callback toggle-fullscreen();
+    callback set-rotation(int);
+    callback set-renderer(Renderer);
+    callback open-settings();
+    callback show-about();
+    callback quit();
+
+    title: root.window-title;
+    // Only a *preferred* size, not a hard `width`/`height` binding: pinning the
+    // window size would make it fixed-size and cause `set_fullscreen` to be
+    // ignored. Runtime resizing (scale changes) is driven from Rust via
+    // `window().set_size()`.
+    preferred-width: root.view-width;
+    preferred-height: root.view-height;
+    forward-focus: scope;
+
+    MenuBar {
+        Menu {
+            title: "File";
+            MenuItem {
+                title: "Open ROM…";
+                shortcut: @keys(Control + O);
+                activated => { root.open-rom(); }
+            }
+            Menu {
+                title: "Open Recent";
+                for name[i] in root.recent-files: MenuItem {
+                    title: name;
+                    activated => { root.open-recent(i); }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    title: "Clear History";
+                    enabled: root.recent-files.length > 0;
+                    activated => { root.clear-recent(); }
+                }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Settings…";
+                activated => { root.open-settings(); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Quit";
+                shortcut: @keys(Control + Q);
+                activated => { root.quit(); }
+            }
+        }
+        Menu {
+            title: "View";
+            // Checkmarks are rendered via a title prefix rather than the
+            // `checkable`/`checked` properties: activating a checkable item
+            // toggles `checked` imperatively, which overrides our state binding
+            // and leaves stale checks (e.g. two renderers ticked at once).
+            Menu {
+                title: "Scale";
+                MenuItem {
+                    title: root.current-scale == 1 ? "✓ 1x" : "1x";
+                    activated => { root.set-scale(1); }
+                }
+                MenuItem {
+                    title: root.current-scale == 2 ? "✓ 2x" : "2x";
+                    activated => { root.set-scale(2); }
+                }
+                MenuItem {
+                    title: root.current-scale == 3 ? "✓ 3x" : "3x";
+                    activated => { root.set-scale(3); }
+                }
+                MenuItem {
+                    title: root.current-scale == 4 ? "✓ 4x" : "4x";
+                    activated => { root.set-scale(4); }
+                }
+            }
+            MenuItem {
+                title: root.fullscreen ? "✓ Fullscreen" : "Fullscreen";
+                shortcut: @keys(F11);
+                activated => { root.toggle-fullscreen(); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: root.rotation == 2 ? "✓ Rotate Left" : "Rotate Left";
+                activated => { root.set-rotation(2); }
+            }
+            MenuItem {
+                title: root.rotation == 1 ? "✓ Rotate Right" : "Rotate Right";
+                activated => { root.set-rotation(1); }
+            }
+            MenuSeparator {}
+            Menu {
+                title: "Renderer";
+                MenuItem {
+                    title: root.renderer == Renderer.Nearest
+                        ? "✓ Nearest Neighbor" : "Nearest Neighbor";
+                    activated => { root.set-renderer(Renderer.Nearest); }
+                }
+                MenuItem {
+                    title: root.renderer == Renderer.Linear ? "✓ Bilinear" : "Bilinear";
+                    activated => { root.set-renderer(Renderer.Linear); }
+                }
+            }
+        }
+        Menu {
+            title: "Help";
+            MenuItem {
+                title: "About Swanium…";
+                activated => { root.show-about(); }
+            }
+        }
+    }
+
+    VerticalLayout {
+        // Screen area — stretches to fill everything above the status bar.
+        Rectangle {
+            background: #000000;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.frame;
+                // Preserve the framebuffer's aspect ratio, letterboxing when the
+                // area isn't an exact integer multiple (notably in fullscreen).
+                image-fit: contain;
+                image-rendering: root.renderer == Renderer.Nearest
+                    ? ImageRendering.pixelated
+                    : ImageRendering.smooth;
+            }
+            if !root.has-rom: Text {
+                text: "Press O to open a ROM";
+                color: #cccccc;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        // Status bar: fixed-height strip showing the ROM name and FPS.
+        Rectangle {
+            height: root.status-bar-height;
+            background: #1e1e1e;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                Text {
+                    text: root.status-text;
+                    color: #cccccc;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                }
+            }
+        }
+    }
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            root.key-event(event.text, true);
+            accept
+        }
+        key-released(event) => {
+            root.key-event(event.text, false);
+            reject
+        }
+    }
+}
