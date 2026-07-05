@@ -567,7 +567,7 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 | 8d | WSC メモリ拡張: `0x4000–0xFFFF` を WRAM にマップ、display mode ポート(`0x60`)配線 | ✅ 完了 |
 | 8e | RTC 実装: BCD 日時・アラーム・`0xCA/0xCB` コマンドプロトコル・計時（時刻注入） | ✅ 完了 |
 | 8f | Color APU 拡張（Hyper Voice）: 8bit PCM 拡張・音量シフト・L/R ルーティング・出力ミックス（Color ゲート） | ✅ 完了 |
-| 8g | テスト整備 + mono 回帰確認、`Status.md`/本書更新 | ⏳ |
+| 8g | テスト整備 + mono 回帰確認、`Status.md`/本書更新 | ✅ 完了 |
 
 **実装メモ（8b）**
 -   `ColorPaletteResolver`（`crates/core/src/ppu/palette.rs`）は内蔵RAMのパレット領域
@@ -677,6 +677,24 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 -   **未検証/残課題**: 0xA0 の bit1/bit2/bit7 の正確な意味は未精査（値 0x86/0x87 は Mednafen 準拠で固定）。
     startio[] 相当の他ポート初期値（0x02=0x9D, 0x03=0xBB, 0x14=0x01, 0xB5=0x40 等）は未適用だが、上記 4 本の起動には
     不要だった。今後ゲーム互換で必要になれば追加する。
+
+**実装メモ（8g: テスト整備 + mono 回帰）**
+-   **狙い**: 8a–8f は各サブシステム内の unit テストで厚く検証済（`src/ppu/tests.rs`・`src/bus/tests.rs`・
+    `src/apu/mod.rs`：color 39／HyperVoice 13／RTC 17 本規模）。一方 `crates/core/tests/` の統合テストは
+    すべて **mono 前提**（`ppu_render.rs`・`apu_render.rs`・`system_frame.rs`）だったため、8g では
+    **Color 経路を frontend と同じ公開 API で end-to-end に通す統合テスト**を追加し、各テストを
+    **mono 回帰の対**として対称に置いた（Color 機能はすべて `HardwareModel`／port 0x60 bit7 でゲートされるため、
+    mono／color ビット未セットでは Phase 8 以前の挙動に戻ることを同一ハーネスで固定する）。
+-   **`crates/core/tests/color_render.rs`（新規9本）**: (1) Color 機＋0x60 bit7 で 1 スキャンライン描画すると
+    パレットRAM(0xFE00) の RGB444 が framebuffer に出る／color ビット未セットは mono 濃淡へフォールバック／
+    mono 機は color ビットを無視／mono ではパレットRAM 書き込み自体が破棄される（8d の read/write 両ゲート）。
+    (2) HyperVoice：Color でステレオ出力（`data=0x10`→`(0x10<<8)>>5=128`→`×MIX_SCALE 32=4096`）・L のみルーティング・
+    mono はレジスタを立てても無音・実行中 Color→Mono 降格で stale enable が漏れない。
+    (3) CPU→I/O→PPU：ゲーム自身が `OUT 0x60,0x80` で color ビットを立てる経路。
+-   **`crates/core/tests/system_frame.rs`（新規2本）**: `System::run_frame` 経由で (1) Color タイルが
+    framebuffer に到達、(2) RTC が CPU 非介在でフレーム駆動のみで 1 秒進む（`MASTER_CLOCK_HZ.div_ceil(CYCLES_PER_FRAME)`
+    ＝76 フレームで秒レジスタが 0→1）。RTC はフッタ解析が要るため `System::from_rom`（`new` は footer 非解析）を使用。
+-   **結果**: workspace 全体 557 tests 通過（+2 は env ゲートの opt-in public-ROM、`ignored`）。これで Phase 8 を完了とする。
 
 ---
 

@@ -3,9 +3,8 @@
 Last updated: 2026-07-05. Update this file (not AGENTS.md) when implementation progress changes.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
-(WonderSwan Color)** is in progress (subphases 8a–8f done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour; only 8g — test consolidation
-and the final doc pass — remains). The workspace has 526 passing
+(WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 557 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -109,7 +108,7 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
 Remaining Phase 7 UI polish (deferred, non-blocking): startup-pause; Bicubic renderer
 (needs a future wgpu upscaling pipeline — Slint's image path exposes only nearest/bilinear).
 
-## Phase 8 — WonderSwan Color (in progress)
+## Phase 8 — WonderSwan Color (complete)
 
 Realizes the Color abstraction points from DevelopmentPlan §6. Subphase breakdown and the
 framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan Phase 8.
@@ -163,7 +162,13 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   direct path `0x64`–`0x67`, Sound-DMA feeding
   (SDMA transfer engine still unimplemented — registers shadowed only), the sample-rate divisor, and the
   0x69-vs-Mednafen-0x95 data-port choice — see DevelopmentPlan 実装メモ（8f）.
-- **8g (pending)**: test consolidation + final doc pass.
+- **8g (done)**: integration-level test consolidation for the Phase 8 features and mono-regression
+  parity, plus this final doc pass. New end-to-end tests drive the Color paths through the same public
+  API the frontend uses, each pinned against its mono-regression twin: `crates/core/tests/color_render.rs`
+  (colour PPU rendering from palette RAM, HyperVoice stereo output + routing, and the CPU→I/O→PPU
+  colour-bit path — with mono/colour-bit-clear falling back to the shade path and dropping HyperVoice) and
+  two `crates/core/tests/system_frame.rs` cases (a colour tile reaching the framebuffer through
+  `System::run_frame`, and the RTC free-running one second across frames from the frame driver alone).
 
 ## Tooling — profiling & benchmarks
 
