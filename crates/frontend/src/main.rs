@@ -79,6 +79,11 @@ struct App {
     /// macOS animates; `None` means the OS state is the source of truth (so an
     /// external change via the title-bar button is adopted).
     pending_fullscreen: Rc<Cell<Option<bool>>>,
+    /// Master volume, 0–100, read by the frame timer and pushed to the audio
+    /// stream each frame. Persisted to config on change.
+    volume: Rc<Cell<u8>>,
+    /// Whether emulation is paused. Runtime-only — never persisted.
+    paused: Rc<Cell<bool>>,
     dump_request: Rc<Cell<bool>>,
     open_request: Rc<Cell<bool>>,
     settings: Rc<RefCell<Option<SettingsWindow>>>,
@@ -109,6 +114,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     }
 
     let keymap = keymap_from_config(&config);
+    let initial_volume = config.volume.min(100);
 
     let window = MainWindow::new()?;
 
@@ -122,6 +128,8 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         gamepad: Rc::new(RefCell::new(None)),
         capture: Rc::new(Cell::new(None)),
         pending_fullscreen: Rc::new(Cell::new(None)),
+        volume: Rc::new(Cell::new(initial_volume)),
+        paused: Rc::new(Cell::new(false)),
         dump_request: Rc::new(Cell::new(false)),
         open_request: Rc::new(Cell::new(false)),
         settings: Rc::new(RefCell::new(None)),
@@ -206,6 +214,11 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
 
         let dump = app.dump_request.take();
+        // Paused: do not advance the machine (a manual `P` dump still runs). The
+        // audio ring simply drains to silence while nothing is pushed.
+        if app.paused.get() && !dump {
+            return;
+        }
         let should_run = dump
             || audio_stream
                 .as_ref()
@@ -229,6 +242,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             system.run_frame(keys);
         }
         if let Some(ref mut audio) = audio_stream {
+            audio.set_volume(app.volume.get());
             audio.push(system.audio_samples());
         }
         system.clear_audio_samples();
@@ -386,6 +400,33 @@ fn wire_menu(window: &MainWindow, app: &App) {
             save(&app);
             if let Some(window) = weak.upgrade() {
                 window.set_renderer(renderer);
+            }
+        }
+    });
+    window.on_set_volume({
+        let app = app.clone();
+        let weak = window.as_weak();
+        move |volume| {
+            let volume = volume.clamp(0, 100) as u8;
+            app.config.borrow_mut().volume = volume;
+            app.volume.set(volume);
+            save(&app);
+            if let Some(window) = weak.upgrade() {
+                window.set_volume(volume as i32);
+            }
+        }
+    });
+    window.on_toggle_pause({
+        let app = app.clone();
+        let weak = window.as_weak();
+        move || {
+            let paused = !app.paused.get();
+            app.paused.set(paused);
+            if let Some(window) = weak.upgrade() {
+                window.set_paused(paused);
+                if paused {
+                    window.set_status_text(format!("{} — paused", app.rom_label.borrow()).into());
+                }
             }
         }
     });
@@ -606,6 +647,7 @@ fn apply_view(window: &MainWindow, config: &Config) {
     });
     window.set_fullscreen(config.fullscreen);
     window.set_renderer(to_slint_renderer(config.renderer));
+    window.set_volume(config.volume.min(100) as i32);
     window.window().set_fullscreen(config.fullscreen);
     if !config.fullscreen {
         window.window().set_size(LogicalSize::new(w, h));

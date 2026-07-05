@@ -17,6 +17,14 @@ pub mod stream;
 
 pub use stream::AudioStream;
 
+/// Scale one sample by a 0–100 master volume (100 = unchanged, 0 = silence).
+///
+/// Values above 100 are clamped to 100 (never amplifies past unity, so the
+/// APU's headroom is preserved). Applied producer-side in [`AudioStream::push`].
+pub fn scale_volume(sample: i16, volume: u8) -> i16 {
+    (sample as i32 * volume.min(100) as i32 / 100) as i16
+}
+
 /// A fixed-capacity FIFO of interleaved `i16` audio samples.
 pub struct RingBuffer {
     buffer: Box<[i16]>,
@@ -169,6 +177,29 @@ mod tests {
         let mut out = [0i16; 2];
         rb.pop_into(&mut out);
         assert_eq!(out, [1, 2]);
+    }
+
+    #[test]
+    fn full_volume_leaves_sample_unchanged() {
+        assert_eq!(scale_volume(1000, 100), 1000);
+        assert_eq!(scale_volume(-1000, 100), -1000);
+    }
+
+    #[test]
+    fn zero_volume_is_silence() {
+        assert_eq!(scale_volume(32_767, 0), 0);
+        assert_eq!(scale_volume(-32_768, 0), 0);
+    }
+
+    #[test]
+    fn half_volume_halves_the_sample() {
+        assert_eq!(scale_volume(1000, 50), 500);
+        assert_eq!(scale_volume(-2000, 50), -1000);
+    }
+
+    #[test]
+    fn volume_above_100_is_clamped_to_unity() {
+        assert_eq!(scale_volume(1234, 200), 1234);
     }
 
     #[test]
