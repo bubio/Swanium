@@ -20,7 +20,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, Stream, StreamConfig};
 
 use crate::resample::Resampler;
-use crate::RingBuffer;
+use crate::{scale_volume, RingBuffer};
 
 /// Sample rate the APU generates — must match `swanium_core::apu::Apu::OUTPUT_SAMPLE_RATE`.
 const APU_SAMPLE_RATE: u32 = 24_000;
@@ -45,6 +45,8 @@ pub struct AudioStream {
     resampler: Resampler,
     /// Temporary buffer reused across [`push`](Self::push) calls.
     resampled: Vec<i16>,
+    /// Master volume, 0 (mute) – 100 (full), applied in [`push`](Self::push).
+    volume: u8,
     /// Keeps the cpal stream alive for the lifetime of this struct.
     _stream: Stream,
 }
@@ -79,8 +81,15 @@ impl AudioStream {
             ring_capacity: RING_CAPACITY,
             resampler: Resampler::new(APU_SAMPLE_RATE, device_rate),
             resampled: Vec::new(),
+            volume: 100,
             _stream: stream,
         })
+    }
+
+    /// Set the master volume, 0 (mute) – 100 (full). Values above 100 are
+    /// clamped. Applied to subsequently pushed frames.
+    pub fn set_volume(&mut self, volume: u8) {
+        self.volume = volume.min(100);
     }
 
     /// Push one frame's worth of interleaved stereo `i16` samples from the APU.
@@ -90,6 +99,11 @@ impl AudioStream {
     pub fn push(&mut self, samples: &[i16]) {
         self.resampled.clear();
         self.resampler.process(samples, &mut self.resampled);
+        if self.volume != 100 {
+            for s in &mut self.resampled {
+                *s = scale_volume(*s, self.volume);
+            }
+        }
         let _ = self.ring.lock().unwrap().push(&self.resampled);
     }
 

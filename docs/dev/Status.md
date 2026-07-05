@@ -101,12 +101,14 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
   Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`); Help ▸ About. Menu
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
-  Capture-based input-remapping settings window (keyboard
-  via focus-scope key capture, controller via `poll_capture`) persisting to config. Status
-  bar (ROM name + FPS). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
+  Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted). Capture-based
+  input-remapping settings window (keyboard via focus-scope key capture, controller via
+  `poll_capture`) persisting to config. Status bar (ROM name + FPS + master-volume slider,
+  0–100, applied to the cpal output via `AudioStream::set_volume` / `audio::scale_volume` and
+  persisted). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
 
-Remaining Phase 7 UI polish (deferred, non-blocking): startup-pause; Bicubic renderer
-(needs a future wgpu upscaling pipeline — Slint's image path exposes only nearest/bilinear).
+Remaining Phase 7 UI polish (deferred, non-blocking): Bicubic renderer (needs a future wgpu
+upscaling pipeline — Slint's image path exposes only nearest/bilinear).
 
 ## Phase 8 — WonderSwan Color (complete)
 

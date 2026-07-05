@@ -514,7 +514,19 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         `Quit` を配置し、`open-rom`/`quit` コールバックを既存のオープン処理・`slint::quit_event_loop`
         に配線。`VerticalLayout` 最下段に固定高 22px のステータスバーを置き、ROM 名と FPS（500ms ごとに
         更新）を表示。ステータスバー分だけウィンドウ高を増やし、画面領域は整数スケールを維持。
-    -   起動/一時停止、基本設定画面、キーバインド設定は引き続き後続課題。
+    -   ✅ **キーバインド設定（実装済み）**: 入力リマップ設定ウィンドウ（`SettingsWindow`）で
+        キーボード（focus-scope のキーキャプチャ）・コントローラ（`poll_capture`）を再割り当てし、
+        `config.toml` に永続化。`File ▸ Settings…` から開く。View メニューに Scale/Fullscreen/
+        Rotate/Renderer も配線済み。
+    -   ✅ **一時停止（実装済み）**: `Emulation ▸ Pause`（`Ctrl+P`）で実行時トグル。
+        **永続化しない**（ランタイム状態。`Config::start_paused` は honor せず、起動時 pause も不採用）。
+        タイマーが `paused` 中はフレームを進めず、音声リングはサイレンスへドレインする（手動 `P` ダンプは
+        pause 中も可能）。
+    -   ✅ **音量適用（実装済み）**: ステータスバーの音量スライダー（0–100）で `Config::volume` を編集し、
+        `crates/audio` の純粋関数 `scale_volume` をプロデューサ側（`AudioStream::push`）で適用。frontend は
+        毎フレーム `AudioStream::set_volume(config.volume)` を呼び、値は `config.toml` に永続化。
+    -   基本設定画面（scale/renderer 等の値編集 UI 集約）は View メニュー＋ステータスバーで代替済み。
+        さらなる集約が要れば後続課題。
 -   ✅ **設定ファイル永続化（実装済み）**: `crates/common` の `Config` に serde/toml/directories を導入し、
     `Config::load`/`save`（プラットフォーム設定ディレクトリの `swanium/config.toml`）と path 指定の
     `load_from`/`save_to` を実装。serde `#[serde(default)]` で部分・旧フォーマットも欠損フィールドを
