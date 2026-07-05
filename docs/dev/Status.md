@@ -55,7 +55,18 @@ span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/
 ### APU — Phase 5 (`apu/`) + Phase 8f HyperVoice
 Four 32-sample × 4-bit wave-table channels, per-channel L/R nibble volume, stereo mix;
 ch4 noise (15-bit LFSR, variable tap), ch3 sweep, ch2 voice PCM. Output is interleaved
-i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **HyperVoice** (WSC-only,
+i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **Voice (ch2 PCM)** is
+treated as **signed** (silence `0x80` → 0, per Mednafen `wswan/sound.c`) and reconstructed
+through a per-write 2-tap moving-average (`VoiceLowPass`, fed by `Apu::write_voice` from
+`Bus::write_io` on every `0x89` write while voice mode is on) with a compensating `VOICE_GAIN`.
+Games time-multiplex two PCM voices onto the single voice register at ~2× the audio rate
+(e.g. *Last Alive* ping-pongs a music voice with a second voice, one write per visible scanline
+via the HBlank-timer ISR); the moving average nulls the multiplex component (Nyquist of the
+write stream) that hardware's analog output stage averages out, so the interleave no longer
+reads as a buzz. Filtering the raw write stream — not the value sampled once per scanline by the
+mixer — is required because the CPU→APU per-scanline batching otherwise drops half the writes.
+Further reconstruction-quality tuning (residual multiplex ripple from write-per-scanline jitter)
+is still open. **HyperVoice** (WSC-only,
 Phase 8f) adds a fifth independent 8-bit PCM source: control at port `0x6A`
 (enable / sample-extension mode / volume shift), L/R routing at `0x6B`, data latch at `0x69`;
 the 8-bit sample is expanded and summed into the stereo output at the wave-mix level

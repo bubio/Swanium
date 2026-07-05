@@ -18,6 +18,9 @@ use crate::ppu::{ColorPaletteResolver, MonoPaletteResolver, Ppu, Rgb444};
 /// Open-bus return value for unmapped reads on WonderSwan mono.
 const OPEN_BUS: u8 = 0x90;
 
+/// Sound-control (port 0x90) bit 5: channel 2 acts as the 8-bit PCM voice.
+const SND_CTRL_VOICE: u8 = 0x20;
+
 /// Hardware interrupt request sources (bit positions in INT_CAUSE / INT_ENABLE).
 ///
 /// Priority: higher bit number = higher priority (bit 7 checked first).
@@ -648,6 +651,16 @@ impl MemoryBus for Bus {
             0x6A if self.model.is_color() => self.ports[0x6A] = value,
             0x6B if self.model.is_color() => self.ports[0x6B] = value & 0x6F,
             0x69..=0x6B => {} // mono: HyperVoice absent
+            // Voice (channel-2 PCM) data latch. In voice mode every write feeds
+            // the APU's reconstruction filter, so it sees the full PCM stream
+            // (games write it faster than the audio rate); outside voice mode the
+            // register is just channel-2's volume.
+            0x89 => {
+                self.ports[0x89] = value;
+                if self.ports[0x90] & SND_CTRL_VOICE != 0 {
+                    self.apu.write_voice(value);
+                }
+            }
             // HBlank timer period: writing also resets the counter
             0xA4 => {
                 self.ports[0xA4] = value;
