@@ -1,10 +1,11 @@
 # Implementation status
 
-Last updated: 2026-07-03. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-05. Update this file (not AGENTS.md) when implementation progress changes.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
-(WonderSwan Color)** is in progress (subphases 8a–8e done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 515 passing
+(WonderSwan Color)** is in progress (subphases 8a–8f done, plus a HW_FLAGS 0xA0
+boot-state fix that makes real WSC ROMs render in colour; only 8g — test consolidation
+and the final doc pass — remains). The workspace has 526 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -52,10 +53,19 @@ Y-filtered once per line (`collect_line_sprites`), and each background layer is 
 line (`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel
 span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
 
-### APU — Phase 5 (`apu/`)
+### APU — Phase 5 (`apu/`) + Phase 8f HyperVoice
 Four 32-sample × 4-bit wave-table channels, per-channel L/R nibble volume, stereo mix;
 ch4 noise (15-bit LFSR, variable tap), ch3 sweep, ch2 voice PCM. Output is interleaved
-i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`.
+i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **HyperVoice** (WSC-only,
+Phase 8f) adds a fifth independent 8-bit PCM source: control at port `0x6A`
+(enable / sample-extension mode / volume shift), L/R routing at `0x6B`, data latch at `0x69`;
+the 8-bit sample is expanded and summed into the stereo output at the wave-mix level
+(`hypervoice_sample` / `hypervoice_output`, Mednafen `wswan/sound.c`). The Color gate is applied on
+both read and write: `Bus::write_io` drops mono writes to `0x69`–`0x6B`, and `Apu::tick(…, color)`
+skips the HyperVoice mix on non-Color hardware so a stale enable bit cannot leak through a runtime
+`set_model` downgrade. The 16-bit
+direct-output path (`0x64`–`0x67`), Sound-DMA feeding (SDMA engine unimplemented), and the sample-rate
+divisor are deferred/unverified — see DevelopmentPlan 実装メモ（8f）.
 
 ### Cartridge / save RAM — Phase 6 (`bus/cart/`)
 16-byte footer header parse, Bandai 2001/2003 banking via a `Mapper` enum, SRAM and
@@ -141,7 +151,19 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   render full colour) — verified against real ROMs. Confirmed against ares that colour enable = port 0x60
   bit 7 (`color() = mode.bit(2)`), i.e. the 8b assumption was correct. The frontend runs `.wsc` images as
   Color (`set_model`) and shows the model in the status bar. See DevelopmentPlan 実装メモ（8 追補）.
-- **8f–8g (pending)**: Color APU extensions (Hyper Voice); test consolidation + final doc pass.
+- **8f (done)**: Color APU extension — **HyperVoice** (`crates/core/src/apu/mod.rs`). A fifth,
+  wave-channel-independent 8-bit PCM source per Mednafen `wswan/sound.c`: control `0x6A`
+  (enable bit 7 / sample-extension mode bits 3-2 / volume shift bits 1-0), routing `0x6B`
+  (left bit 6 / right bit 5, write-masked `0x6F`), data latch `0x69`. `hypervoice_sample` expands the
+  8-bit latch to a signed ~11-bit value (`i16`-truncated then `>> 5`) and `hypervoice_output` scales it
+  by `MIX_SCALE` and routes it, so it sums into the same output domain as the four wave channels — which
+  never saturate alone, so `mix` stays exact and the final clamp runs once after HyperVoice is added. The
+  Color gate covers read and write (like the 8d upper-RAM window): `Bus::write_io` drops mono `0x69`–`0x6B`
+  writes and `Apu::tick(…, color)` skips the mix on non-Color hardware. Deferred/unverified: the 16-bit
+  direct path `0x64`–`0x67`, Sound-DMA feeding
+  (SDMA transfer engine still unimplemented — registers shadowed only), the sample-rate divisor, and the
+  0x69-vs-Mednafen-0x95 data-port choice — see DevelopmentPlan 実装メモ（8f）.
+- **8g (pending)**: test consolidation + final doc pass.
 
 ## Tooling — profiling & benchmarks
 

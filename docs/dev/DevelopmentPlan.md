@@ -566,7 +566,7 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 | 8c | カラータイル形式: 4bpp タイル・タイルバンク（tilemap bit13）・第2タイルバンク。`TileMapEntry`/`tile_pixel` の bpp 対応 | ✅ 完了 |
 | 8d | WSC メモリ拡張: `0x4000–0xFFFF` を WRAM にマップ、display mode ポート(`0x60`)配線 | ✅ 完了 |
 | 8e | RTC 実装: BCD 日時・アラーム・`0xCA/0xCB` コマンドプロトコル・計時（時刻注入） | ✅ 完了 |
-| 8f | Color APU 拡張（Hyper Voice 等）: 最小 or 後続課題に分離 | ⏳ |
+| 8f | Color APU 拡張（Hyper Voice）: 8bit PCM 拡張・音量シフト・L/R ルーティング・出力ミックス（Color ゲート） | ✅ 完了 |
 | 8g | テスト整備 + mono 回帰確認、`Status.md`/本書更新 | ⏳ |
 
 **実装メモ（8b）**
@@ -629,6 +629,32 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 -   **今回のスコープ外（後続課題）**: アラームはレジスタ保持のみで、一致時のカートリッジ IRQ 配線は未実装
     （WS カート RTC 割り込み経路が未検証のため）。RTC 状態を含む複合セーブ（バージョン付きフレーミング）も
     §「セーブデータ形式」の方針どおり将来課題。
+
+**実装メモ（8f: HyperVoice / Color APU 拡張）**
+-   **HyperVoice** は WSC 専用の 5 つ目の PCM ソース（4 wave チャネルとは独立）。実装は Mednafen
+    `wswan/sound.c` 準拠（`crates/core/src/apu/mod.rs` の `hypervoice_sample`/`hypervoice_output`）。
+    -   **制御ポート 0x6A（`HV_CTRL`）**: bit7=イネーブル、bits3-2=サンプル拡張モード
+        （0=unsigned / 0x4=unsigned negated / 0x8=signed / 0xC=raw）、bits1-0=音量シフト
+        （`<< (8 - shift)`、0=100%/1=50%/2=25%/3=12.5%）。
+    -   **ルーティング 0x6B（`HV_CHAN_CTRL`）**: bit6=左出力、bit5=右出力。書き込みは `& 0x6F` マスク
+        （Mednafen 準拠）。
+    -   **データラッチ 0x69（`HV_DATA`）**: 8bit PCM。8bit→16bit 拡張後 `>> 5` で ~11bit 域へ戻し、
+        wave チャネル和と同一ドメインで加算（`MIX_SCALE` を掛けてミックス）。中間値は Mednafen の
+        `int16` 代入に合わせ `i16` へ切り詰めてから `>> 5`（mode 0/0xC の大値は負に wrap）。
+-   **Color ゲートは read/write 両方**（8d の上位 RAM 窓と同じ非対称回避）。`Bus::write_io` が 0x69–0x6B への
+    書き込みを `model.is_color()` でゲートし mono では破棄、加えて `Apu::tick(..., color)` に本体モデルを渡して
+    `hypervoice_output` が `color=false` なら（enable ビットが port shadow に残っていても）ミックスをスキップ。
+    これで実行時に `set_model(Color→Mono)` しても mono に HyperVoice が漏れない（8d の read/write 両ゲートと対称）。
+-   **wave/voice ミックスは単独で飽和しない**（4ch×15×15×32 = 28 800 < i16 max）ため、`mix()` は正確な
+    pre-clamp 値を返し、HyperVoice 加算後に一度だけ clamp する（既存 `mix` の契約・テストは無改修）。
+-   **今回のスコープ外（後続/未検証）**:
+    -   **データポートの不確定性**: WSdev は 0x69（8bit 入力、Sound DMA ターゲット）、Mednafen は
+        0x95（"Pick a port, any port?!" と自認する当て推量）。本実装は WSdev 準拠の 0x69 を採用。
+    -   **16bit 直接出力パス**（0x64–0x67 への signed 16bit 書き込み）は未実装（8bit 変換パスのみ）。
+    -   **Sound DMA からの供給**: SDMA 転送エンジン自体が未実装（レジスタ shadow のみ）のため、
+        HyperVoice へのデータは現状 CPU 直書きのみ（WSdev も手動書き込みを許容）。
+    -   **サンプルレート分周**（WSdev 記載の 24k–2kHz 分周）は Mednafen 同様モデル化せず、出力サンプル毎に
+        現ラッチ値を連続出力。相対音量（`MIX_SCALE` 共用）も実機/テストROM 未検証の想定。
 
 **実装メモ（8 追補: HW_FLAGS 0xA0 と実 WSC ゲームのカラー起動）**
 -   **背景**: 実 WSC ROM（Final Fantasy 等）を Color モデルで走らせても色が出ない事象を調査。原因は

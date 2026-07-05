@@ -130,7 +130,7 @@ fn cycles_per_sample_is_128() {
 fn no_sample_before_cycles_per_sample() {
     let (mut ports, wram) = blank();
     let mut apu = Apu::new();
-    apu.tick(127, &wram, &mut ports);
+    apu.tick(127, &wram, &mut ports, false);
     assert!(apu.samples().is_empty());
 }
 
@@ -138,7 +138,7 @@ fn no_sample_before_cycles_per_sample() {
 fn one_sample_after_cycles_per_sample() {
     let (mut ports, wram) = blank();
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples().len(), STEREO_CHANNELS);
 }
 
@@ -146,7 +146,7 @@ fn one_sample_after_cycles_per_sample() {
 fn clear_samples_empties_buffer() {
     let (mut ports, wram) = blank();
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     apu.clear_samples();
     assert!(apu.samples().is_empty());
 }
@@ -155,7 +155,7 @@ fn clear_samples_empties_buffer() {
 fn reset_clears_samples() {
     let (mut ports, wram) = blank();
     let mut apu = Apu::new();
-    apu.tick(256, &wram, &mut ports);
+    apu.tick(256, &wram, &mut ports, false);
     apu.reset();
     assert!(apu.samples().is_empty());
 }
@@ -168,7 +168,7 @@ fn disabled_channel_is_silent() {
     let (mut ports, mut wram) = blank();
     write_waveform(&mut wram, 0, [0x55; 16]);
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples()[0], 0);
 }
 
@@ -186,7 +186,7 @@ fn enabled_channel_left_volume_scales_sample() {
     ports[SND_CH_VOL] = 0x30; // L = 3, R = 0
     set_pitch(&mut ports, 0, 0);
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples()[0], 480);
 }
 
@@ -202,7 +202,7 @@ fn enabled_channel_right_volume_is_independent() {
     ports[SND_CH_VOL] = 0x30; // L = 3, R = 0
     set_pitch(&mut ports, 0, 0);
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples()[1], 0);
 }
 
@@ -228,7 +228,7 @@ fn voice_overrides_channel2_sample_with_port_0x89() {
     ports[SND_CH_VOL + 1] = 200; // 0x89 doubles as the PCM sample register
     ports[SND_VOICE_VOL] = 0x04; // left full
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples()[0], 6400);
 }
 
@@ -267,7 +267,7 @@ fn noise_advances_lfsr_into_random_port() {
     ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
     ports[SND_NOISE] = 0x10; // gate open, tap 0
     let mut apu = Apu::new();
-    apu.tick(1, &wram, &mut ports);
+    apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_RANDOM], 1);
 }
 
@@ -278,7 +278,7 @@ fn noise_gate_closed_holds_lfsr() {
     ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
     ports[SND_NOISE] = 0x00; // gate closed
     let mut apu = Apu::new();
-    apu.tick(1, &wram, &mut ports);
+    apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_RANDOM], 0);
 }
 
@@ -289,7 +289,7 @@ fn noise_reset_bit_self_clears() {
     ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
     ports[SND_NOISE] = 0x18; // gate open + reset request
     let mut apu = Apu::new();
-    apu.tick(1, &wram, &mut ports);
+    apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_NOISE] & 0x08, 0);
 }
 
@@ -309,7 +309,7 @@ fn noise_output_replaces_channel4_sample() {
     ports[SND_CH_VOL + 3] = 0xF0; // left volume 15
     set_pitch(&mut ports, 3, 0x700); // noise step period 256 > 128
     let mut apu = Apu::new();
-    apu.tick(128, &wram, &mut ports);
+    apu.tick(128, &wram, &mut ports, false);
     assert_eq!(apu.samples()[0], 0x0F * 15 * 32); // noise DAC 0x0F, not waveform 5
 }
 
@@ -323,7 +323,7 @@ fn noise_period_is_unmasked_2048_minus_pitch() {
     ports[SND_NOISE] = NOISE_GATE; // gate open, tap 0
     set_pitch(&mut ports, 3, 0); // 2048 - 0 = 2048-tick period
     let mut apu = Apu::new();
-    apu.tick(512, &wram, &mut ports); // well within one 2048-tick period
+    apu.tick(512, &wram, &mut ports, false); // well within one 2048-tick period
     assert_eq!(ports[SND_RANDOM], 1); // single XNOR step only: seed 0 → 1
 }
 
@@ -339,7 +339,7 @@ fn sweep_adjusts_channel3_pitch_after_threshold() {
     ports[SND_SWEEP_TIME] = 1;
     set_pitch(&mut ports, 2, 0x100);
     let mut apu = Apu::new();
-    apu.tick(8193, &wram, &mut ports);
+    apu.tick(8193, &wram, &mut ports, false);
     assert_eq!(pitch_of(&ports, 2), 0x105);
 }
 
@@ -351,7 +351,7 @@ fn sweep_does_not_fire_before_threshold() {
     ports[SND_SWEEP_TIME] = 1;
     set_pitch(&mut ports, 2, 0x100);
     let mut apu = Apu::new();
-    apu.tick(8192, &wram, &mut ports);
+    apu.tick(8192, &wram, &mut ports, false);
     assert_eq!(pitch_of(&ports, 2), 0x100);
 }
 
@@ -363,7 +363,7 @@ fn sweep_negative_delta_decreases_pitch() {
     ports[SND_SWEEP_TIME] = 1;
     set_pitch(&mut ports, 2, 0x100);
     let mut apu = Apu::new();
-    apu.tick(8193, &wram, &mut ports);
+    apu.tick(8193, &wram, &mut ports, false);
     assert_eq!(pitch_of(&ports, 2), 0xFC);
 }
 
@@ -375,6 +375,84 @@ fn sweep_disabled_leaves_pitch_unchanged() {
     ports[SND_SWEEP_TIME] = 1;
     set_pitch(&mut ports, 2, 0x100);
     let mut apu = Apu::new();
-    apu.tick(8193, &wram, &mut ports);
+    apu.tick(8193, &wram, &mut ports, false);
     assert_eq!(pitch_of(&ports, 2), 0x100);
+}
+
+// ── HyperVoice (WonderSwan Color PCM) ─────────────────────────────────────────
+
+#[test]
+fn hypervoice_unsigned_mode_expands_and_rescales() {
+    // mode 0 (unsigned), shift 0: 0x40 << 8 = 16384, then >> 5 = 512.
+    assert_eq!(hypervoice_sample(0x00, 0x40), 512);
+}
+
+#[test]
+fn hypervoice_signed_mode_yields_negative_sample() {
+    // mode 0x8 (signed), shift 0: (i8)0x80 = -128, << 8 = -32768, >> 5 = -1024.
+    assert_eq!(hypervoice_sample(0x08, 0x80), -1024);
+}
+
+#[test]
+fn hypervoice_volume_shift_halves_sample() {
+    // shift 1 scales by 50%: 0x40 << 7 = 8192, >> 5 = 256 (half of shift-0's 512).
+    assert_eq!(hypervoice_sample(0x01, 0x40), 256);
+}
+
+#[test]
+fn hypervoice_output_routes_left_only() {
+    // Enabled, data 0x40 → sample 512 × MIX_SCALE (32) = 16384; routed to left.
+    let mut ports = [0u8; 0x100];
+    ports[HV_CTRL] = HV_ENABLE; // enable, mode 0, shift 0
+    ports[HV_DATA] = 0x40;
+    ports[HV_CHAN_CTRL] = HV_LEFT;
+    assert_eq!(hypervoice_output(&ports, true), (16384, 0));
+}
+
+#[test]
+fn hypervoice_output_silent_when_disabled() {
+    // Data and routing set but the enable bit (0x80) is clear → no contribution.
+    let mut ports = [0u8; 0x100];
+    ports[HV_DATA] = 0x40;
+    ports[HV_CHAN_CTRL] = HV_LEFT | HV_RIGHT;
+    assert_eq!(hypervoice_output(&ports, true), (0, 0));
+}
+
+#[test]
+fn hypervoice_negated_mode_matches_unsigned_after_truncation() {
+    // mode 0x4 (unsigned, negated): `(data | -0x100) << 8` differs from unsigned
+    // by exactly -0x10000, which vanishes on the `i16` truncation — so it lands
+    // on the same value as mode 0 (0x40 → 512). Locks in Mednafen's behaviour.
+    assert_eq!(hypervoice_sample(0x04, 0x40), 512);
+}
+
+#[test]
+fn hypervoice_raw_mode_ignores_volume_shift() {
+    // mode 0xC (raw): fixed `<< 8`, ignoring the shift bits. ctrl 0x0F sets shift
+    // 3, yet 0x40 still yields 0x40 << 8 = 16384 → >> 5 = 512 (not the shifted 64).
+    assert_eq!(hypervoice_sample(0x0F, 0x40), 512);
+}
+
+#[test]
+fn hypervoice_output_gated_off_on_mono() {
+    // Enabled and routed, but `color = false` (mono model) → no contribution,
+    // even though the enable bit is set in the port shadow.
+    let mut ports = [0u8; 0x100];
+    ports[HV_CTRL] = HV_ENABLE;
+    ports[HV_DATA] = 0x40;
+    ports[HV_CHAN_CTRL] = HV_LEFT | HV_RIGHT;
+    assert_eq!(hypervoice_output(&ports, false), (0, 0));
+}
+
+#[test]
+fn hypervoice_adds_into_output_sample() {
+    // No wave channels; HyperVoice enabled, routed to both sides. After one
+    // output-sample interval the pushed left sample is the HyperVoice value.
+    let (mut ports, wram) = blank();
+    ports[HV_CTRL] = HV_ENABLE; // mode 0, shift 0
+    ports[HV_DATA] = 0x40; // → sample 512 × 32 = 16384
+    ports[HV_CHAN_CTRL] = HV_LEFT | HV_RIGHT;
+    let mut apu = Apu::new();
+    apu.tick(128, &wram, &mut ports, true);
+    assert_eq!(apu.samples()[0], 16384);
 }

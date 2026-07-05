@@ -408,7 +408,8 @@ impl Bus {
     /// generating audio samples from the waveform data in WRAM and the sound
     /// registers. Sweep and noise write back into the register file.
     pub fn tick_apu(&mut self, cycles: u32) {
-        self.apu.tick(cycles, &self.wram, &mut self.ports);
+        self.apu
+            .tick(cycles, &self.wram, &mut self.ports, self.model.is_color());
     }
 
     /// The interleaved stereo samples (`L, R, …`) generated so far, at
@@ -638,6 +639,15 @@ impl MemoryBus for Bus {
             // SDMA counter segment: bits 4-7 ignored
             0x50 => self.ports[0x50] = value & 0x0F,
             0x51 => {}
+            // HyperVoice (WonderSwan Color only): 8-bit PCM data latch (0x69),
+            // control (0x6A: enable/mode/shift), and channel routing (0x6B). On
+            // mono hardware these registers do not exist, so writes are dropped
+            // (the same open-bus-on-mono treatment as the 8d upper-RAM window);
+            // the APU then never sees the enable bit and HyperVoice stays silent.
+            0x69 if self.model.is_color() => self.ports[0x69] = value,
+            0x6A if self.model.is_color() => self.ports[0x6A] = value,
+            0x6B if self.model.is_color() => self.ports[0x6B] = value & 0x6F,
+            0x69..=0x6B => {} // mono: HyperVoice absent
             // HBlank timer period: writing also resets the counter
             0xA4 => {
                 self.ports[0xA4] = value;

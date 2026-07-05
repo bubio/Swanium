@@ -20,6 +20,14 @@
 //! sound-clock ticks, whose low bit drives a `0x0F`/`0x00` DAC.  The sweep-step
 //! reload uses a saturating subtraction (a deviation from WonderCrab) so a zero
 //! sweep-time register cannot underflow.
+//!
+//! **HyperVoice** (WonderSwan Color only) is an extra 8-bit PCM source, separate
+//! from the four wave channels, expanded to a signed ~11-bit sample and summed
+//! into the stereo output. It follows Mednafen's `wswan/sound.c`: control at port
+//! `0x6A` (enable / sample-extension mode / volume shift), left/right routing at
+//! `0x6B`, and the 8-bit data latch at `0x69`. The Color gate lives in the bus
+//! (mono drops writes to `0x69`–`0x6B`), so the enable bit is only ever seen on
+//! Color hardware and the APU itself stays model-agnostic.
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +50,16 @@ const SND_NOISE: usize = 0x8E; // noise control (tap, enable, reset)
 const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
+
+// ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
+const HV_DATA: usize = 0x69; // 8-bit PCM data latch (Sound DMA / manual write)
+const HV_CTRL: usize = 0x6A; // enable / sample-extension mode / volume shift
+const HV_CHAN_CTRL: usize = 0x6B; // left/right output routing
+const HV_ENABLE: u8 = 0x80; // HV_CTRL bit 7: HyperVoice active
+const HV_EXT_MASK: u8 = 0x0C; // HV_CTRL bits 3-2: sample-extension mode
+const HV_SHIFT_MASK: u8 = 0x03; // HV_CTRL bits 1-0: volume shift (0=100% … 3=12.5%)
+const HV_LEFT: u8 = 0x40; // HV_CHAN_CTRL bit 6: route to left
+const HV_RIGHT: u8 = 0x20; // HV_CHAN_CTRL bit 5: route to right
 
 // ── Noise control register (port 0x8E) bits ──────────────────────────────────
 const NOISE_GATE: u8 = 0x10; // 1 = noise generator running
@@ -169,18 +187,23 @@ impl Apu {
     /// results back into the register-visible `ports` (frequency `0x84`/`0x85`,
     /// noise LFSR `0x92`/`0x93`).
     ///
+    /// `color` is the hardware-model gate for HyperVoice (a WonderSwan Color
+    /// feature): when `false` the HyperVoice mix is skipped regardless of the
+    /// register state, mirroring the bus's mono write-drop so read and write are
+    /// both model-gated (as with the 8d internal-RAM window).
+    ///
     /// # Panics
     /// Panics if `wram` is smaller than the addressed waveform area
     /// (`(ports[0x8F] << 6) + 64` bytes) or if `ports` is shorter than `0x100`.
     /// The real 16 KiB WRAM and 256-entry port file always satisfy this.
-    pub fn tick(&mut self, cycles: u32, wram: &[u8], ports: &mut [u8]) {
+    pub fn tick(&mut self, cycles: u32, wram: &[u8], ports: &mut [u8], color: bool) {
         for _ in 0..cycles {
-            self.step(wram, ports);
+            self.step(wram, ports, color);
         }
     }
 
     /// Advance the APU by a single sound-clock tick.
-    fn step(&mut self, wram: &[u8], ports: &mut [u8]) {
+    fn step(&mut self, wram: &[u8], ports: &mut [u8], color: bool) {
         let ctrl = ports[0x90];
         self.step_sweep(ctrl, ports);
         self.step_noise(ctrl, ports);
@@ -206,7 +229,15 @@ impl Apu {
         self.sample_accum += 1;
         if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
             self.sample_accum = 0;
-            let (left, right) = mix(&samples, ctrl, ports);
+            let (wave_l, wave_r) = mix(&samples, ctrl, ports);
+            // HyperVoice sums into the same output domain as the wave channels
+            // (Mednafen `wswan/sound.c`). The wave+voice mix never saturates on
+            // its own (4 channels × 15 × 15 × MIX_SCALE = 28 800 < i16 max), so
+            // `mix` returns the exact pre-clamp value; the final clamp applies
+            // only once HyperVoice is added.
+            let (hv_l, hv_r) = hypervoice_output(ports, color);
+            let left = (wave_l as i32 + hv_l).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let right = (wave_r as i32 + hv_r).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             self.samples.push(left);
             self.samples.push(right);
         }
@@ -308,6 +339,44 @@ fn pitch_of(ports: &[u8], ch: usize) -> u16 {
     let lo = ports[SND_CH_PITCH + ch * 2];
     let hi = ports[SND_CH_PITCH + ch * 2 + 1];
     u16::from_le_bytes([lo, hi]) & PITCH_MASK
+}
+
+/// Expand the 8-bit HyperVoice `data` latch to a signed ~11-bit sample per the
+/// control register `ctrl` (port `0x6A`), following Mednafen's `wswan/sound.c`.
+///
+/// The extension mode (`ctrl` bits 3-2) selects how the 8-bit latch becomes a
+/// 16-bit value, the volume shift (bits 1-0) scales it (0 = 100% … 3 = 12.5% via
+/// a `<< (8 - shift)`), and the result is finally brought back to ~11 bits
+/// (`>> 5`) so it lands in the same domain as the summed wave channels. The
+/// intermediate is truncated to `i16` before the final shift, matching
+/// Mednafen's `int16` assignment (mode 0/0xC can wrap large values negative).
+fn hypervoice_sample(ctrl: u8, data: u8) -> i16 {
+    let shift = (ctrl & HV_SHIFT_MASK) as i32;
+    let expanded: i32 = match ctrl & HV_EXT_MASK {
+        0x00 => (data as i32) << (8 - shift),            // unsigned
+        0x04 => ((data as i32) | -0x100) << (8 - shift), // unsigned, negated
+        0x08 => ((data as i8) as i32) << (8 - shift),    // signed
+        _ => (data as i32) << 8,                         // 0x0C: raw, shift ignored
+    };
+    (expanded as i16) >> 5
+}
+
+/// HyperVoice's (`left`, `right`) contribution in the pre-clamp output domain,
+/// or `(0, 0)` when disabled or on non-Color hardware. The sample is scaled by
+/// [`MIX_SCALE`] to match the wave-channel mix (Mednafen sums HyperVoice into the
+/// same accumulator as the four wave channels) and routed per `HV_CHAN_CTRL`
+/// (port `0x6B`). `color` gates the whole feature so a stale enable bit left in
+/// the port shadow cannot leak HyperVoice onto a machine modelled as mono.
+fn hypervoice_output(ports: &[u8], color: bool) -> (i32, i32) {
+    let ctrl = ports[HV_CTRL];
+    if !color || ctrl & HV_ENABLE == 0 {
+        return (0, 0);
+    }
+    let sample = hypervoice_sample(ctrl, ports[HV_DATA]) as i32 * MIX_SCALE;
+    let chan = ports[HV_CHAN_CTRL];
+    let left = if chan & HV_LEFT != 0 { sample } else { 0 };
+    let right = if chan & HV_RIGHT != 0 { sample } else { 0 };
+    (left, right)
 }
 
 /// Mix the four channel samples into one interleaved stereo (`L`, `R`) frame,
