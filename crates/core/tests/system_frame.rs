@@ -8,7 +8,8 @@
 
 use swanium_core::cpu::MemoryBus;
 use swanium_core::keypad::KeyState;
-use swanium_core::system::System;
+use swanium_core::system::{System, CYCLES_PER_FRAME, MASTER_CLOCK_HZ};
+use swanium_core::HardwareModel;
 
 /// A 64 KiB ROM whose reset entry (`0xFFFF0`, the last 16 bytes) is `HLT`.
 fn halting_rom() -> Vec<u8> {
@@ -58,6 +59,54 @@ fn background_tile_reaches_framebuffer_after_a_frame() {
         (n << 8) | (n << 4) | n
     };
     assert_eq!(system.framebuffer()[0], grey1);
+}
+
+#[test]
+fn color_background_tile_reaches_framebuffer_after_a_frame() {
+    // The Phase 8 colour path end-to-end through `System::run_frame`: a Color
+    // machine with the colour bit set resolves the tile pixel through palette
+    // RAM (RGB444) rather than the mono shade pool.
+    let mut system = System::new(halting_rom());
+    system.set_model(HardwareModel::Color);
+    let bus = system.bus_mut();
+    bus.write_io(0x60, 0x80); // colour-mode bit
+    bus.write_io(0x00, 0x01); // enable SCR1
+    bus.write_io(0x07, 0x00); // SCR1 map base 0 (tilemap entry 0 → tile 0, palette 0)
+                              // Tile 0, row 0, leftmost pixel = colour 1.
+    bus.write_u8(0x2000, 0b1000_0000);
+    bus.write_u8(0x2001, 0b0000_0000);
+    // Palette RAM: palette 0, color 1 → 0xFE00 + (0*16 + 1)*2 = 0xFE02.
+    bus.write_u8(0xFE02, 0x0F);
+    bus.write_u8(0xFE03, 0x0F);
+
+    system.run_frame(KeyState::NONE);
+    assert_eq!(system.framebuffer()[0], 0x0F0F);
+}
+
+#[test]
+fn rtc_free_runs_one_second_across_frames() {
+    // The RTC advances from `System::run_frame` alone (no CPU involvement): each
+    // frame ticks `CYCLES_PER_FRAME` master-clock cycles, carrying a second every
+    // `MASTER_CLOCK_HZ`. 76 frames (> 1 s) yields exactly one carried second.
+    let frames = MASTER_CLOCK_HZ.div_ceil(CYCLES_PER_FRAME);
+    let mut rom = halting_rom();
+    let len = rom.len();
+    rom[len - 16 + 0x0C] = 0x02; // footer flags bit 1 = on-cartridge RTC
+
+    // `from_rom` parses the footer (and thus the RTC bit); `new` does not.
+    let mut system = System::from_rom(rom);
+    assert!(
+        system.bus_mut().has_rtc(),
+        "RTC footer bit must create a clock"
+    );
+    system.set_rtc_datetime(26, 7, 3, 5, 12, 0, 0); // seconds = 0
+    for _ in 0..frames {
+        system.run_frame(KeyState::NONE);
+    }
+    let bus = system.bus_mut();
+    bus.write_io(0xCA, 0x14); // read date/time
+    let secs = (0..7).map(|_| bus.read_io(0xCB)).last().unwrap();
+    assert_eq!(secs, 0x01); // seconds register carried once
 }
 
 #[test]
