@@ -1,0 +1,96 @@
+// Input settings window: keyboard + controller remapping.
+//
+// The Rust side fills `rows` (one per WonderSwan button) and handles the
+// rebind callbacks. Rebinding a key works by capture: clicking a keyboard
+// cell returns focus to the FocusScope and arms capture; the next key press
+// fires `key-captured`. Controller capture is polled on the Rust side while
+// `rebind-pad` is armed.
+
+import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export struct BindingRow {
+    label: string,
+    key: string,
+    pad: string,
+}
+
+export component SettingsWindow inherits Window {
+    in property <[BindingRow]> rows;
+    // Non-empty while waiting for a key/button, e.g. "Press a key for A…".
+    in property <string> listening-hint;
+
+    callback rebind-key(int);
+    callback rebind-pad(int);
+    // Fired for every key press while the window has focus; Rust ignores it
+    // unless a keyboard rebind is armed.
+    callback key-captured(string);
+    callback reset-defaults();
+    callback close-settings();
+
+    title: "Swanium — Input Settings";
+    preferred-width: 480px;
+    preferred-height: 540px;
+    forward-focus: scope;
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            root.key-captured(event.text);
+            accept
+        }
+
+        VerticalBox {
+            Text {
+                text: "Input bindings";
+                font-size: 16px;
+                font-weight: 700;
+            }
+            HorizontalBox {
+                Text { text: "Button"; width: 130px; font-weight: 700; }
+                Text { text: "Keyboard"; horizontal-stretch: 1; font-weight: 700; }
+                Text { text: "Controller"; horizontal-stretch: 1; font-weight: 700; }
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalBox {
+                    alignment: start;
+                    for row[i] in root.rows: HorizontalBox {
+                        Text {
+                            text: row.label;
+                            width: 130px;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            text: row.key;
+                            horizontal-stretch: 1;
+                            clicked => {
+                                scope.focus();
+                                root.rebind-key(i);
+                            }
+                        }
+                        Button {
+                            text: row.pad;
+                            horizontal-stretch: 1;
+                            clicked => { root.rebind-pad(i); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: root.listening-hint;
+                color: #d0a020;
+                height: 20px;
+            }
+            HorizontalBox {
+                alignment: end;
+                Button {
+                    text: "Reset to Defaults";
+                    clicked => { root.reset-defaults(); }
+                }
+                Button {
+                    text: "Close";
+                    clicked => { root.close-settings(); }
+                }
+            }
+        }
+    }
+}

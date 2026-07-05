@@ -71,20 +71,33 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
 
 ## Frontend & adapter crates — Phase 7
 
-- `crates/video`: shade-index (0–15) → RGBA8 conversion (`shade_to_rgba` / `framebuffer_to_rgba`).
+- `crates/video`: shade-index (0–15) → RGBA8 conversion (`shade_to_rgba` / `framebuffer_to_rgba`);
+  90° clockwise/counter-clockwise rotation for vertical games (`write_rgba_rotated_cw` /
+  `write_rgba_rotated_ccw`).
 - `crates/audio`: cpal output stream + fixed-capacity `RingBuffer`; audio–video sync via
   buffer-level frame pacing.
-- `crates/input`: backend-agnostic `Button` enum (11 keys) + `keys_from`; gilrs gamepad
-  (`gamepad::Gamepad`, event-driven digital + dead-zoned analog); keyboard bindings.
+- `crates/input`: backend-agnostic `Button` enum (11 keys, stable `name`/`from_name`/`label`)
+  + `keys_from`; gilrs gamepad (`gamepad::Gamepad`, event-driven digital + dead-zoned analog)
+  with runtime-configurable bindings (`set_named_bindings`), a name↔button table for
+  persistence, and `poll_capture` for rebind capture.
 - `crates/common`: `tracing` logging (`logging::init`); typed `Config` with serde/TOML
   persistence at the platform config dir (`swanium/config.toml`), range-clamped on load.
-- `crates/frontend`: Slint `MainWindow` (Image + FocusScope), ~13.25 ms (~75.47 Hz) timer
-  driving `System::run_frame` → `video::write_rgba` → Slint image (integer scaling,
-  `image-rendering: pixelated`). In-app ROM picker (rfd via xdg-portal, `O` key), menu bar
-  (File ▸ Open ROM… / Quit), status bar (ROM name + FPS). Headless frame smoke test in
-  `crates/core/tests/system_frame.rs`.
+  Persists window scale, fullscreen, rotation (`RotationKind`: none/right/left), renderer
+  (`RendererKind`), recent-ROM history (`push_recent`/`clear_recent`, capped), and
+  keyboard/gamepad binding maps.
+- `crates/frontend`: Slint UI compiled from `ui/*.slint` via `build.rs` + `include_modules!`
+  (`MainWindow`, `SettingsWindow`, `AboutWindow`). Audio-paced timer drives
+  `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
+  File ▸ Open ROM… / Open Recent (dynamic history) / Clear History / Settings… / Quit;
+  View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
+  Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`); Help ▸ About. Menu
+  checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
+  Capture-based input-remapping settings window (keyboard
+  via focus-scope key capture, controller via `poll_capture`) persisting to config. Status
+  bar (ROM name + FPS). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
 
-Remaining Phase 7 UI polish (deferred, non-blocking): startup-pause, settings UI, key-binding screen.
+Remaining Phase 7 UI polish (deferred, non-blocking): startup-pause; Bicubic renderer
+(needs a future wgpu upscaling pipeline — Slint's image path exposes only nearest/bilinear).
 
 ## Phase 8 — WonderSwan Color (in progress)
 
