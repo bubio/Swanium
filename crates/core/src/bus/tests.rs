@@ -121,6 +121,30 @@ fn hw_flags_port_a0_ignores_writes() {
 }
 
 #[test]
+fn color_retains_hypervoice_register_writes() {
+    // On Color the HyperVoice registers (0x69 data, 0x6A control, 0x6B routing)
+    // are writable; 0x6B is masked to 0x6F like Mednafen's `HVoiceChanCtrl`.
+    let mut bus = color_bus();
+    bus.write_io(0x69, 0x40);
+    bus.write_io(0x6A, 0x8A);
+    bus.write_io(0x6B, 0xFF);
+    assert_eq!(bus.read_io(0x69), 0x40);
+    assert_eq!(bus.read_io(0x6A), 0x8A);
+    assert_eq!(bus.read_io(0x6B), 0x6F);
+}
+
+#[test]
+fn mono_drops_hypervoice_register_writes() {
+    // HyperVoice does not exist on mono hardware: writes to 0x69–0x6B are
+    // dropped, so the enable bit is never set and the APU stays silent. Promote
+    // to Color afterwards and confirm nothing was stored.
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x6A, 0x80);
+    bus.set_model(HardwareModel::Color);
+    assert_eq!(bus.read_io(0x6A), 0x00);
+}
+
+#[test]
 fn color_wram_write_reads_back_just_above_mono_window() {
     let mut bus = color_bus();
     bus.write_u8(0x04000, 0x5A);
