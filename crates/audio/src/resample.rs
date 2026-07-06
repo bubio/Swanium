@@ -11,7 +11,7 @@ pub(crate) struct Resampler {
     in_rate: u32,
     out_rate: u32,
     /// Next output position within the current input-sample interval, in
-    /// `out_rate` units (`0..out_rate`).
+    /// `out_rate` units.
     phase: u32,
     prev: [i16; 2],
     has_prev: bool,
@@ -43,15 +43,11 @@ impl Resampler {
                 out.extend_from_slice(&current);
                 self.prev = current;
                 self.has_prev = true;
-                self.phase = if self.out_rate > self.in_rate {
-                    self.in_rate
-                } else {
-                    self.in_rate % self.out_rate
-                };
+                self.phase = self.in_rate;
                 continue;
             }
 
-            while self.phase < self.out_rate {
+            while self.phase <= self.out_rate {
                 out.push(lerp_i16(
                     self.prev[0],
                     current[0],
@@ -84,12 +80,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn double_rate_produces_two_outputs_per_input() {
+    fn double_rate_initial_chunk_outputs_interval_endpoints() {
         let mut r = Resampler::new(24_000, 48_000);
-        let input = [10i16, 20, 30, 60];
+        let input = [10i16, 20, 30, 60, 50, 100];
         let mut out = Vec::new();
         r.process(&input, &mut out);
-        assert_eq!(out.len(), 4);
+        assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn double_rate_steady_state_produces_two_outputs_per_input() {
+        let mut r = Resampler::new(24_000, 48_000);
+        let mut out = Vec::new();
+        r.process(&[0i16, 0, 100, 100], &mut out);
+        out.clear();
+
+        r.process(&[200i16, 200, 300, 300], &mut out);
+
+        assert_eq!(out.len(), 8);
     }
 
     #[test]
@@ -97,7 +105,7 @@ mod tests {
         let mut r = Resampler::new(24_000, 48_000);
         let mut out = Vec::new();
         r.process(&[0i16, 10, 100, 30], &mut out);
-        assert_eq!(out, [0, 10, 50, 20]);
+        assert_eq!(out, [0, 10, 50, 20, 100, 30]);
     }
 
     #[test]
@@ -112,13 +120,15 @@ mod tests {
     #[test]
     fn fractional_ratio_preserves_state_across_calls() {
         // 24 kHz → 44100 Hz: ratio ≈ 1.8375 output samples per input.
-        // Linear interpolation emits over input-sample intervals, so the first
-        // eight input pairs produce 1 + floor(7 * 1.8375) = 13 output pairs.
         let mut r = Resampler::new(24_000, 44_100);
         let input = [0i16; 8]; // 4 stereo pairs
         let mut out = Vec::new();
         r.process(&input, &mut out);
         r.process(&input, &mut out);
+        // The first ever sample is emitted immediately. The causal linear
+        // interpolator then emits only positions covered by known sample pairs,
+        // so eight input pairs cover seven intervals:
+        // floor(7 * 44100 / 24000) + 1 = 13 output pairs.
         assert_eq!(out.len(), 26);
     }
 

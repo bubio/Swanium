@@ -4,7 +4,7 @@ Last updated: 2026-07-05. Update this file (not AGENTS.md) when implementation p
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 569 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 570 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
