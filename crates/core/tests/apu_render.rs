@@ -16,6 +16,7 @@ const STEREO: usize = 2;
 /// Configure channel 1 as a steady tone: waveform byte 0 high nibble = 5
 /// (sampled at index 1, held because pitch 0 → period 2048), left volume 3.
 fn setup_channel1_tone(bus: &mut Bus) {
+    bus.write_io(0x91, 0x80); // headphone path: preserve stereo in focused mix tests
     bus.write_io(0x90, 0x01); // SND_CTRL: channel 1 enable
     bus.write_io(0x88, 0x30); // channel 1 volume: L = 3, R = 0
     bus.write_io(0x80, 0x00); // pitch low
@@ -102,6 +103,7 @@ fn cpu_out_enabling_channel1_makes_tone_audible() {
 
     let mut bus = Bus::new(rom);
     bus.write_io(0xC2, 0x00); // ROM bank 0 → ROM[0] at physical 0x20000
+    bus.write_io(0x91, 0x80); // headphone path: preserve stereo in focused mix tests
     bus.write_io(0x88, 0x30); // channel 1 volume L = 3
     bus.write_io(0x80, 0x00);
     bus.write_io(0x81, 0x00);
@@ -116,6 +118,7 @@ fn cpu_out_enabling_channel1_makes_tone_audible() {
 fn channel1_stays_silent_without_cpu_enabling_it() {
     // Same setup but the CPU never runs: SND_CTRL stays 0, nothing is generated.
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x91, 0x80);
     bus.write_io(0x88, 0x30);
     bus.write_u8(0x0000, 0x50);
     bus.tick_apu(128);

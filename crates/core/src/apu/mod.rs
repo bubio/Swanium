@@ -48,6 +48,7 @@ const SND_SWEEP_VALUE: usize = 0x8C; // signed sweep delta
 const SND_SWEEP_TIME: usize = 0x8D; // sweep step count (5 bits)
 const SND_NOISE: usize = 0x8E; // noise control (tap, enable, reset)
 const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
+const SND_OUTPUT_CTRL: usize = 0x91; // speaker/headphone output mode and speaker shift
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
 
@@ -131,6 +132,11 @@ pub struct Apu {
     sweep_step: u8,
     /// Sound-clock ticks accumulated toward the next output sample.
     sample_accum: u32,
+    /// Analog-reconstruction low-pass for the (mono) voice PCM channel, fed one
+    /// sample per register write by [`Apu::write_voice`].
+    voice_lp: VoiceLowPass,
+    /// Latest reconstruction-filtered voice sample (signed, centred on 0).
+    voice_level: i32,
     /// Interleaved stereo output samples (`L, R, L, R, …`).
     samples: Vec<i16>,
 }
@@ -163,8 +169,20 @@ impl Apu {
             sweep_counter: 0,
             sweep_step: 0,
             sample_accum: 0,
+            voice_lp: VoiceLowPass::new(),
+            voice_level: 0,
             samples: Vec::new(),
         }
+    }
+
+    /// Feed one voice (PCM) register write (`port 0x89`, 8-bit) into the
+    /// reconstruction low-pass. Called by the bus on every write while voice mode
+    /// is active, so the filter sees the full write stream — games stream PCM by
+    /// time-multiplexing two voices at roughly twice the audio rate, and only the
+    /// per-write sequence (not the value sampled once per scanline) carries the
+    /// signal cleanly. See [`VoiceLowPass`].
+    pub fn write_voice(&mut self, sample: u8) {
+        self.voice_level = self.voice_lp.filter(sample as i32 - 0x80);
     }
 
     /// Reset all channel and feature state, and clear the sample buffer.
@@ -216,12 +234,9 @@ impl Apu {
                 samples[ch] = self.channels[ch].tick(pitch, wram, wave_base + ch * 16);
             }
         }
-
-        // Channel 2 voice replaces the wave sample with the 8-bit PCM register.
-        if ctrl & CTRL_VOICE != 0 {
-            samples[VOICE_CHANNEL] = ports[SND_CH_VOL + VOICE_CHANNEL];
-        }
-        // Channel 4 noise replaces the wave sample with the LFSR DAC level.
+        // Channel 4 noise replaces the wave sample with the LFSR DAC level. The
+        // channel-2 voice (8-bit PCM) is mixed separately below so it can be
+        // low-pass filtered, so its wave sample is left untouched here.
         if self.noise_active {
             samples[3] = self.noise_output;
         }
@@ -229,18 +244,36 @@ impl Apu {
         self.sample_accum += 1;
         if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
             self.sample_accum = 0;
-            let (wave_l, wave_r) = mix(&samples, ctrl, ports);
+            let (wave_l, wave_r) = mix_waves(&samples, ctrl, ports);
+            let (voice_l, voice_r) = self.mix_voice(ctrl, ports);
             // HyperVoice sums into the same output domain as the wave channels
             // (Mednafen `wswan/sound.c`). The wave+voice mix never saturates on
             // its own (4 channels × 15 × 15 × MIX_SCALE = 28 800 < i16 max), so
-            // `mix` returns the exact pre-clamp value; the final clamp applies
-            // only once HyperVoice is added.
+            // the clamp applies only once the voice and HyperVoice are added.
             let (hv_l, hv_r) = hypervoice_output(ports, color);
-            let left = (wave_l as i32 + hv_l).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            let right = (wave_r as i32 + hv_r).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let (left, right) =
+                apply_output_control(wave_l + voice_l + hv_l, wave_r + voice_r + hv_r, ports);
             self.samples.push(left);
             self.samples.push(right);
         }
+    }
+
+    /// The channel-2 voice (8-bit PCM) contribution.
+    ///
+    /// Uses the reconstruction-filtered [`Apu::voice_level`] (fed one sample per
+    /// register write by [`Apu::write_voice`]), routed to L/R per the voice-volume
+    /// register (0x94) and scaled by [`MIX_SCALE`] × [`VOICE_GAIN`]. Returns
+    /// `(0, 0)` when voice mode is off — the channel is then a plain wave
+    /// oscillator handled by [`mix_waves`] — and resets the filter so stale state
+    /// cannot click when the voice restarts.
+    fn mix_voice(&mut self, ctrl: u8, ports: &[u8]) -> (i32, i32) {
+        if ctrl & CTRL_VOICE == 0 {
+            self.voice_lp.reset();
+            self.voice_level = 0;
+            return (0, 0);
+        }
+        let (l, r) = voice_route(self.voice_level, ports[SND_VOICE_VOL]);
+        (l * MIX_SCALE * VOICE_GAIN, r * MIX_SCALE * VOICE_GAIN)
     }
 
     /// Tick the channel-3 frequency sweep (port 0x8C/0x8D), writing the adjusted
@@ -390,30 +423,36 @@ fn hypervoice_output(ports: &[u8], color: bool) -> (i32, i32) {
 /// volume via the standard `/32768.0` f32 conversion.
 const MIX_SCALE: i32 = 32;
 
-fn mix(samples: &[u8; 4], ctrl: u8, ports: &[u8]) -> (i16, i16) {
+/// Extra gain applied to the voice (PCM) channel before the reconstruction
+/// low-pass. Games stream PCM by zero-/silence-interleaving samples at twice the
+/// audio rate (see [`VoiceLowPass`]); a unity-gain low-pass then recovers the
+/// signal at half amplitude (the interpolation loss of 2× zero-stuffing —
+/// `C, 0, C, 0` averages to `C/2`). This factor restores the intended level for
+/// a single stream and correctly sums two simultaneously-multiplexed voices.
+const VOICE_GAIN: i32 = 2;
+
+/// Mix the wave channels into one interleaved stereo (`L`, `R`) frame (scaled by
+/// [`MIX_SCALE`], pre-clamp). The channel-2 voice is excluded when voice mode is
+/// active — it is filtered and summed separately in [`Apu::mix_voice`].
+fn mix_waves(samples: &[u8; 4], ctrl: u8, ports: &[u8]) -> (i32, i32) {
     let mut left = 0i32;
     let mut right = 0i32;
     for (ch, &sample) in samples.iter().enumerate() {
         if ch == VOICE_CHANNEL && ctrl & CTRL_VOICE != 0 {
-            let (l, r) = voice_output(sample, ports[SND_VOICE_VOL]);
-            left += l;
-            right += r;
-        } else {
-            let vol = ports[SND_CH_VOL + ch];
-            left += sample as i32 * (vol >> 4) as i32;
-            right += sample as i32 * (vol & 0x0F) as i32;
+            continue; // voice handled by mix_voice
         }
+        let vol = ports[SND_CH_VOL + ch];
+        left += sample as i32 * (vol >> 4) as i32;
+        right += sample as i32 * (vol & 0x0F) as i32;
     }
-    (
-        (left * MIX_SCALE).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-        (right * MIX_SCALE).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-    )
+    (left * MIX_SCALE, right * MIX_SCALE)
 }
 
-/// Compute the channel-2 voice (`L`, `R`) contribution from the 8-bit PCM
-/// sample and the voice-volume register (0x94): full / half / mute per side.
-fn voice_output(sample: u8, voice_vol: u8) -> (i32, i32) {
-    let v = sample as i32;
+/// Route the (already signed, reconstruction-filtered) voice sample `v` to the
+/// (`L`, `R`) output per the voice-volume register (0x94): full / half / mute per
+/// side. The signed convention (silence `0x80` → 0) matches Mednafen's
+/// `wswan/sound.c`.
+fn voice_route(v: i32, voice_vol: u8) -> (i32, i32) {
     let left = if voice_vol & 0x04 != 0 {
         v
     } else if voice_vol & 0x08 != 0 {
@@ -429,4 +468,57 @@ fn voice_output(sample: u8, voice_vol: u8) -> (i32, i32) {
         0
     };
     (left, right)
+}
+
+/// Apply the WonderSwan output-control register (`0x91`) to the mixed sample.
+///
+/// With bit 7 clear the console speaker path mixes left and right to mono, then
+/// attenuates by bits 2-1. With bit 7 set the headphone path preserves stereo.
+fn apply_output_control(left: i32, right: i32, ports: &[u8]) -> (i16, i16) {
+    let output_ctrl = ports[SND_OUTPUT_CTRL];
+    if output_ctrl & 0x80 != 0 {
+        return (clamp_i16(left), clamp_i16(right));
+    }
+
+    let shift = (output_ctrl >> 1) & 0x03;
+    let mono = clamp_i16((left + right) >> shift);
+    (mono, mono)
+}
+
+fn clamp_i16(sample: i32) -> i16 {
+    sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+/// The voice (PCM) reconstruction filter: a 2-tap moving average over the raw
+/// register-write stream (fed by [`Apu::write_voice`]).
+///
+/// Games stream PCM by *time-multiplexing* two voices onto the single voice
+/// register, writing them alternately at twice the audio rate (e.g. *Last Alive*
+/// writes one sample per visible scanline, ~10.9 kHz, ping-ponging a music voice
+/// with a second — often silent — voice). That interleave puts the multiplex
+/// component exactly at Nyquist of the write stream; a 2-tap average `y =
+/// (x + x₋₁)/2` has a zero there, so it averages each `music, other` pair back
+/// together — the reconstruction real hardware's analog output stage performs —
+/// while leaving the audio band (and its treble) essentially untouched. A single
+/// stream reconstructs at half amplitude, which [`VOICE_GAIN`] restores.
+#[derive(Clone, Copy)]
+struct VoiceLowPass {
+    prev: i32,
+}
+
+impl VoiceLowPass {
+    const fn new() -> Self {
+        Self { prev: 0 }
+    }
+
+    fn reset(&mut self) {
+        self.prev = 0;
+    }
+
+    /// Feed one written sample and return the 2-tap moving average.
+    fn filter(&mut self, x: i32) -> i32 {
+        let y = (x + self.prev) / 2;
+        self.prev = x;
+        y
+    }
 }

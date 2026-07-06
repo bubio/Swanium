@@ -6,9 +6,10 @@
 //! "headlessly runs N frames without crashing" guarantee, plus a check that a
 //! tiny program drawn into WRAM actually reaches the framebuffer across frames.
 
+use swanium_core::bus::IrqSource;
 use swanium_core::cpu::MemoryBus;
 use swanium_core::keypad::KeyState;
-use swanium_core::system::{System, CYCLES_PER_FRAME, MASTER_CLOCK_HZ};
+use swanium_core::system::{System, CYCLES_PER_FRAME, MASTER_CLOCK_HZ, SCANLINES_PER_FRAME};
 use swanium_core::HardwareModel;
 
 /// A 64 KiB ROM whose reset entry (`0xFFFF0`, the last 16 bytes) is `HLT`.
@@ -81,6 +82,26 @@ fn color_background_tile_reaches_framebuffer_after_a_frame() {
 
     system.run_frame(KeyState::NONE);
     assert_eq!(system.framebuffer()[0], 0x0F0F);
+}
+
+#[test]
+fn hblank_timer_counts_visible_and_vblank_scanlines_per_frame() {
+    let mut system = System::new(halting_rom());
+    let period = SCANLINES_PER_FRAME;
+    {
+        let bus = system.bus_mut();
+        bus.write_io(0xB2, 0xFF); // enable all IRQ sources
+        bus.write_io(0xA2, 0x01); // HBlank timer enabled, no auto-reload
+        bus.write_io(0xA4, period as u8);
+        bus.write_io(0xA5, (period >> 8) as u8);
+    }
+
+    system.run_frame(KeyState::NONE);
+
+    assert_eq!(
+        system.bus_mut().pending_irq(),
+        Some(IrqSource::HBlankTimer as u8)
+    );
 }
 
 #[test]

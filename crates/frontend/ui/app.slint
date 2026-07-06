@@ -45,6 +45,7 @@ export component MainWindow inherits Window {
     callback set-renderer(Renderer);
     callback set-volume(int);
     callback toggle-pause();
+    callback reset-emulation();
     callback open-settings();
     callback show-about();
     callback quit();
@@ -98,6 +99,12 @@ export component MainWindow inherits Window {
                 title: root.paused ? "✓ Pause" : "Pause";
                 shortcut: @keys(Control + P);
                 activated => { root.toggle-pause(); }
+            }
+            MenuItem {
+                title: "Reset";
+                shortcut: @keys(Control + R);
+                enabled: root.has-rom;
+                activated => { root.reset-emulation(); }
             }
         }
         Menu {

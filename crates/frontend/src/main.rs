@@ -68,6 +68,7 @@ struct App {
     config: Rc<RefCell<Config>>,
     system: Rc<RefCell<Option<System>>>,
     last_dir: Rc<RefCell<Option<PathBuf>>>,
+    rom_path: Rc<RefCell<Option<PathBuf>>>,
     rom_label: Rc<RefCell<String>>,
     pressed: Rc<RefCell<HashSet<Button>>>,
     keymap: Rc<RefCell<Keymap>>,
@@ -88,6 +89,7 @@ struct App {
     pending_open_path: Rc<RefCell<Option<PathBuf>>>,
     /// True while the native file dialog is running its modal event loop.
     open_dialog_active: Rc<Cell<bool>>,
+    reset_request: Rc<Cell<bool>>,
     settings: Rc<RefCell<Option<SettingsWindow>>>,
     about: Rc<RefCell<Option<AboutWindow>>>,
 }
@@ -124,6 +126,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         config: Rc::new(RefCell::new(config)),
         system: Rc::new(RefCell::new(None)),
         last_dir: Rc::new(RefCell::new(None)),
+        rom_path: Rc::new(RefCell::new(None)),
         rom_label: Rc::new(RefCell::new(String::new())),
         pressed: Rc::new(RefCell::new(HashSet::new())),
         keymap: Rc::new(RefCell::new(keymap)),
@@ -135,6 +138,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         dump_request: Rc::new(Cell::new(false)),
         pending_open_path: Rc::new(RefCell::new(None)),
         open_dialog_active: Rc::new(Cell::new(false)),
+        reset_request: Rc::new(Cell::new(false)),
         settings: Rc::new(RefCell::new(None)),
         about: Rc::new(RefCell::new(None)),
     };
@@ -202,6 +206,25 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             }
             frames_since_refresh = 0;
             fps_anchor = Instant::now();
+            return;
+        }
+        if app.reset_request.take() {
+            let path = app.rom_path.borrow().clone();
+            if let Some(path) = path {
+                app.pressed.borrow_mut().clear();
+                if let Some(window) = window_weak.upgrade() {
+                    load_into(&path, app, &window);
+                    if app.paused.get() {
+                        window
+                            .set_status_text(format!("{} — paused", app.rom_label.borrow()).into());
+                    }
+                }
+                if let Some(ref audio) = audio_stream {
+                    audio.clear();
+                }
+                frames_since_refresh = 0;
+                fps_anchor = Instant::now();
+            }
             return;
         }
 
@@ -444,6 +467,10 @@ fn wire_menu(window: &MainWindow, app: &App) {
                 }
             }
         }
+    });
+    window.on_reset_emulation({
+        let app = app.clone();
+        move || app.reset_request.set(true)
     });
     window.on_open_settings({
         let app = app.clone();
@@ -783,6 +810,7 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
             };
             *app.system.borrow_mut() = Some(sys);
             *app.last_dir.borrow_mut() = path.parent().map(Path::to_path_buf);
+            *app.rom_path.borrow_mut() = Some(path.to_path_buf());
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("ROM");
             *app.rom_label.borrow_mut() = name.to_string();
 

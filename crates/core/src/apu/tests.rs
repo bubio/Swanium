@@ -6,7 +6,9 @@ use super::*;
 
 /// A blank port file and a 16 KiB WRAM, the shapes the APU expects.
 fn blank() -> ([u8; 0x100], Vec<u8>) {
-    ([0u8; 0x100], vec![0u8; 0x4000])
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x80; // headphone path: preserve stereo in focused mix tests
+    (ports, vec![0u8; 0x4000])
 }
 
 /// Write a 16-byte waveform (32× 4-bit samples) for channel `ch` at the
@@ -213,47 +215,126 @@ fn mix_sums_two_channels_on_left() {
     ports[0x90] = CTRL_ENABLE[0] | CTRL_ENABLE[1];
     ports[SND_CH_VOL] = 0x10; // ch1 L = 1
     ports[SND_CH_VOL + 1] = 0x20; // ch2 L = 2
-    let (left, _) = mix(&[5, 5, 0, 0], ports[0x90], &ports);
+    let (left, _) = mix_waves(&[5, 5, 0, 0], ports[0x90], &ports);
     assert_eq!(left, 480);
 }
 
 // ── Voice (channel 2 PCM) ────────────────────────────────────────────────────
 
 #[test]
-fn voice_overrides_channel2_sample_with_port_0x89() {
-    // VOICE set: channel 2's sample comes from port 0x89 (8-bit), voice volume
-    // 0x04 → full left. 0x89 = 200 → raw 200, scaled by MIX_SCALE (32) = 6400.
+fn voice_writes_stream_through_the_lowpass_to_the_mix() {
+    // Voice samples are fed by write_voice (as the bus does on port-0x89 writes),
+    // not read from the port at mix time. A constant 200 → signed 72; the voice
+    // low-pass has unity DC gain, so it settles to 72, routed full-left and scaled
+    // by MIX_SCALE (32) × VOICE_GAIN (2) = 4608.
     let (mut ports, wram) = blank();
     ports[0x90] = CTRL_ENABLE[1] | CTRL_VOICE;
-    ports[SND_CH_VOL + 1] = 200; // 0x89 doubles as the PCM sample register
     ports[SND_VOICE_VOL] = 0x04; // left full
     let mut apu = Apu::new();
+    for _ in 0..300 {
+        apu.write_voice(200);
+    }
     apu.tick(128, &wram, &mut ports, false);
-    assert_eq!(apu.samples()[0], 6400);
+    assert_eq!(apu.samples()[0], 4608);
 }
 
 #[test]
-fn voice_volume_half_left_halves_sample() {
-    let (left, _) = voice_output(200, 0x08); // bit3: half left
-    assert_eq!(left, 100);
+fn voice_silence_0x80_maps_to_zero() {
+    // Silence (0x80) must map to 0 so time-multiplexed PCM does not add a large
+    // DC step between samples.
+    let (mut ports, wram) = blank();
+    ports[0x90] = CTRL_ENABLE[1] | CTRL_VOICE;
+    ports[SND_VOICE_VOL] = 0x04;
+    let mut apu = Apu::new();
+    for _ in 0..300 {
+        apu.write_voice(0x80);
+    }
+    apu.tick(128, &wram, &mut ports, false);
+    assert_eq!(apu.samples()[0], 0);
 }
 
 #[test]
-fn voice_volume_mute_left_is_zero() {
-    let (left, _) = voice_output(200, 0x00);
+fn voice_route_half_left_halves_signed_sample() {
+    let (left, _) = voice_route(72, 0x08); // bit3: half left; 72 >> 1
+    assert_eq!(left, 36);
+}
+
+#[test]
+fn voice_route_mute_left_is_zero() {
+    let (left, _) = voice_route(72, 0x00);
     assert_eq!(left, 0);
 }
 
 #[test]
-fn voice_volume_full_right_passes_sample() {
-    let (_, right) = voice_output(200, 0x01); // bit0: full right
-    assert_eq!(right, 200);
+fn voice_route_full_right_passes_signed_sample() {
+    let (_, right) = voice_route(72, 0x01); // bit0: full right
+    assert_eq!(right, 72);
 }
 
 #[test]
-fn voice_volume_half_right_halves_sample() {
-    let (_, right) = voice_output(200, 0x02); // bit1: half right
-    assert_eq!(right, 100);
+fn voice_route_half_right_halves_signed_sample() {
+    let (_, right) = voice_route(72, 0x02); // bit1: half right
+    assert_eq!(right, 36);
+}
+
+#[test]
+fn voice_lowpass_passes_dc_with_unity_gain() {
+    let mut lp = VoiceLowPass::new();
+    let mut y = 0;
+    for _ in 0..2000 {
+        y = lp.filter(5000);
+    }
+    assert_eq!(y, 5000);
+}
+
+#[test]
+fn voice_lowpass_strongly_attenuates_the_multiplex_buzz() {
+    // A full-scale ±4000 alternation (the worst-case voice time-multiplex
+    // artifact) must be damped to a small residual by the reconstruction filter.
+    let mut lp = VoiceLowPass::new();
+    let mut peak = 0;
+    for n in 0..2000 {
+        let x = if n & 1 == 0 { 4000 } else { -4000 };
+        let y = lp.filter(x);
+        if n > 1000 {
+            peak = peak.max(y.abs());
+        }
+    }
+    assert!(
+        peak < 400,
+        "alternation peak {peak} not attenuated below 400"
+    );
+}
+
+#[test]
+fn voice_lowpass_reset_clears_state() {
+    let mut lp = VoiceLowPass::new();
+    for _ in 0..100 {
+        lp.filter(4000);
+    }
+    lp.reset();
+    assert_eq!(lp.filter(0), 0);
+}
+
+#[test]
+fn output_control_speaker_mixes_stereo_to_mono() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x00; // speaker path, no attenuation
+    assert_eq!(apply_output_control(100, 300, &ports), (400, 400));
+}
+
+#[test]
+fn output_control_speaker_shift_attenuates_mono_sum() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x06; // speaker path, shift = 3
+    assert_eq!(apply_output_control(400, 400, &ports), (100, 100));
+}
+
+#[test]
+fn output_control_headphone_preserves_stereo() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x80;
+    assert_eq!(apply_output_control(100, 300, &ports), (100, 300));
 }
 
 // ── Noise (channel 4 LFSR) ───────────────────────────────────────────────────
