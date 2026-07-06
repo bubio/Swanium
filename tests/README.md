@@ -38,6 +38,22 @@ WSCPUTest / ws-test-suite の公開テストROMをオプトインで実行して
 これらのROMを使う統合テストはオプトイン（環境変数でROMパスを指定した場合のみ実行）とし、
 CIでは自作テストROM（`fixtures/cpu/self_built/`）を主軸にする。
 
+### WSCPUTest の実行例
+
+FluBBaOfWard/WSCpuTest v0.7.1 は上流リポジトリで以下のようにビルドできる。
+
+```sh
+nasm -f bin -o WSCpuTest.wsc WSCpuTest.asm
+```
+
+生成した `WSCpuTest.wsc` は `tests/fixtures/cpu/public/WSCpuTest.wsc` に置くか、
+`WS_CPU_TEST_ROM` でパスを指定して実行する。
+
+```sh
+WS_CPU_TEST_ROM=/path/to/WSCpuTest.wsc \
+  cargo test -p swanium-core --test public_roms -- --include-ignored wscputest
+```
+
 ## 自作テストROMの方針
 
 V30MZアセンブリでテストパターンを記述し、結果を固定アドレスにダンプする。Rust側のテストコードが
