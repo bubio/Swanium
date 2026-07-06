@@ -101,6 +101,8 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
   Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`); Help ▸ About. Menu
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
+  Native Open ROM dialogs are opened outside the Slint frame timer, and
+  emulation/audio/input stays idle while the picker is open.
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted). Capture-based
   input-remapping settings window (keyboard via focus-scope key capture, controller via
   `poll_capture`) persisting to config. Status bar (ROM name + FPS + master-volume slider,

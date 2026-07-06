@@ -85,7 +85,9 @@ struct App {
     /// Whether emulation is paused. Runtime-only — never persisted.
     paused: Rc<Cell<bool>>,
     dump_request: Rc<Cell<bool>>,
-    open_request: Rc<Cell<bool>>,
+    pending_open_path: Rc<RefCell<Option<PathBuf>>>,
+    /// True while the native file dialog is running its modal event loop.
+    open_dialog_active: Rc<Cell<bool>>,
     settings: Rc<RefCell<Option<SettingsWindow>>>,
     about: Rc<RefCell<Option<AboutWindow>>>,
 }
@@ -131,7 +133,8 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         volume: Rc::new(Cell::new(initial_volume)),
         paused: Rc::new(Cell::new(false)),
         dump_request: Rc::new(Cell::new(false)),
-        open_request: Rc::new(Cell::new(false)),
+        pending_open_path: Rc::new(RefCell::new(None)),
+        open_dialog_active: Rc::new(Cell::new(false)),
         settings: Rc::new(RefCell::new(None)),
         about: Rc::new(RefCell::new(None)),
     };
@@ -179,20 +182,26 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             sync_fullscreen(app, &window);
         }
 
-        // Handle an in-app open request first. The native dialog runs a modal
-        // loop that blocks this timer, so emulation pauses while it is open.
-        if app.open_request.take() {
-            let start = app.last_dir.borrow().clone();
-            if let Some(path) = pick_rom(start.as_deref()) {
-                if let Some(window) = window_weak.upgrade() {
-                    load_into(&path, app, &window);
-                }
-                if let Some(ref audio) = audio_stream {
-                    audio.clear();
-                }
-                frames_since_refresh = 0;
-                fps_anchor = Instant::now();
+        // Some native file dialogs run a nested event loop. If this timer is
+        // re-entered while the dialog is open, keep emulation/audio/input idle
+        // until the original dialog call returns.
+        if app.open_dialog_active.get() {
+            return;
+        }
+
+        // File dialogs are opened from the menu callback, not from this timer:
+        // on macOS, NSOpenPanel runs a nested event loop and Slint panics if a
+        // timer callback re-enters timer activation. The timer only consumes
+        // the selected path after the dialog has closed.
+        if let Some(path) = app.pending_open_path.borrow_mut().take() {
+            if let Some(window) = window_weak.upgrade() {
+                load_into(&path, app, &window);
             }
+            if let Some(ref audio) = audio_stream {
+                audio.clear();
+            }
+            frames_since_refresh = 0;
+            fps_anchor = Instant::now();
             return;
         }
 
@@ -291,9 +300,6 @@ fn wire_input(window: &MainWindow, app: &App) {
             if is_down && text.eq_ignore_ascii_case("p") {
                 app.dump_request.set(true);
             }
-            if is_down && text.eq_ignore_ascii_case("o") {
-                app.open_request.set(true);
-            }
             if let Some(button) = app.keymap.borrow().resolve(&text) {
                 if is_down {
                     app.pressed.borrow_mut().insert(button);
@@ -312,7 +318,16 @@ fn wire_input(window: &MainWindow, app: &App) {
 fn wire_menu(window: &MainWindow, app: &App) {
     window.on_open_rom({
         let app = app.clone();
-        move || app.open_request.set(true)
+        move || {
+            if app.open_dialog_active.replace(true) {
+                return;
+            }
+            app.pressed.borrow_mut().clear();
+            let start = app.last_dir.borrow().clone();
+            let picked = pick_rom(start.as_deref());
+            *app.pending_open_path.borrow_mut() = picked;
+            app.open_dialog_active.set(false);
+        }
     });
     window.on_open_recent({
         let app = app.clone();

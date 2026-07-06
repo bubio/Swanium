@@ -20,7 +20,7 @@ export component MainWindow inherits Window {
     in property <length> status-bar-height;
     in property <bool> has-rom;
     in property <string> window-title: "Swanium";
-    in property <string> status-text: "No ROM loaded — press O or use File ▸ Open ROM";
+    in property <string> status-text: "No ROM loaded";
 
     // View state, reflected in the menu checkmarks.
     in property <int> current-scale: 3;
@@ -176,13 +176,6 @@ export component MainWindow inherits Window {
                 image-rendering: root.renderer == Renderer.Nearest
                     ? ImageRendering.pixelated
                     : ImageRendering.smooth;
-            }
-            if !root.has-rom: Text {
-                text: "Press O to open a ROM";
-                color: #cccccc;
-                font-size: 14px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
             }
         }
         // Status bar: fixed-height strip showing the ROM name, FPS, and a

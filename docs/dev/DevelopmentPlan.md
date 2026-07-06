@@ -503,12 +503,13 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     アナログは軸値をデッドゾーン（0.5）で判定。frontend でキーボード入力と OR 合成。マッピング純粋関数
     （`map_button`/`stick_directions`）はユニットテスト済み。コントローラ未接続・初期化失敗は非致命。
 -   **UI 拡充**:
-    -   ✅ **ROM ファイルピッカー（実装済み）**: コマンドライン ROM 引数を任意化し、`O` キーで
+    -   ✅ **ROM ファイルピッカー（実装済み）**: コマンドライン ROM 引数を任意化し、メニュー操作で
         ネイティブの「開く」ダイアログ（`rfd` クレート）を表示。`rfd` は既定の GTK ではなく
         XDG Desktop Portal + pollster（`default-features = false, features = ["xdg-portal","pollster"]`）
-        を使い、Linux でも GTK 開発パッケージ無しでビルド可能（CI に apt 追加不要）。ROM 未ロード時は
-        プレースホルダ（"Press O to open a ROM"）を表示し、ROM 選択でウィンドウタイトルを更新、
-        ピッカーは前回ディレクトリを記憶、ROM 切替時に `AudioStream::clear` で旧音声をフラッシュ。
+        を使い、Linux でも GTK 開発パッケージ無しでビルド可能（CI に apt 追加不要）。ROM 選択で
+        ウィンドウタイトルを更新、ピッカーは前回ディレクトリを記憶。ネイティブダイアログは Slint タイマー外の
+        メニューコールバックで開き、モーダルループ中は emulation/audio/input を進めず、ROM 切替時に
+        `AudioStream::clear` で旧音声をフラッシュ。
     -   ✅ **メニューバー / ステータスバー（実装済み）**: Slint 組み込みの `MenuBar`（macOS は
         システムメニューバー、Windows/Linux はウィンドウ内描画。実装は `muda`）に `File ▸ Open ROM…` /
         `Quit` を配置し、`open-rom`/`quit` コールバックを既存のオープン処理・`slint::quit_event_loop`
