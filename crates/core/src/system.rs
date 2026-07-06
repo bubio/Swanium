@@ -2,19 +2,20 @@
 //!
 //! [`System`] owns the whole emulated machine and advances it one video frame
 //! at a time via [`System::run_frame`]. A frame is driven scanline by scanline:
-//! the CPU runs for a scanline's worth of cycles, the APU advances by the same
-//! budget, then the PPU renders (or, during the vertical-blank period, merely
-//! advances the line counter and fires the VBlank interrupt). GDMA is not driven
-//! here — it executes synchronously when a game arms it via port 0x48.
+//! the CPU runs until the next scanline boundary while the APU advances after
+//! each CPU instruction, then the PPU renders (or, during the vertical-blank
+//! period, merely advances the line counter and fires the VBlank interrupt).
+//! GDMA is not driven here — it executes synchronously when a game arms it via
+//! port 0x48.
 //!
 //! The frame-boundary shape is deliberate: it satisfies the RetroAchievements
 //! requirement that the core be callable one frame at a time and expose a stable
 //! memory-read API ([`System::read_memory_at`]) — see
 //! `docs/dev/DevelopmentPlan.md` §7.
 //!
-//! Timing is the sequential "run CPU, then advance peers by the same cycle
-//! count" model from `docs/dev/DevelopmentPlan.md` §5; cycle-exact interleaving
-//! is a later-phase refinement.
+//! Timing is still scanline-framed for PPU events, but APU ticking is
+//! instruction-interleaved so mid-scanline PCM writes affect the generated
+//! samples at the right point in the sound timeline.
 
 use crate::bus::Bus;
 use crate::cpu::{Cpu, MemoryBus};
@@ -76,6 +77,9 @@ pub struct ScanlineTrace {
 pub struct System {
     cpu: Cpu,
     bus: Bus,
+    /// CPU cycles already spent into the next scanline because the previous
+    /// instruction crossed a line boundary.
+    cycle_carry: u32,
     /// Cumulative per-subsystem frame timings (present only with the
     /// `profiling` feature). See [`crate::profile`].
     #[cfg(feature = "profiling")]
@@ -108,6 +112,7 @@ impl System {
         Self {
             cpu,
             bus,
+            cycle_carry: 0,
             #[cfg(feature = "profiling")]
             profile: FrameProfile::default(),
         }
@@ -140,11 +145,10 @@ impl System {
         // worth of master-clock cycles — keeps timekeeping deterministic.
         self.bus.tick_rtc(CYCLES_PER_FRAME);
         for line in 0..SCANLINES_PER_FRAME {
+            let budget = CYCLES_PER_SCANLINE.saturating_sub(self.cycle_carry);
             time_into!(self, cpu_ns, {
-                self.run_cpu_cycles(CYCLES_PER_SCANLINE);
-            });
-            time_into!(self, apu_ns, {
-                self.bus.tick_apu(CYCLES_PER_SCANLINE);
+                let spent = self.run_cpu_cycles(budget);
+                self.cycle_carry = (self.cycle_carry + spent).saturating_sub(CYCLES_PER_SCANLINE);
             });
             // GDMA is not ticked here: it runs synchronously the instant a game
             // writes the enable bit to port 0x48 (see `Bus::write_io`), matching
@@ -168,8 +172,11 @@ impl System {
                 });
             } else {
                 // Vertical-blank period: keep the line counter (and its compare
-                // interrupt) live without rendering.
+                // interrupt) live without rendering. The HBlank timer still
+                // ticks for these scanlines; games use all 159 line periods as
+                // an audio-rate timebase for streamed PCM.
                 self.bus.set_current_scanline(line as u8);
+                self.bus.on_hblank();
             }
 
             if line == VISIBLE_SCANLINES {
@@ -186,20 +193,29 @@ impl System {
 
     /// Run the CPU for `budget` cycles, servicing enabled maskable interrupts
     /// between instructions.
-    fn run_cpu_cycles(&mut self, budget: u32) {
+    fn run_cpu_cycles(&mut self, budget: u32) -> u32 {
         let mut spent = 0;
         while spent < budget {
             if self.cpu.flags.interrupt {
                 if let Some(vector) = self.bus.pending_irq() {
-                    spent += self.cpu.handle_irq(&mut self.bus, vector);
+                    let cycles = self.cpu.handle_irq(&mut self.bus, vector);
+                    spent += cycles;
+                    time_into!(self, apu_ns, {
+                        self.bus.tick_apu(cycles);
+                    });
                 }
             }
-            spent += self.cpu.step(&mut self.bus);
+            let cycles = self.cpu.step(&mut self.bus);
+            spent += cycles;
+            time_into!(self, apu_ns, {
+                self.bus.tick_apu(cycles);
+            });
             #[cfg(feature = "profiling")]
             {
                 self.profile.instructions += 1;
             }
         }
+        spent
     }
 
     // ── Output accessors ──────────────────────────────────────────────────

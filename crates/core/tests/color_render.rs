@@ -112,6 +112,7 @@ fn mono_model_drops_palette_ram_writes() {
 /// `data = 0x10` in unsigned mode (ctrl bit pattern 0x80, shift 0) expands to
 /// `0x10 << 8 = 0x1000`, `>> 5 = 128`, then `× MIX_SCALE (32) = 4096` per side.
 fn setup_hypervoice(bus: &mut Bus) {
+    bus.write_io(0x91, 0x80); // headphone path: preserve HyperVoice routing
     bus.write_io(0x6A, 0x80); // HV_CTRL: enable, unsigned mode, shift 0
     bus.write_io(0x6B, 0x60); // HV_CHAN_CTRL: route left (0x40) + right (0x20)
     bus.write_io(0x69, 0x10); // HV_DATA: 8-bit latch

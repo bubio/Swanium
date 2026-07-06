@@ -4,7 +4,7 @@ Last updated: 2026-07-05. Update this file (not AGENTS.md) when implementation p
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 557 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 570 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -55,7 +55,25 @@ span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/
 ### APU — Phase 5 (`apu/`) + Phase 8f HyperVoice
 Four 32-sample × 4-bit wave-table channels, per-channel L/R nibble volume, stereo mix;
 ch4 noise (15-bit LFSR, variable tap), ch3 sweep, ch2 voice PCM. Output is interleaved
-i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **HyperVoice** (WSC-only,
+i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **Voice (ch2 PCM)** is
+treated as **signed** (silence `0x80` → 0, per Mednafen `wswan/sound.c`) and reconstructed
+through a per-write 2-tap moving-average (`VoiceLowPass`, fed by `Apu::write_voice` from
+`Bus::write_io` on every `0x89` write while voice mode is on) with a compensating `VOICE_GAIN`.
+The frame driver now advances the APU after each CPU instruction (with scanline cycle carry)
+instead of batching a whole scanline after the CPU, so HBlank-ISR PCM writes land at the right
+point in the audio timeline. It also runs the HBlank timer across all 159 scanlines (144 visible
++ 15 VBlank) rather than only the rendered lines; *Last Alive* uses that timer as the `0x89` PCM
+update clock, so a 144-line counter made the stream roughly 144/159 slow. Port `0x91` output
+control is applied at the final mix: speaker mode mixes L+R to mono with the documented shift,
+while headphone mode preserves stereo.
+Games time-multiplex two PCM voices onto the single voice register at ~2× the audio rate
+(e.g. *Last Alive* ping-pongs a music voice with a second voice through the HBlank-timer ISR);
+the moving average nulls the multiplex component (Nyquist of the write stream) that hardware's
+analog output stage averages out, so the interleave no longer reads as a buzz. Filtering the raw
+write stream — not a value sampled once per scanline by the mixer — is required to preserve both
+halves of the multiplexed stream.
+Further reconstruction-quality tuning (residual multiplex ripple from write-per-scanline jitter)
+is still open. **HyperVoice** (WSC-only,
 Phase 8f) adds a fifth independent 8-bit PCM source: control at port `0x6A`
 (enable / sample-extension mode / volume shift), L/R routing at `0x6B`, data latch at `0x69`;
 the 8-bit sample is expanded and summed into the stereo output at the wave-mix level
@@ -83,8 +101,9 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
 - `crates/video`: shade-index (0–15) → RGBA8 conversion (`shade_to_rgba` / `framebuffer_to_rgba`);
   90° clockwise/counter-clockwise rotation for vertical games (`write_rgba_rotated_cw` /
   `write_rgba_rotated_ccw`).
-- `crates/audio`: cpal output stream + fixed-capacity `RingBuffer`; audio–video sync via
-  buffer-level frame pacing.
+- `crates/audio`: cpal output stream + fixed-capacity `RingBuffer`; linear 24 kHz→device-rate
+  resampler (replacing the earlier zero-order hold, which made channel-2 PCM streams such as
+  *Last Alive* sound harsh on 48 kHz devices); audio–video sync via buffer-level frame pacing.
 - `crates/input`: backend-agnostic `Button` enum (11 keys, stable `name`/`from_name`/`label`)
   + `keys_from`; gilrs gamepad (`gamepad::Gamepad`, event-driven digital + dead-zoned analog)
   with runtime-configurable bindings (`set_named_bindings`), a name↔button table for

@@ -7,8 +7,8 @@
 //!
 //! The emulator's APU produces samples at 24 kHz ([`APU_SAMPLE_RATE`]).  If
 //! the device uses a different rate the samples are first passed through a
-//! zero-order-hold [`Resampler`] before being queued.  Higher-quality
-//! resampling is a Phase 9 follow-up.
+//! linear [`Resampler`] before being queued.  Band-limited resampling is still
+//! a possible Phase 9 follow-up.
 //!
 //! **Audio-video sync**: overruns (emulator faster than device) silently drop
 //! the newest samples; underruns pad with silence.  Adaptive frame-pacing
