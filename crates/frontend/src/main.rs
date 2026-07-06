@@ -4,7 +4,7 @@
 //! core one frame at a time, show the framebuffer, play audio (cpal), and
 //! accept keyboard and gamepad input. The menu bar exposes ROM history, window
 //! scale, fullscreen, vertical rotation, renderer choice, an input-remapping
-//! settings window, and an About window. Settings persist to `config.toml`.
+//! settings window, and a non-macOS About window. Settings persist to `config.toml`.
 //!
 //! The Slint markup lives in `ui/*.slint` and is compiled by `build.rs`;
 //! [`slint::include_modules!`] brings the generated `MainWindow`,
@@ -144,6 +144,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     };
 
     window.set_status_bar_height(STATUS_BAR_HEIGHT);
+    window.set_use_native_about(cfg!(target_os = "macos"));
     apply_view(&window, &app.config.borrow());
     window.set_recent_files(recent_model(&app.config.borrow()));
 
@@ -337,7 +338,7 @@ fn wire_input(window: &MainWindow, app: &App) {
     });
 }
 
-/// Wire the File/View/Help menu callbacks.
+/// Wire the File/View/Emulation menu callbacks.
 fn wire_menu(window: &MainWindow, app: &App) {
     window.on_open_rom({
         let app = app.clone();
@@ -578,7 +579,7 @@ fn open_settings(app: &App, main: &MainWindow) {
     *app.settings.borrow_mut() = Some(settings);
 }
 
-/// Create (or re-show) the About window.
+/// Create (or re-show) the About window used on platforms without native About.
 fn open_about(app: &App) {
     if let Some(existing) = app.about.borrow().as_ref() {
         let _ = existing.show();

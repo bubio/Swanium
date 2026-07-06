@@ -1,0 +1,84 @@
+name: CI macOS
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'assets/**'
+      - 'crates/**'
+      - 'scripts/build-macos-app.sh'
+      - 'tests/**'
+      - '.github/workflows/ci-macos.yml'
+      - '.github/workflows/publish-release-assets.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'assets/**'
+      - 'crates/**'
+      - 'scripts/build-macos-app.sh'
+      - 'tests/**'
+      - '.github/workflows/ci-macos.yml'
+      - '.github/workflows/publish-release-assets.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-bundle:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Build unsigned universal App Bundle
+        run: scripts/build-macos-app.sh
+
+      - name: Prepare App Bundle artifact
+        if: github.event_name != 'release'
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          ditto target/release/Swanium.app dist/Swanium.app
+
+      - name: Upload App Bundle artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Swanium-macos-universal
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload release zip artifact
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: swanium-macos-universal-zip
+          path: target/release/Swanium-macos-universal.zip
+          if-no-files-found: error
+
+  publish-release:
+    if: github.event_name == 'release'
+    needs: test-and-bundle
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-release-assets.yml
+    with:
+      asset-patterns: |
+        *.zip

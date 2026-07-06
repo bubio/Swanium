@@ -1,8 +1,9 @@
 // Main emulator window: native menu bar, screen area, and status bar.
 //
 // The Rust side (`crates/frontend/src/main.rs`) drives every `in property`
-// and implements every `callback`. Settings and About are separate top-level
-// windows, re-exported here so `slint::include_modules!()` exposes them too.
+// and implements every `callback`. Settings and the non-macOS About dialog are
+// separate top-level windows, re-exported here so `slint::include_modules!()`
+// exposes them too.
 
 import { Slider } from "std-widgets.slint";
 import { SettingsWindow, BindingRow } from "settings.slint";
@@ -32,6 +33,8 @@ export component MainWindow inherits Window {
     in property <int> volume: 100;
     // Whether emulation is paused (runtime-only; not persisted).
     in property <bool> paused;
+    // macOS has an OS-standard About item in the application menu.
+    in property <bool> use-native-about;
     // Recent-ROM display names, most-recent first (opened by index).
     in property <[string]> recent-files;
 
@@ -160,7 +163,7 @@ export component MainWindow inherits Window {
                 }
             }
         }
-        Menu {
+        if !root.use-native-about: Menu {
             title: "Help";
             MenuItem {
                 title: "About Swanium…";

@@ -121,8 +121,10 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
   File ▸ Open ROM… / Open Recent (dynamic history) / Clear History / Settings… / Quit;
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
-  Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`); Help ▸ About. Menu
+  Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`). Menu
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
+  About is platform-aware: macOS uses the OS-standard application-menu About item, while
+  Windows/Linux keep the Slint Help ▸ About dialog.
   Native Open ROM dialogs are opened outside the Slint frame timer, and
   emulation/audio/input stays idle while the picker is open.
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted) / Reset (Ctrl+R, reloads
@@ -210,3 +212,20 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
+
+## Release tooling — macOS App Bundle
+
+- **Unsigned universal macOS bundle script** — `scripts/build-macos-app.sh` builds the
+  `frontend` package for `aarch64-apple-darwin` and `x86_64-apple-darwin`, with
+  `MACOSX_DEPLOYMENT_TARGET=13.5`, combines the two release binaries via `lipo`, generates
+  `Contents/Resources/Assets.car` from `assets/icons/AppIcon.png`, fills the
+  `Info.plist` metadata used by macOS's standard About panel, and emits `target/release/Swanium.app`
+  plus `target/release/Swanium-macos-universal.zip`.
+  The bundle intentionally performs no code signing.
+- **Platform-split CI** — GitHub Actions workflows are split into
+  `.github/workflows/ci-linux.yml`, `.github/workflows/ci-macos.yml`, and
+  `.github/workflows/ci-windows.yml`, with path filters so documentation-only changes do not run
+  build/test jobs. The macOS workflow runs on `macos-26`, executes the same bundle script used
+  locally, uploads the `.app` directory as the normal workflow artifact (avoiding zip-in-zip), and
+  publishes the generated unsigned universal zip only for GitHub Releases via
+  `.github/workflows/publish-release-assets.yml`.

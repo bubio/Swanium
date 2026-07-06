@@ -1,15 +1,17 @@
 # Swanium
 
-> **Work in progress — a ROM boots, renders, and plays sound, but accuracy work remains.**
+> **Work in progress — mono and color ROMs boot, render, and play sound, but accuracy work remains.**
 
 A cycle-accurate WonderSwan / WonderSwan Color emulator written in Rust.
 
 ## Status
 
-The emulator core (CPU, memory, interrupts, timers, DMA, PPU, APU, cartridge)
-is implemented and a minimal Slint frontend can load a `.ws` ROM, display the
-picture, play audio through cpal, and accept keyboard and gamepad input.
-**445 tests pass** across the workspace.
+The emulator core (CPU, memory, interrupts, timers, DMA, PPU, APU, cartridge,
+RTC, and WonderSwan Color extensions) is implemented. The Slint frontend can
+load `.ws` / `.wsc` ROMs, display the picture, play audio through cpal, and
+accept keyboard and gamepad input. **570 tests pass** across the workspace,
+with 2 public-ROM compatibility tests kept opt-in because ROM binaries are not
+committed.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -20,10 +22,10 @@ picture, play audio through cpal, and accept keyboard and gamepad input.
 | 4 | PPU (monochrome tile/sprite scanline renderer) | ✅ Complete |
 | 5 | APU (4 wave-table channels + voice/sweep/noise) | ✅ Complete |
 | 6 | Cartridge header, mapper banking, EEPROM, save data | ✅ Complete |
-| 7 | Frontend: Slint window, framebuffer, keyboard, cpal audio | 🚧 In progress |
-| 8 | WonderSwan Color extensions (color palettes, RTC) | 🔲 Not started |
+| 7 | Frontend: Slint window, framebuffer, keyboard/gamepad, cpal audio | 🚧 In progress |
+| 8 | WonderSwan Color extensions (color palettes, RTC, HyperVoice) | ✅ Complete |
 
-### Phase 7 remaining follow-ups
+### Frontend status
 
 - ✅ **Config persistence** — TOML load/save of `Config` (serde + toml); the
   frontend loads `~/.config/swanium/config.toml` (platform-dependent) at startup.
@@ -36,10 +38,13 @@ picture, play audio through cpal, and accept keyboard and gamepad input.
   (via `rfd`, XDG-portal backend on Linux so no GTK is needed). The picker
   remembers the last directory and swapping ROMs flushes the audio buffer.
 - ✅ **Menu bar & status bar** — a Slint `MenuBar` (native macOS menu bar,
-  in-window elsewhere) with `File ▸ Open ROM…` / `Quit`, plus a bottom status
-  bar showing the current ROM name and a live FPS readout.
-- **UI**: start/pause, settings & key-binding screens.
-- High-quality scaling / shader post-processing (deferred to Phase 9).
+  in-window elsewhere) with ROM history, settings, view controls, pause/reset,
+  plus a bottom status bar showing the current ROM name, FPS, and volume.
+- ✅ **Input settings** — keyboard and controller bindings can be remapped and
+  persisted.
+- ✅ **About** — macOS uses the OS-standard application menu About item;
+  Windows/Linux use the Slint Help ▸ About dialog.
+- High-quality scaling / shader post-processing remains deferred.
 
 ### Known issues
 
@@ -59,6 +64,40 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
+
+### macOS App Bundle
+
+Build the unsigned universal App Bundle locally on macOS:
+
+```sh
+scripts/build-macos-app.sh
+```
+
+The script builds `frontend` for both `aarch64-apple-darwin` and
+`x86_64-apple-darwin`, combines them with `lipo`, generates the app icon from
+`assets/icons/AppIcon.png` into `Contents/Resources/Assets.car`, fills the
+bundle metadata used by macOS's standard About panel, and writes:
+
+- `target/release/Swanium.app`
+- `target/release/Swanium-macos-universal.zip`
+
+The bundle targets macOS 13.5 or newer (`MACOSX_DEPLOYMENT_TARGET=13.5`) and is
+not code-signed.
+
+## CI/CD
+
+GitHub Actions are split by platform:
+
+- `.github/workflows/ci-linux.yml`
+- `.github/workflows/ci-macos.yml`
+- `.github/workflows/ci-windows.yml`
+
+Each workflow uses path filters so documentation-only changes do not trigger
+build/test jobs. The macOS workflow runs on `macos-26`, calls
+`scripts/build-macos-app.sh`, and uploads the `.app` directory as the normal
+workflow artifact to avoid zip-in-zip packaging. On GitHub Releases, the
+generated `Swanium-macos-universal.zip` is published as a release asset via
+`.github/workflows/publish-release-assets.yml`.
 
 ## Running
 
