@@ -48,6 +48,7 @@ const SND_SWEEP_VALUE: usize = 0x8C; // signed sweep delta
 const SND_SWEEP_TIME: usize = 0x8D; // sweep step count (5 bits)
 const SND_NOISE: usize = 0x8E; // noise control (tap, enable, reset)
 const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
+const SND_OUTPUT_CTRL: usize = 0x91; // speaker/headphone output mode and speaker shift
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
 
@@ -250,8 +251,8 @@ impl Apu {
             // its own (4 channels × 15 × 15 × MIX_SCALE = 28 800 < i16 max), so
             // the clamp applies only once the voice and HyperVoice are added.
             let (hv_l, hv_r) = hypervoice_output(ports, color);
-            let left = (wave_l + voice_l + hv_l).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            let right = (wave_r + voice_r + hv_r).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let (left, right) =
+                apply_output_control(wave_l + voice_l + hv_l, wave_r + voice_r + hv_r, ports);
             self.samples.push(left);
             self.samples.push(right);
         }
@@ -467,6 +468,25 @@ fn voice_route(v: i32, voice_vol: u8) -> (i32, i32) {
         0
     };
     (left, right)
+}
+
+/// Apply the WonderSwan output-control register (`0x91`) to the mixed sample.
+///
+/// With bit 7 clear the console speaker path mixes left and right to mono, then
+/// attenuates by bits 2-1. With bit 7 set the headphone path preserves stereo.
+fn apply_output_control(left: i32, right: i32, ports: &[u8]) -> (i16, i16) {
+    let output_ctrl = ports[SND_OUTPUT_CTRL];
+    if output_ctrl & 0x80 != 0 {
+        return (clamp_i16(left), clamp_i16(right));
+    }
+
+    let shift = (output_ctrl >> 1) & 0x03;
+    let mono = clamp_i16((left + right) >> shift);
+    (mono, mono)
+}
+
+fn clamp_i16(sample: i32) -> i16 {
+    sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
 /// The voice (PCM) reconstruction filter: a 2-tap moving average over the raw

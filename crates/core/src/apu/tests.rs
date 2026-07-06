@@ -6,7 +6,9 @@ use super::*;
 
 /// A blank port file and a 16 KiB WRAM, the shapes the APU expects.
 fn blank() -> ([u8; 0x100], Vec<u8>) {
-    ([0u8; 0x100], vec![0u8; 0x4000])
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x80; // headphone path: preserve stereo in focused mix tests
+    (ports, vec![0u8; 0x4000])
 }
 
 /// Write a 16-byte waveform (32× 4-bit samples) for channel `ch` at the
@@ -312,6 +314,27 @@ fn voice_lowpass_reset_clears_state() {
     }
     lp.reset();
     assert_eq!(lp.filter(0), 0);
+}
+
+#[test]
+fn output_control_speaker_mixes_stereo_to_mono() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x00; // speaker path, no attenuation
+    assert_eq!(apply_output_control(100, 300, &ports), (400, 400));
+}
+
+#[test]
+fn output_control_speaker_shift_attenuates_mono_sum() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x06; // speaker path, shift = 3
+    assert_eq!(apply_output_control(400, 400, &ports), (100, 100));
+}
+
+#[test]
+fn output_control_headphone_preserves_stereo() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x80;
+    assert_eq!(apply_output_control(100, 300, &ports), (100, 300));
 }
 
 // ── Noise (channel 4 LFSR) ───────────────────────────────────────────────────
