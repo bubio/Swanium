@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-05. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-06. Update this file (not AGENTS.md) when implementation progress changes.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
@@ -38,8 +38,11 @@ GDMA (memory-to-memory) and SDMA (sound) transfer engines. I/O ports dispatch to
 ### CPU test ROMs — Phase 3 (`tests/cpu_test_roms.rs`)
 Self-built machine-code integration harness (`run_code`) covering arithmetic, control flow,
 stack, string instructions, HLT. Public WSCPUTest / ws-test-suite ROMs are opt-in and
-env-gated in `tests/public_roms.rs` (2 `ignored`; output-format verification is a Phase 3
-residual task, see DevelopmentPlan §10.4).
+env-gated in `tests/public_roms.rs` (2 `ignored`). The WSCPUTest path is verified against
+FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::run_frame`,
+injects A to start the default `Test All` menu item, and decodes the background tile map for
+`Ok!` / `Failed!` output. The ws-test-suite output-format verification is still a Phase 3
+residual task.
 
 ### PPU — Phase 4 (`ppu/`)
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
