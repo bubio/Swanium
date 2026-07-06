@@ -39,6 +39,7 @@ pub struct Cpu {
     pub regs: Registers,
     pub flags: Flags,
     pub halted: bool,
+    pub fault: Option<CpuFault>,
     /// Set by a segment-override prefix opcode (0x26/2E/36/3E); used by
     /// the immediately following instruction's effective-address calculation,
     /// then cleared by `step`.
@@ -46,6 +47,13 @@ pub struct Cpu {
     /// Set by a REP/REPE/REPNE prefix (0xF3/0xF2); consumed by the
     /// immediately following string instruction, then cleared by `step`.
     pub rep_prefix: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuFault {
+    pub opcode: u8,
+    pub cs: u16,
+    pub ip: u16,
 }
 
 impl Cpu {
@@ -115,6 +123,16 @@ impl Cpu {
         value
     }
 
+    fn fault_unsupported(&mut self, opcode: u8) -> u32 {
+        self.fault = Some(CpuFault {
+            opcode,
+            cs: self.regs.cs,
+            ip: self.regs.ip.wrapping_sub(1),
+        });
+        self.halted = true;
+        1
+    }
+
     /// V30MZ clock cost for a ModRM instruction, choosing the register- or
     /// memory-operand count (see [`timing::rm`] and the [`timing`] module).
     fn cycles_for(rm: &RegMem, reg: u32, mem: u32) -> u32 {
@@ -180,7 +198,7 @@ impl Cpu {
         }
 
         match opcode {
-            0x80 => {
+            0x80 | 0x82 => {
                 let m = decode_modrm(self, bus);
                 let imm = self.fetch_u8(bus);
                 let op = alu_op_from_reg_field(m.reg);
@@ -431,7 +449,11 @@ impl Cpu {
             }
             0x99 => {
                 // CWD
-                self.regs.dx = if self.regs.ax & 0x8000 != 0 { 0xFFFF } else { 0 };
+                self.regs.dx = if self.regs.ax & 0x8000 != 0 {
+                    0xFFFF
+                } else {
+                    0
+                };
                 1
             }
             0x9C => {
@@ -439,6 +461,10 @@ impl Cpu {
                 let v = self.flags.to_u16();
                 self.push16(bus, v);
                 2
+            }
+            0x9B => {
+                // WAIT/FWAIT. No external coprocessor is modelled.
+                3
             }
             0x9D => {
                 // POPF
@@ -508,11 +534,15 @@ impl Cpu {
             0xF6 => {
                 let m = decode_modrm(self, bus);
                 match m.reg & 0b111 {
-                    0 | 1 => {
+                    0 => {
                         let imm = self.fetch_u8(bus);
                         let a = self.read_rm8(bus, &m.rm);
                         self.test_u8(a, imm);
                         Self::cycles_for(&m.rm, 1, 2)
+                    }
+                    1 => {
+                        let _ = self.fetch_u8(bus);
+                        1
                     }
                     2 => {
                         let a = self.read_rm8(bus, &m.rm);
@@ -567,11 +597,15 @@ impl Cpu {
             0xF7 => {
                 let m = decode_modrm(self, bus);
                 match m.reg & 0b111 {
-                    0 | 1 => {
+                    0 => {
                         let imm = self.fetch_u16(bus);
                         let a = self.read_rm16(bus, &m.rm);
                         self.test_u16(a, imm);
                         Self::cycles_for(&m.rm, 1, 2)
+                    }
+                    1 => {
+                        let _ = self.fetch_u16(bus);
+                        1
                     }
                     2 => {
                         let a = self.read_rm16(bus, &m.rm);
@@ -709,6 +743,7 @@ impl Cpu {
                 self.push16(bus, v);
                 2
             }
+            0x0F => 1,
             0x16 => {
                 let v = self.regs.ss;
                 self.push16(bus, v);
@@ -832,6 +867,13 @@ impl Cpu {
                 self.set_zsp8(result);
                 6
             }
+            0xD6 => {
+                // SALC/SETALC: undocumented on 8086, but harmless and useful
+                // for compatibility. AL becomes 0xFF when CF=1, else 0x00.
+                self.regs
+                    .set_reg8(0, if self.flags.carry { 0xFF } else { 0 });
+                3
+            }
 
             // ── MOV: memory direct (0xA0–0xA3) ───────────────────────────
             0xA0 => {
@@ -896,9 +938,7 @@ impl Cpu {
                 let m = decode_modrm(self, bus);
                 let addr = match m.rm {
                     RegMem::Mem(a) => a,
-                    RegMem::Reg(_) => {
-                        unimplemented!("LES requires a memory operand")
-                    }
+                    RegMem::Reg(rm) => self.ws_reg_mode_effective_address(rm),
                 };
                 let off = bus.read_u16(addr);
                 let seg = bus.read_u16(addr.wrapping_add(2));
@@ -911,9 +951,7 @@ impl Cpu {
                 let m = decode_modrm(self, bus);
                 let addr = match m.rm {
                     RegMem::Mem(a) => a,
-                    RegMem::Reg(_) => {
-                        unimplemented!("LDS requires a memory operand")
-                    }
+                    RegMem::Reg(rm) => self.ws_reg_mode_effective_address(rm),
                 };
                 let off = bus.read_u16(addr);
                 let seg = bus.read_u16(addr.wrapping_add(2));
@@ -924,16 +962,22 @@ impl Cpu {
 
             // ── ENTER / LEAVE ─────────────────────────────────────────────
             0xC8 => {
-                // ENTER size, level — only level 0 implemented (the common
-                // case; nested frame construction would be rare on WonderSwan)
+                // ENTER size, level.
                 let size = self.fetch_u16(bus);
                 let level = self.fetch_u8(bus) & 0x1F;
-                if level != 0 {
-                    unimplemented!("ENTER with nesting level {level} not yet implemented (Phase 1)");
+                let old_bp = self.regs.bp;
+                self.push16(bus, old_bp);
+                let frame_temp = self.regs.sp;
+                if level > 0 {
+                    for _ in 1..level {
+                        self.regs.bp = self.regs.bp.wrapping_sub(2);
+                        let addr = linear_address(self.regs.ss, self.regs.bp);
+                        let v = bus.read_u16(addr);
+                        self.push16(bus, v);
+                    }
+                    self.push16(bus, frame_temp);
                 }
-                let bp = self.regs.bp;
-                self.push16(bus, bp);
-                self.regs.bp = self.regs.sp;
+                self.regs.bp = frame_temp;
                 self.regs.sp = self.regs.sp.wrapping_sub(size);
                 8
             }
@@ -987,14 +1031,64 @@ impl Cpu {
             // ── INC/DEC r/m (group FE/FF) ─────────────────────────────────
             0xFE => {
                 let m = decode_modrm(self, bus);
-                let a = self.read_rm8(bus, &m.rm);
-                let r = match m.reg & 0b111 {
-                    0 => self.inc_u8(a),
-                    1 => self.dec_u8(a),
-                    other => unimplemented!("opcode 0xFE reg field {other} not yet implemented"),
-                };
-                self.write_rm8(bus, &m.rm, r);
-                Self::cycles_for(&m.rm, 1, 3)
+                match m.reg & 0b111 {
+                    0 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        let r = self.inc_u8(a);
+                        self.write_rm8(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 1, 3)
+                    }
+                    1 => {
+                        let a = self.read_rm8(bus, &m.rm);
+                        let r = self.dec_u8(a);
+                        self.write_rm8(bus, &m.rm, r);
+                        Self::cycles_for(&m.rm, 1, 3)
+                    }
+                    2 => {
+                        let target = self.read_rm16(bus, &m.rm);
+                        let ret_ip = self.regs.ip;
+                        self.push16(bus, ret_ip);
+                        self.regs.ip = target;
+                        Self::cycles_for(&m.rm, 5, 6)
+                    }
+                    3 => {
+                        let addr = match m.rm {
+                            RegMem::Mem(a) => a,
+                            RegMem::Reg(rm) => self.ws_reg_mode_effective_address(rm),
+                        };
+                        let new_ip = bus.read_u16(addr);
+                        let new_cs = bus.read_u16(addr.wrapping_add(2));
+                        let ret_cs = self.regs.cs;
+                        let ret_ip = self.regs.ip;
+                        self.push16(bus, ret_cs);
+                        self.push16(bus, ret_ip);
+                        self.regs.ip = new_ip;
+                        self.regs.cs = new_cs;
+                        12
+                    }
+                    4 => {
+                        let target = self.read_rm16(bus, &m.rm);
+                        self.regs.ip = target;
+                        Self::cycles_for(&m.rm, 4, 5)
+                    }
+                    5 => {
+                        let addr = match m.rm {
+                            RegMem::Mem(a) => a,
+                            RegMem::Reg(rm) => self.ws_reg_mode_effective_address(rm),
+                        };
+                        let new_ip = bus.read_u16(addr);
+                        let new_cs = bus.read_u16(addr.wrapping_add(2));
+                        self.regs.ip = new_ip;
+                        self.regs.cs = new_cs;
+                        9
+                    }
+                    6 => {
+                        let v = self.read_rm16(bus, &m.rm);
+                        self.push16(bus, v);
+                        Self::cycles_for(&m.rm, 1, 2)
+                    }
+                    _ => 1,
+                }
             }
             0xFF => {
                 let m = decode_modrm(self, bus);
@@ -1023,9 +1117,7 @@ impl Cpu {
                         // CALL far indirect: [rm] = ip, [rm+2] = cs
                         let addr = match m.rm {
                             RegMem::Mem(a) => a,
-                            RegMem::Reg(_) => {
-                                unimplemented!("CALL far indirect requires memory operand")
-                            }
+                            RegMem::Reg(_) => return self.fault_unsupported(opcode),
                         };
                         let new_ip = bus.read_u16(addr);
                         let new_cs = bus.read_u16(addr.wrapping_add(2));
@@ -1047,9 +1139,7 @@ impl Cpu {
                         // JMP far indirect: [rm] = ip, [rm+2] = cs
                         let addr = match m.rm {
                             RegMem::Mem(a) => a,
-                            RegMem::Reg(_) => {
-                                unimplemented!("JMP far indirect requires memory operand")
-                            }
+                            RegMem::Reg(_) => return self.fault_unsupported(opcode),
                         };
                         let new_ip = bus.read_u16(addr);
                         let new_cs = bus.read_u16(addr.wrapping_add(2));
@@ -1063,13 +1153,16 @@ impl Cpu {
                         self.push16(bus, v);
                         Self::cycles_for(&m.rm, 1, 2)
                     }
-                    other => {
-                        unimplemented!("opcode 0xFF reg field {other} is not defined on 8086")
-                    }
+                    _ => 1,
                 }
             }
 
             // ── INT / IRET / INTO ─────────────────────────────────────────
+            0xCC => {
+                // INT3: one-byte breakpoint interrupt.
+                self.handle_irq(bus, 3);
+                10
+            }
             0xCD => {
                 // INT n: software interrupt
                 let n = self.fetch_u8(bus);
@@ -1195,6 +1288,8 @@ impl Cpu {
                 }
                 13
             }
+            0x63 => 1,
+            0x64..=0x67 => 1,
             0x68 => {
                 // PUSH imm16
                 let v = self.fetch_u16(bus);
@@ -1228,6 +1323,11 @@ impl Cpu {
             0xC0 => {
                 // Shift/rotate r/m8, imm8
                 let m = decode_modrm(self, bus);
+                if m.reg == 6 {
+                    let _ = self.fetch_u8(bus);
+                    self.write_rm8(bus, &m.rm, 0);
+                    return Self::cycles_for(&m.rm, 3, 5);
+                }
                 let op = shift_op_from_reg_field(m.reg);
                 let count = self.fetch_u8(bus);
                 let a = self.read_rm8(bus, &m.rm);
@@ -1238,6 +1338,11 @@ impl Cpu {
             0xC1 => {
                 // Shift/rotate r/m16, imm8
                 let m = decode_modrm(self, bus);
+                if m.reg == 6 {
+                    let _ = self.fetch_u8(bus);
+                    self.write_rm16(bus, &m.rm, 0);
+                    return Self::cycles_for(&m.rm, 3, 5);
+                }
                 let op = shift_op_from_reg_field(m.reg);
                 let count = self.fetch_u8(bus);
                 let a = self.read_rm16(bus, &m.rm);
@@ -1253,10 +1358,26 @@ impl Cpu {
                 Self::cycles_for(&m.rm, 1, 3)
             }
 
-            _ => unimplemented!(
-                "opcode {:#04X} is not yet implemented (Phase 1 covers a representative subset; see docs/dev/DevelopmentPlan.md)",
-                opcode
-            ),
+            // ESC opcodes for an external coprocessor. WonderSwan has no x87,
+            // so consume the ModRM/displacement bytes and otherwise ignore.
+            0xD8..=0xDF => {
+                let _ = self.fetch_u8(bus);
+                1
+            }
+
+            // LOCK prefix. The bus is single-threaded here, so execute the
+            // following instruction normally after consuming the prefix.
+            0xF0 => {
+                let op = self.fetch_u8(bus);
+                self.execute(op, bus)
+            }
+            0xF1 => {
+                // INT1/ICEBP-style one-byte breakpoint.
+                self.handle_irq(bus, 1);
+                10
+            }
+
+            _ => self.fault_unsupported(opcode),
         }
     }
 
@@ -1270,9 +1391,7 @@ impl Cpu {
         let rm = byte & 0b111;
 
         if md == 0b11 {
-            // Undefined behaviour for register operand; return the register
-            // value as a best-effort (no real program should do this).
-            return (reg, self.regs.get_reg16(rm));
+            return (reg, self.ws_reg_mode_effective_offset(rm));
         }
 
         if md == 0b00 && rm == 0b110 {
@@ -1300,6 +1419,28 @@ impl Cpu {
         };
 
         (reg, base.wrapping_add(disp))
+    }
+
+    fn ws_reg_mode_effective_offset(&self, rm: u8) -> u16 {
+        match rm & 0b111 {
+            0 => self.regs.bx.wrapping_add(self.regs.ax),
+            1 => self.regs.bx.wrapping_add(self.regs.cx),
+            2 => self.regs.bp.wrapping_add(self.regs.dx),
+            3 => self.regs.bp.wrapping_add(self.regs.bx),
+            4 => self.regs.si.wrapping_add(self.regs.sp),
+            5 => self.regs.di.wrapping_add(self.regs.bp),
+            6 => self.regs.bp.wrapping_add(self.regs.si),
+            7 => self.regs.bx.wrapping_add(self.regs.di),
+            _ => unreachable!(),
+        }
+    }
+
+    fn ws_reg_mode_effective_address(&self, rm: u8) -> u32 {
+        let segment = match rm & 0b111 {
+            2 | 3 | 6 => self.regs.ss,
+            _ => self.regs.ds,
+        };
+        linear_address(segment, self.ws_reg_mode_effective_offset(rm))
     }
 
     /// Executes one string instruction opcode, with REP/REPE/REPNE looping

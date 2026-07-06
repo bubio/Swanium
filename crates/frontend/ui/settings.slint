@@ -1,9 +1,9 @@
-// Input settings window: keyboard + controller remapping.
+// Settings window: BIOS startup mode plus keyboard/controller remapping.
 //
-// The Rust side fills `rows` (one per WonderSwan button) and handles the
-// rebind callbacks. Rebinding a key works by capture: clicking a keyboard
-// cell returns focus to the FocusScope and arms capture; the next key press
-// fires `key-captured`. Controller capture is polled on the Rust side while
+// The Rust side fills the persisted settings and `rows` (one per WonderSwan
+// button). Rebinding a key works by capture: clicking a keyboard cell returns
+// focus to the FocusScope and arms capture; the next key press fires
+// `key-captured`. Controller capture is polled on the Rust side while
 // `rebind-pad` is armed.
 
 import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
@@ -15,10 +15,13 @@ export struct BindingRow {
 }
 
 export component SettingsWindow inherits Window {
+    // 0 = disabled/direct boot, 1 = WonderSwan, 2 = WonderSwan Color, 3 = SwanCrystal.
+    in property <int> bios-rom-mode;
     in property <[BindingRow]> rows;
     // Non-empty while waiting for a key/button, e.g. "Press a key for A…".
     in property <string> listening-hint;
 
+    callback set-bios-rom-mode(int);
     callback rebind-key(int);
     callback rebind-pad(int);
     // Fired for every key press while the window has focus; Rust ignores it
@@ -27,9 +30,9 @@ export component SettingsWindow inherits Window {
     callback reset-defaults();
     callback close-settings();
 
-    title: "Swanium — Input Settings";
+    title: "Swanium — Settings";
     preferred-width: 480px;
-    preferred-height: 540px;
+    preferred-height: 620px;
     forward-focus: scope;
 
     scope := FocusScope {
@@ -39,6 +42,31 @@ export component SettingsWindow inherits Window {
         }
 
         VerticalBox {
+            Text {
+                text: "BIOS ROM";
+                font-size: 16px;
+                font-weight: 700;
+            }
+            VerticalBox {
+                Button {
+                    text: root.bios-rom-mode == 0
+                        ? "✓ Do not use (current WonderSwan Color direct boot)"
+                        : "Do not use (current WonderSwan Color direct boot)";
+                    clicked => { root.set-bios-rom-mode(0); }
+                }
+                Button {
+                    text: root.bios-rom-mode == 1 ? "✓ WonderSwan" : "WonderSwan";
+                    clicked => { root.set-bios-rom-mode(1); }
+                }
+                Button {
+                    text: root.bios-rom-mode == 2 ? "✓ WonderSwan Color" : "WonderSwan Color";
+                    clicked => { root.set-bios-rom-mode(2); }
+                }
+                Button {
+                    text: root.bios-rom-mode == 3 ? "✓ SwanCrystal" : "SwanCrystal";
+                    clicked => { root.set-bios-rom-mode(3); }
+                }
+            }
             Text {
                 text: "Input bindings";
                 font-size: 16px;
@@ -83,7 +111,7 @@ export component SettingsWindow inherits Window {
             HorizontalBox {
                 alignment: end;
                 Button {
-                    text: "Reset to Defaults";
+                    text: "Reset Input Defaults";
                     clicked => { root.reset-defaults(); }
                 }
                 Button {

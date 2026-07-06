@@ -3,8 +3,8 @@
 //! Scope (see `docs/dev/DevelopmentPlan.md` Phase 7): open a window, run the
 //! core one frame at a time, show the framebuffer, play audio (cpal), and
 //! accept keyboard and gamepad input. The menu bar exposes ROM history, window
-//! scale, fullscreen, vertical rotation, renderer choice, an input-remapping
-//! settings window, and a non-macOS About window. Settings persist to `config.toml`.
+//! scale, fullscreen, vertical rotation, renderer choice, a settings window,
+//! and a non-macOS About window. Settings persist to `config.toml`.
 //!
 //! The Slint markup lives in `ui/*.slint` and is compiled by `build.rs`;
 //! [`slint::include_modules!`] brings the generated `MainWindow`,
@@ -18,11 +18,12 @@ mod keymap;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use common::config::{Config, RendererKind, RotationKind};
+use common::config::{BiosRomKind, Config, RendererKind, RotationKind};
 use input::Button;
 use keymap::Keymap;
 use slint::{
@@ -51,6 +52,7 @@ const STATUS_BAR_HEIGHT: f32 = 22.0;
 
 /// How often the status bar's FPS readout is refreshed.
 const FPS_REFRESH: Duration = Duration::from_millis(500);
+const BIOS_SETTINGS_START_FRAMES: u8 = 12;
 
 /// Which input device an in-progress rebind is capturing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +92,7 @@ struct App {
     /// True while the native file dialog is running its modal event loop.
     open_dialog_active: Rc<Cell<bool>>,
     reset_request: Rc<Cell<bool>>,
+    bios_settings_start_frames: Rc<Cell<u8>>,
     settings: Rc<RefCell<Option<SettingsWindow>>>,
     about: Rc<RefCell<Option<AboutWindow>>>,
 }
@@ -139,6 +142,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         pending_open_path: Rc::new(RefCell::new(None)),
         open_dialog_active: Rc::new(Cell::new(false)),
         reset_request: Rc::new(Cell::new(false)),
+        bios_settings_start_frames: Rc::new(Cell::new(0)),
         settings: Rc::new(RefCell::new(None)),
         about: Rc::new(RefCell::new(None)),
     };
@@ -210,22 +214,15 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             return;
         }
         if app.reset_request.take() {
-            let path = app.rom_path.borrow().clone();
-            if let Some(path) = path {
-                app.pressed.borrow_mut().clear();
-                if let Some(window) = window_weak.upgrade() {
-                    load_into(&path, app, &window);
-                    if app.paused.get() {
-                        window
-                            .set_status_text(format!("{} — paused", app.rom_label.borrow()).into());
-                    }
-                }
-                if let Some(ref audio) = audio_stream {
-                    audio.clear();
-                }
-                frames_since_refresh = 0;
-                fps_anchor = Instant::now();
+            app.pressed.borrow_mut().clear();
+            if let Some(window) = window_weak.upgrade() {
+                reset_emulation(app, &window);
             }
+            if let Some(ref audio) = audio_stream {
+                audio.clear();
+            }
+            frames_since_refresh = 0;
+            fps_anchor = Instant::now();
             return;
         }
 
@@ -269,10 +266,57 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         if let Some(gp) = app.gamepad.borrow_mut().as_mut() {
             keys |= gp.poll();
         }
-        if dump {
-            dump_display_registers(system, keys);
-        } else {
-            system.run_frame(keys);
+        let start_frames = app.bios_settings_start_frames.get();
+        if start_frames > 0 {
+            keys |= KeyState::START;
+            app.bios_settings_start_frames
+                .set(start_frames.saturating_sub(1));
+        }
+        let run_result = catch_unwind(AssertUnwindSafe(|| {
+            if dump {
+                dump_display_registers(system, keys);
+            } else {
+                system.run_frame(keys);
+            }
+        }));
+        if let Err(payload) = run_result {
+            let reason = panic_payload_message(payload.as_ref());
+            let context = cpu_context(system);
+            tracing::error!("emulation stopped after core panic: {reason}");
+            app.paused.set(true);
+            if let Some(window) = window_weak.upgrade() {
+                window.set_paused(true);
+                window.set_status_text(
+                    format!(
+                        "{} — stopped: {reason} at {context}",
+                        app.rom_label.borrow()
+                    )
+                    .into(),
+                );
+            }
+            return;
+        }
+        if let Some(fault) = system.cpu().fault {
+            let context = cpu_context(system);
+            tracing::error!(
+                opcode = format_args!("0x{:02X}", fault.opcode),
+                cs = format_args!("0x{:04X}", fault.cs),
+                ip = format_args!("0x{:04X}", fault.ip),
+                "emulation stopped on unsupported CPU opcode"
+            );
+            app.paused.set(true);
+            if let Some(window) = window_weak.upgrade() {
+                window.set_paused(true);
+                window.set_status_text(
+                    format!(
+                        "{} — stopped: unsupported opcode 0x{:02X} at {context}",
+                        app.rom_label.borrow(),
+                        fault.opcode
+                    )
+                    .into(),
+                );
+            }
+            return;
         }
         if let Some(ref mut audio) = audio_stream {
             audio.set_volume(app.volume.get());
@@ -471,7 +515,25 @@ fn wire_menu(window: &MainWindow, app: &App) {
     });
     window.on_reset_emulation({
         let app = app.clone();
-        move || app.reset_request.set(true)
+        move || {
+            app.bios_settings_start_frames.set(0);
+            app.reset_request.set(true);
+        }
+    });
+    window.on_open_bios_settings({
+        let app = app.clone();
+        let weak = window.as_weak();
+        move || {
+            if app.config.borrow().bios_rom == BiosRomKind::Disabled {
+                if let Some(window) = weak.upgrade() {
+                    window.set_status_text("Select a BIOS ROM in Settings first".into());
+                }
+                return;
+            }
+            app.bios_settings_start_frames
+                .set(BIOS_SETTINGS_START_FRAMES);
+            app.reset_request.set(true);
+        }
     });
     window.on_open_settings({
         let app = app.clone();
@@ -528,6 +590,22 @@ fn open_settings(app: &App, main: &MainWindow) {
             }
         }
     });
+    settings.on_set_bios_rom_mode({
+        let app = app.clone();
+        let weak = settings.as_weak();
+        let main = main.as_weak();
+        move |mode| {
+            let kind = bios_rom_from_index(mode);
+            app.config.borrow_mut().bios_rom = kind;
+            save(&app);
+            if let Some(w) = weak.upgrade() {
+                w.set_bios_rom_mode(bios_rom_index(kind));
+            }
+            if let Some(window) = main.upgrade() {
+                reset_emulation(&app, &window);
+            }
+        }
+    });
     settings.on_key_captured({
         let app = app.clone();
         let main = main.as_weak();
@@ -571,6 +649,7 @@ fn open_settings(app: &App, main: &MainWindow) {
         }
     });
 
+    settings.set_bios_rom_mode(bios_rom_index(app.config.borrow().bios_rom));
     settings.set_rows(binding_rows(&app.config.borrow(), &app.keymap.borrow()));
     if let Err(e) = settings.show() {
         tracing::error!("could not show settings window: {e}");
@@ -630,6 +709,7 @@ fn sync_keyboard_config(app: &App) {
 /// Rebuild the settings window's binding rows and clear the listening hint.
 fn refresh_settings_rows(app: &App, _main: &MainWindow) {
     if let Some(settings) = app.settings.borrow().as_ref() {
+        settings.set_bios_rom_mode(bios_rom_index(app.config.borrow().bios_rom));
         settings.set_rows(binding_rows(&app.config.borrow(), &app.keymap.borrow()));
         settings.set_listening_hint(SharedString::new());
     }
@@ -776,6 +856,133 @@ fn from_slint_renderer(renderer: Renderer) -> RendererKind {
     }
 }
 
+fn bios_rom_index(kind: BiosRomKind) -> i32 {
+    match kind {
+        BiosRomKind::Disabled => 0,
+        BiosRomKind::WonderSwan => 1,
+        BiosRomKind::WonderSwanColor => 2,
+        BiosRomKind::WonderSwanCrystal => 3,
+    }
+}
+
+fn bios_rom_from_index(index: i32) -> BiosRomKind {
+    match index {
+        1 => BiosRomKind::WonderSwan,
+        2 => BiosRomKind::WonderSwanColor,
+        3 => BiosRomKind::WonderSwanCrystal,
+        _ => BiosRomKind::Disabled,
+    }
+}
+
+fn forced_model_from_bios(kind: BiosRomKind) -> Option<HardwareModel> {
+    match kind {
+        BiosRomKind::Disabled => None,
+        BiosRomKind::WonderSwan => Some(HardwareModel::Mono),
+        BiosRomKind::WonderSwanColor => Some(HardwareModel::Color),
+        BiosRomKind::WonderSwanCrystal => Some(HardwareModel::Crystal),
+    }
+}
+
+fn bios_rom_label(kind: BiosRomKind) -> &'static str {
+    match kind {
+        BiosRomKind::Disabled => "direct boot",
+        BiosRomKind::WonderSwan => "WonderSwan BIOS",
+        BiosRomKind::WonderSwanColor => "WonderSwan Color BIOS",
+        BiosRomKind::WonderSwanCrystal => "SwanCrystal BIOS",
+    }
+}
+
+fn load_bios_rom(kind: BiosRomKind) -> Option<(PathBuf, Vec<u8>)> {
+    let path = Config::bios_path(kind)
+        .inspect_err(|e| tracing::warn!("could not locate BIOS directory: {e}"))
+        .ok()
+        .flatten()?;
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            tracing::info!(
+                bios = %path.display(),
+                bytes = bytes.len(),
+                "loaded BIOS ROM"
+            );
+            Some((path, bytes))
+        }
+        Err(e) => {
+            tracing::warn!(bios = %path.display(), "could not load BIOS ROM: {e}");
+            None
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "core panic".to_string()
+    }
+}
+
+fn cpu_context(system: &System) -> String {
+    let cpu = system.cpu();
+    let opcode_ip = cpu.regs.ip.wrapping_sub(1);
+    format!(
+        "CS:IP={:04X}:{:04X} AX={:04X} BX={:04X} CX={:04X} DX={:04X} SP={:04X}",
+        cpu.regs.cs, opcode_ip, cpu.regs.ax, cpu.regs.bx, cpu.regs.cx, cpu.regs.dx, cpu.regs.sp
+    )
+}
+
+fn reset_emulation(app: &App, window: &MainWindow) {
+    if let Some(path) = app.rom_path.borrow().clone() {
+        load_into(&path, app, window);
+        if app.paused.get() {
+            window.set_status_text(format!("{} — paused", app.rom_label.borrow()).into());
+        }
+        return;
+    }
+
+    let bios_kind = app.config.borrow().bios_rom;
+    let Some((bios_path, boot_rom)) = load_bios_rom(bios_kind) else {
+        *app.system.borrow_mut() = None;
+        app.rom_label.borrow_mut().clear();
+        window.set_window_title("Swanium".into());
+        window.set_status_text("No ROM loaded".into());
+        window.set_has_rom(false);
+        return;
+    };
+
+    let mut sys = System::from_rom_with_boot_rom(empty_cartridge_rom(), boot_rom);
+    if let Some(model) = forced_model_from_bios(bios_kind) {
+        sys.set_model(model);
+    }
+    let kind = if sys.model().is_color() {
+        "Color"
+    } else {
+        "Mono"
+    };
+    let name = bios_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| bios_rom_label(bios_kind));
+    *app.system.borrow_mut() = Some(sys);
+    *app.rom_label.borrow_mut() = bios_rom_label(bios_kind).to_string();
+    window.set_window_title(format!("Swanium — {}", bios_rom_label(bios_kind)).into());
+    window.set_status_text(
+        format!("{} [{kind}, {name}] — running", bios_rom_label(bios_kind)).into(),
+    );
+    window.set_has_rom(true);
+}
+
+fn empty_cartridge_rom() -> Vec<u8> {
+    let mut rom = vec![0u8; 0x10000];
+    // Real BIOSes validate that the cartridge reset entry is a far jump before
+    // entering the splash/configuration path. Point it at a HLT instruction so
+    // BIOS-only startup can hand off cleanly instead of taking the error stop.
+    rom[0x0000] = 0xF4;
+    rom[0xFFF0..0xFFF5].copy_from_slice(&[0xEA, 0x00, 0x00, 0x00, 0x40]);
+    rom
+}
+
 /// Pop the native "open ROM" dialog, returning the chosen path (if any).
 fn pick_rom(start_dir: Option<&Path>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
@@ -795,7 +1002,15 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
     match std::fs::read(path) {
         Ok(bytes) => {
             tracing::info!(rom = %path.display(), bytes = bytes.len(), "loaded ROM");
-            let mut sys = System::from_rom(bytes);
+            let bios_kind = app.config.borrow().bios_rom;
+            let mut loaded_bios = None;
+            let mut sys = match load_bios_rom(bios_kind) {
+                Some((bios_path, boot_rom)) => {
+                    loaded_bios = Some(bios_path);
+                    System::from_rom_with_boot_rom(bytes, boot_rom)
+                }
+                None => System::from_rom(bytes),
+            };
             // Run `.wsc` images as WonderSwan Color hardware (colour support is
             // a property of the console, not the cartridge header).
             if path
@@ -803,6 +1018,9 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
                 .is_some_and(|e| e.eq_ignore_ascii_case("wsc"))
             {
                 sys.set_model(HardwareModel::Color);
+            }
+            if let Some(model) = forced_model_from_bios(app.config.borrow().bios_rom) {
+                sys.set_model(model);
             }
             let kind = if sys.model().is_color() {
                 "Color"
@@ -819,7 +1037,16 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
             save(app);
             window.set_recent_files(recent_model(&app.config.borrow()));
             window.set_window_title(format!("Swanium — {name}").into());
-            window.set_status_text(format!("{name} [{kind}] — running").into());
+            let boot = match (bios_kind, loaded_bios.as_ref()) {
+                (BiosRomKind::Disabled, _) => "direct boot".to_string(),
+                (_, Some(path)) => path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| bios_rom_label(bios_kind))
+                    .to_string(),
+                (_, None) => format!("{} missing; direct boot", bios_rom_label(bios_kind)),
+            };
+            window.set_status_text(format!("{name} [{kind}, {boot}] — running").into());
             window.set_has_rom(true);
         }
         Err(e) => tracing::error!(rom = %path.display(), "could not load ROM: {e}"),
@@ -884,4 +1111,16 @@ fn dump_display_registers(system: &mut System, keys: KeyState) {
         }
     }
     eprintln!("───────────────────────────────────────────────────────");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_cartridge_rom_has_real_bios_compatible_reset_jump() {
+        let rom = empty_cartridge_rom();
+        assert_eq!(&rom[0xFFF0..0xFFF5], &[0xEA, 0x00, 0x00, 0x00, 0x40]);
+        assert_eq!(rom[0x0000], 0xF4);
+    }
 }

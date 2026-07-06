@@ -29,12 +29,46 @@ const APP_NAME: &str = "swanium";
 /// File name of the config file inside the platform config directory.
 const CONFIG_FILE: &str = "config.toml";
 
+/// Directory name for fixed-name BIOS ROM files.
+const BIOS_DIR: &str = "bios";
+
 fn default_scale() -> u32 {
     DEFAULT_SCALE
 }
 
 fn default_volume() -> u8 {
     DEFAULT_VOLUME
+}
+
+/// BIOS ROM startup mode selected by the frontend.
+///
+/// The frontend stores the user's intent here. `Disabled` preserves the current
+/// direct-cartridge boot path; the other variants identify which console BIOS
+/// should be used once BIOS image loading is wired into the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BiosRomKind {
+    /// Do not use a BIOS ROM; boot directly as the frontend currently does.
+    #[default]
+    Disabled,
+    /// Original monochrome WonderSwan BIOS.
+    WonderSwan,
+    /// WonderSwan Color BIOS.
+    WonderSwanColor,
+    /// SwanCrystal BIOS.
+    WonderSwanCrystal,
+}
+
+impl BiosRomKind {
+    /// Fixed BIOS ROM file name for this mode, matching NewOswan's naming.
+    pub fn file_name(self) -> Option<&'static str> {
+        match self {
+            Self::Disabled => None,
+            Self::WonderSwan => Some("ws_irom.bin"),
+            Self::WonderSwanColor => Some("wsc_irom.bin"),
+            Self::WonderSwanCrystal => Some("wc_irom.bin"),
+        }
+    }
 }
 
 /// Texture-sampling filter used when scaling the framebuffer to the window.
@@ -90,6 +124,8 @@ pub struct Config {
     pub start_paused: bool,
     /// Whether the window opens in fullscreen.
     pub fullscreen: bool,
+    /// Which BIOS ROM startup mode to use.
+    pub bios_rom: BiosRomKind,
     /// Screen rotation for vertical-orientation games.
     pub rotation: RotationKind,
     /// Texture-sampling filter used when upscaling the framebuffer.
@@ -113,6 +149,7 @@ impl Default for Config {
             volume: default_volume(),
             start_paused: false,
             fullscreen: false,
+            bios_rom: BiosRomKind::default(),
             rotation: RotationKind::default(),
             renderer: RendererKind::default(),
             recent_files: Vec::new(),
@@ -157,6 +194,20 @@ impl Config {
         let dirs =
             directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
         Ok(dirs.config_dir().join(CONFIG_FILE))
+    }
+
+    /// Directory where fixed-name BIOS ROM files are read from.
+    pub fn bios_dir() -> Result<PathBuf, SwaniumError> {
+        let dirs =
+            directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
+        Ok(dirs.config_dir().join(BIOS_DIR))
+    }
+
+    /// Path to the fixed BIOS ROM file for `kind`, or `None` when BIOS is disabled.
+    pub fn bios_path(kind: BiosRomKind) -> Result<Option<PathBuf>, SwaniumError> {
+        kind.file_name()
+            .map(|name| Self::bios_dir().map(|dir| dir.join(name)))
+            .transpose()
     }
 
     /// Parse a [`Config`] from a TOML file. Out-of-range fields are clamped.
@@ -220,6 +271,24 @@ mod tests {
     }
 
     #[test]
+    fn default_does_not_use_bios_rom() {
+        assert_eq!(Config::default().bios_rom, BiosRomKind::Disabled);
+    }
+
+    #[test]
+    fn bios_rom_kind_uses_fixed_newoswan_file_names() {
+        assert_eq!(BiosRomKind::WonderSwan.file_name(), Some("ws_irom.bin"));
+        assert_eq!(
+            BiosRomKind::WonderSwanColor.file_name(),
+            Some("wsc_irom.bin")
+        );
+        assert_eq!(
+            BiosRomKind::WonderSwanCrystal.file_name(),
+            Some("wc_irom.bin")
+        );
+    }
+
+    #[test]
     fn sanitise_raises_zero_scale_to_one() {
         let cfg = Config {
             scale: 0,
@@ -246,6 +315,7 @@ mod tests {
             volume: 42,
             start_paused: true,
             fullscreen: true,
+            bios_rom: BiosRomKind::WonderSwanCrystal,
             rotation: RotationKind::Left,
             renderer: RendererKind::Linear,
             ..Config::default()

@@ -94,6 +94,13 @@ impl System {
         Self::with_bus(Bus::from_rom(rom))
     }
 
+    /// Build a system from a ROM image and an internal boot ROM image.
+    pub fn from_rom_with_boot_rom(rom: Vec<u8>, boot_rom: Vec<u8>) -> Self {
+        let mut system = Self::from_rom(rom);
+        system.install_boot_rom(boot_rom);
+        system
+    }
+
     /// Build a system from a ROM image with no save medium.
     pub fn new(rom: Vec<u8>) -> Self {
         Self::with_bus(Bus::new(rom))
@@ -236,6 +243,11 @@ impl System {
         self.bus.set_model(model);
     }
 
+    /// Install an internal boot ROM image, used for BIOS-driven startup.
+    pub fn install_boot_rom(&mut self, boot_rom: Vec<u8>) {
+        self.bus.install_boot_rom(boot_rom);
+    }
+
     /// Interleaved stereo audio samples accumulated since the last clear.
     pub fn audio_samples(&self) -> &[i16] {
         self.bus.audio_samples()
@@ -376,5 +388,44 @@ mod tests {
         let mut system = System::new(halting_rom());
         system.bus_mut().write_u8(0x0100, 0x5A);
         assert_eq!(system.read_memory_at(0x0100), 0x5A);
+    }
+
+    #[test]
+    fn boot_rom_overrides_reset_vector_region() {
+        let mut boot_rom = vec![0u8; 0x10000];
+        boot_rom[0xFFF0] = 0xA5;
+        let system = System::from_rom_with_boot_rom(halting_rom(), boot_rom);
+        assert_eq!(system.read_memory_at(0xFFFF0), 0xA5);
+    }
+
+    #[test]
+    fn a0_boot_disable_exposes_cartridge_reset_vector() {
+        let mut boot_rom = vec![0u8; 0x10000];
+        boot_rom[0xFFF0] = 0xA5;
+        let mut system = System::from_rom_with_boot_rom(halting_rom(), boot_rom);
+        assert_eq!(system.read_memory_at(0xFFFF0), 0xA5);
+
+        system.bus_mut().write_io(0xA0, 0x88);
+        assert_eq!(system.read_memory_at(0xFFFF0), 0xF4);
+    }
+
+    #[test]
+    fn newoswan_stub_boot_rom_is_aligned_to_reset_vector() {
+        let mut boot_rom = vec![0u8; 0x1FFC];
+        boot_rom[0x1FF0] = 0xEA;
+        boot_rom[0x1FF1] = 0x1B;
+        let system = System::from_rom_with_boot_rom(halting_rom(), boot_rom);
+        assert_eq!(system.read_memory_at(0xFFFF0), 0xEA);
+        assert_eq!(system.read_memory_at(0xFFFF1), 0x1B);
+        assert_eq!(system.read_memory_at(0xFFFFF), 0xFF);
+    }
+
+    #[test]
+    fn run_frame_halts_from_boot_rom_reset_vector() {
+        let mut boot_rom = vec![0u8; 0x10000];
+        boot_rom[0xFFF0] = 0xF4;
+        let mut system = System::from_rom_with_boot_rom(vec![0u8; 0x10000], boot_rom);
+        system.run_frame(KeyState::NONE);
+        assert!(system.cpu().halted);
     }
 }

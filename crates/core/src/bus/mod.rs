@@ -7,7 +7,7 @@ mod cart;
 #[cfg(test)]
 mod tests;
 
-pub use cart::{Cartridge, CartridgeHeader, Mapper, Rtc, SaveType};
+pub use cart::{Cartridge, CartridgeHeader, Eeprom, Mapper, Rtc, SaveType};
 
 use crate::apu::Apu;
 use crate::cpu::MemoryBus;
@@ -17,6 +17,9 @@ use crate::ppu::{ColorPaletteResolver, MonoPaletteResolver, Ppu, Rgb444};
 
 /// Open-bus return value for unmapped reads on WonderSwan mono.
 const OPEN_BUS: u8 = 0x90;
+const ADDRESS_MASK: u32 = 0xF_FFFF;
+const ADDRESS_SPACE_SIZE: u32 = ADDRESS_MASK + 1;
+const BOOT_ROM_ALIGNMENT: usize = 0x1000;
 
 /// Sound-control (port 0x90) bit 5: channel 2 acts as the 8-bit PCM voice.
 const SND_CTRL_VOICE: u8 = 0x20;
@@ -55,11 +58,21 @@ pub enum IrqSource {
 /// | 0x20000–0x2FFFF     | Cartridge ROM bank 0 (`rom_bank0`)    |
 /// | 0x30000–0x3FFFF     | Cartridge ROM bank 1 (`rom_bank1`)    |
 /// | 0x40000–0xFFFFF     | Cartridge ROM linear range            |
+///
+/// If an internal boot ROM is installed, it overlays the top of the 20-bit
+/// space; a 64 KiB BIOS therefore maps at 0xF0000–0xFFFFF.
 pub struct Bus {
     /// 64 KiB work RAM (only first 16 KiB accessible on WonderSwan mono).
     wram: Box<[u8]>,
     /// Cartridge ROM, SRAM, and bank-switch registers.
     cart: Cartridge,
+    /// Optional internal boot ROM, top-aligned in the 20-bit physical address
+    /// space. A 64 KiB image maps at 0xF0000–0xFFFFF and supplies the reset
+    /// vector at 0xFFFF0.
+    boot_rom: Option<Box<[u8]>>,
+    /// Console internal EEPROM (IEEPROM), used by the real BIOS for owner
+    /// settings and startup/configuration data through ports 0xBA–0xBE.
+    ieeprom: Eeprom,
     /// Shadow of all 256 I/O port registers.
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
@@ -81,6 +94,8 @@ impl Bus {
         let mut bus = Self {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, Vec::new()),
+            boot_rom: None,
+            ieeprom: Eeprom::new(vec![0; 2048], 10),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -97,6 +112,8 @@ impl Bus {
         let mut bus = Self {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart: Cartridge::new(rom, sram),
+            boot_rom: None,
+            ieeprom: Eeprom::new(vec![0; 2048], 10),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -117,6 +134,8 @@ impl Bus {
         let mut bus = Self {
             wram: vec![0u8; 0x10000].into_boxed_slice(),
             cart,
+            boot_rom: None,
+            ieeprom: Eeprom::new(vec![0; 2048], 10),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -146,6 +165,23 @@ impl Bus {
     /// Returns a mutable reference to the cartridge.
     pub fn cart_mut(&mut self) -> &mut Cartridge {
         &mut self.cart
+    }
+
+    /// Install an internal boot ROM image. The image is mapped top-aligned in
+    /// the 20-bit address space and overrides cartridge ROM reads there.
+    ///
+    /// NewOswan's boot-ROM stubs are distributed four bytes shorter than their
+    /// mapped 4 KiB / 8 KiB blocks. Pad to the next 4 KiB boundary so the reset
+    /// entry at file offset 0x0FF0 / 0x1FF0 lands at physical 0xFFFF0.
+    pub fn install_boot_rom(&mut self, boot_rom: Vec<u8>) {
+        let mapped_len = boot_rom
+            .len()
+            .next_multiple_of(BOOT_ROM_ALIGNMENT)
+            .min(ADDRESS_SPACE_SIZE as usize);
+        let mut mapped = vec![0xFF; mapped_len];
+        let copy_len = boot_rom.len().min(mapped_len);
+        mapped[..copy_len].copy_from_slice(&boot_rom[..copy_len]);
+        self.boot_rom = Some(mapped.into_boxed_slice());
     }
 
     /// Read the raw shadow value of an I/O port without side effects.
@@ -469,7 +505,11 @@ impl Bus {
     /// Physical memory read without going through the `MemoryBus` trait
     /// (avoids borrow conflicts in `tick_gdma`).
     fn read_u8_phys(&self, addr: u32) -> u8 {
-        match addr & 0xF_FFFF {
+        let addr = addr & ADDRESS_MASK;
+        if let Some(value) = self.read_boot_rom(addr) {
+            return value;
+        }
+        match addr {
             a @ 0x00000..=0x0FFFF => self.read_wram(a),
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
             a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
@@ -501,11 +541,22 @@ impl Bus {
             self.wram[a as usize] = value;
         }
     }
+
+    fn read_boot_rom(&self, addr: u32) -> Option<u8> {
+        let boot_rom = self.boot_rom.as_ref()?;
+        let len = u32::try_from(boot_rom.len()).ok()?.min(ADDRESS_SPACE_SIZE);
+        let base = ADDRESS_SPACE_SIZE - len;
+        (addr >= base).then(|| boot_rom[(addr - base) as usize])
+    }
 }
 
 impl MemoryBus for Bus {
     fn read_u8(&self, addr: u32) -> u8 {
-        match addr & 0xF_FFFF {
+        let addr = addr & ADDRESS_MASK;
+        if let Some(value) = self.read_boot_rom(addr) {
+            return value;
+        }
+        match addr {
             a @ 0x00000..=0x0FFFF => self.read_wram(a),
             a @ 0x10000..=0x1FFFF => self.cart.read_sram(a),
             a @ 0x20000..=0x2FFFF => self.cart.read_rom0(a),
@@ -583,6 +634,8 @@ impl MemoryBus for Bus {
                 self.ports[0xB7] = v;
                 v
             }
+            // Internal EEPROM data/command/status ports.
+            0xBA..=0xBE => self.ports[port as usize],
             // Cartridge bank registers (low byte; both mappers)
             0xC0 => self.cart.linear_off,
             0xC1 => self.cart.ram_bank,
@@ -642,6 +695,16 @@ impl MemoryBus for Bus {
             // SDMA counter segment: bits 4-7 ignored
             0x50 => self.ports[0x50] = value & 0x0F,
             0x51 => {}
+            // HW_FLAGS / system control. The real BIOS finishes by running a
+            // tiny WRAM trampoline that reads 0xA0, increments it, writes it
+            // back, and jumps to the cartridge reset vector. Treat writes with
+            // bit 7 set as the internal boot-ROM disable latch.
+            0xA0 => {
+                self.ports[0xA0] = value;
+                if value & 0x80 != 0 {
+                    self.boot_rom = None;
+                }
+            }
             // HyperVoice (WonderSwan Color only): 8-bit PCM data latch (0x69),
             // control (0x6A: enable/mode/shift), and channel routing (0x6B). On
             // mono hardware these registers do not exist, so writes are dropped
@@ -693,6 +756,33 @@ impl MemoryBus for Bus {
             0xB6 => {
                 self.ports[0xB6] = value;
                 self.ports[0xB4] &= !value;
+            }
+            // Internal EEPROM: 0xBA/0xBB data latch, 0xBC/0xBD command latch,
+            // 0xBE control/status. The real BIOS polls bit0 after READ and bit1
+            // after WRITE; this synchronous model completes immediately.
+            0xBA..=0xBD => self.ports[port as usize] = value,
+            0xBE => {
+                self.ports[0xBE] = 0;
+                let command = u16::from_le_bytes([self.ports[0xBC], self.ports[0xBD]]);
+                match value {
+                    0x10 => {
+                        self.ieeprom.execute(command);
+                        [self.ports[0xBA], self.ports[0xBB]] =
+                            self.ieeprom.read_data().to_le_bytes();
+                        self.ports[0xBE] = 0x01;
+                    }
+                    0x20 => {
+                        let data = u16::from_le_bytes([self.ports[0xBA], self.ports[0xBB]]);
+                        self.ieeprom.write_data(data);
+                        self.ieeprom.execute(command);
+                        self.ports[0xBE] = 0x02;
+                    }
+                    0x40 => {
+                        self.ieeprom.execute(command);
+                        self.ports[0xBE] = 0x03;
+                    }
+                    _ => {}
+                }
             }
             // Cartridge bank registers (write also updates the cart struct)
             0xC0 => {

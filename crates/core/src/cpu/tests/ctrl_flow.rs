@@ -1,6 +1,7 @@
 use super::{run_with, FlatMemory};
 use crate::cpu::timing::IRQ_ACK;
 use crate::cpu::Cpu;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[test]
 fn jmp_short_advances_ip_by_signed_offset() {
@@ -86,6 +87,58 @@ fn hlt_sets_halted_and_subsequent_steps_are_idempotent() {
     let again = cpu.step(&mut mem);
     assert_eq!(again, 1);
     assert!(cpu.halted);
+}
+
+#[test]
+fn wscputest_one_byte_undefined_opcodes_are_nops() {
+    for opcode in [0x0F, 0x63, 0x64, 0x65, 0x66, 0x67] {
+        let (cpu, cycles, _) = run_with(
+            |cpu| {
+                cpu.regs.ax = 0x1234;
+                cpu.flags.carry = true;
+            },
+            &[opcode],
+        );
+        assert_eq!(cpu.regs.ip, 1, "opcode 0x{opcode:02X}");
+        assert_eq!(cpu.regs.ax, 0x1234, "opcode 0x{opcode:02X}");
+        assert_eq!(cpu.regs.cs, 0, "opcode 0x{opcode:02X}");
+        assert!(cpu.flags.carry, "opcode 0x{opcode:02X}");
+        assert!(cpu.fault.is_none(), "opcode 0x{opcode:02X}");
+        assert_eq!(cycles, 1, "opcode 0x{opcode:02X}");
+    }
+}
+
+#[test]
+fn every_primary_opcode_executes_without_panicking() {
+    for opcode in 0u8..=0xFF {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut mem = FlatMemory::new();
+            mem.load(0, &[opcode, 0, 0, 0, 0, 0, 0, 0]);
+            let mut cpu = Cpu::new();
+            cpu.reset(0, 0);
+            cpu.regs.ss = 0;
+            cpu.regs.sp = 0xFFFE;
+            cpu.step(&mut mem);
+        }));
+        assert!(result.is_ok(), "opcode 0x{opcode:02X} panicked");
+    }
+}
+
+#[test]
+fn every_primary_opcode_has_a_non_faulting_representative_encoding() {
+    for opcode in 0u8..=0xFF {
+        let mut mem = FlatMemory::new();
+        mem.load(0, &[opcode, 0, 0, 0, 0, 0, 0, 0]);
+        let mut cpu = Cpu::new();
+        cpu.reset(0, 0);
+        cpu.regs.ss = 0;
+        cpu.regs.sp = 0xFFFE;
+        cpu.step(&mut mem);
+        assert!(
+            cpu.fault.is_none(),
+            "opcode 0x{opcode:02X} faulted as unsupported"
+        );
+    }
 }
 
 #[test]

@@ -4,7 +4,7 @@ Last updated: 2026-07-06. Update this file (not AGENTS.md) when implementation p
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 570 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 589 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -27,13 +27,25 @@ instruction set against the `MemoryBus` trait.
   IMUL r16,r/m16,imm (0x69/0x6B), immediate-count shift/rotate (0xC0/0xC1), POP r/m16 (0x8F).
   See `cpu/tests/v30_extensions.rs`.
 - Prefixes: segment override (0x26/0x2E/0x36/0x3E) in `Cpu::seg_override`; REP in `Cpu::rep_prefix`.
-- Still deferred (`unimplemented!`): LES/LDS with a register operand (illegal encoding),
-  ENTER with nesting level > 0, a few undefined Group FE/FF opcode sub-cases.
+- CPU execution no longer uses `unimplemented!` for opcode dispatch. Every primary opcode byte
+  has a non-faulting representative implementation. Undefined-opcode behavior follows
+  FluBBaOfWard/WSCpuTest where covered: `0x0F` and `0x63`–`0x67` are 1-byte NOPs,
+  `0xD8`–`0xDF` are 2-byte FPO NOPs, `0xD6` is SALC, `0xF6/F7 /1` preserve flags/registers
+  while consuming the immediate, `0xFE /2`–`/6` mirror the corresponding `0xFF` group
+  operations, `0xFF /7` is a no-op, and register-mode LEA/LES/LDS uses the WSCpuTest extended
+  addressing table. `ENTER` nesting levels > 0 are implemented. Unit coverage includes a sweep
+  that executes every primary opcode byte once and targeted WSCpuTest compatibility cases.
 
 ### Memory map / I/O bus, interrupts, timers, DMA — Phase 2 (`bus/`)
 20-bit address space with WRAM / I/O port / cartridge-ROM dispatch; interrupt controller
 (IVT, IRQ priority, INT/IRET linkage, VBlank line); HBlank/VBlank + general hardware timers;
 GDMA (memory-to-memory) and SDMA (sound) transfer engines. I/O ports dispatch to handlers.
+Real BIOS startup is supported beyond direct-cart boot: the bus now models the console internal
+EEPROM (`IEEPROM`, ports `0xBA`–`0xBE`) synchronously enough for the BIOS configuration reads/writes.
+The internal EEPROM starts zero-filled, matching NewOswan's newly-created `*_ieeprom.bin` files;
+an erased `0xFF` image makes the real BIOS skip/avoid the splash display path. The bus also treats
+the 0xA0 system-control write with bit 7 set as the internal boot-ROM disable latch, so the BIOS
+WRAM trampoline can expose the cartridge reset vector before jumping to `FFFF:0000`.
 
 ### CPU test ROMs — Phase 3 (`tests/cpu_test_roms.rs`)
 Self-built machine-code integration harness (`run_code`) covering arithmetic, control flow,
@@ -113,9 +125,17 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   persistence, and `poll_capture` for rebind capture.
 - `crates/common`: `tracing` logging (`logging::init`); typed `Config` with serde/TOML
   persistence at the platform config dir (`swanium/config.toml`), range-clamped on load.
-  Persists window scale, fullscreen, rotation (`RotationKind`: none/right/left), renderer
-  (`RendererKind`), recent-ROM history (`push_recent`/`clear_recent`, capped), and
-  keyboard/gamepad binding maps.
+  Persists window scale, fullscreen, BIOS-ROM startup mode (`BiosRomKind`: disabled /
+  WonderSwan / WonderSwan Color / SwanCrystal), rotation (`RotationKind`: none/right/left),
+  renderer (`RendererKind`), recent-ROM history (`push_recent` / `clear_recent`, capped),
+  and keyboard/gamepad binding maps. BIOS files are loaded from the fixed-name
+  `bios/` directory under the same platform config directory: `ws_irom.bin`
+  (WonderSwan), `wsc_irom.bin` (WonderSwan Color), and `wc_irom.bin` (SwanCrystal,
+  matching NewOswan's stub file name). NewOswan's stub files are 4 bytes shorter
+  than their 4 KiB / 8 KiB mapped blocks, so the core pads boot ROMs to the next
+  4 KiB boundary before mapping them at the top of the 20-bit address space.
+  Those NewOswan stubs intentionally contain no boot splash or configuration menu;
+  a splash requires a real console boot ROM image.
 - `crates/frontend`: Slint UI compiled from `ui/*.slint` via `build.rs` + `include_modules!`
   (`MainWindow`, `SettingsWindow`, `AboutWindow`). Audio-paced timer drives
   `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
@@ -128,9 +148,18 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   Native Open ROM dialogs are opened outside the Slint frame timer, and
   emulation/audio/input stays idle while the picker is open.
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted) / Reset (Ctrl+R, reloads
-  the current ROM and clears transient audio/input state). Capture-based
-  input-remapping settings window (keyboard via focus-scope key capture, controller via
-  `poll_capture`) persisting to config. Status bar (ROM name + FPS + master-volume slider,
+  the current ROM and clears transient audio/input state) / BIOS Settings… (when a BIOS mode is
+  selected, resets while holding Start for the first few frames, matching the real BIOS setup-menu
+  entry gesture). Capture-based
+  settings window with BIOS-ROM startup mode selection plus input remapping (keyboard via
+  focus-scope key capture, controller via `poll_capture`) persisting to config. Changing the BIOS
+  mode immediately resets/reloads the current emulation so the setting is visible without a manual
+  reset. When a BIOS mode is selected, the frontend reads the corresponding fixed-name BIOS file and
+  installs it into the core before reset; missing BIOS files fall back to direct boot with a status/log
+  warning. Core panics while running BIOS/game code are caught at the frontend frame boundary,
+  logged, and converted to a paused/stopped status instead of crashing the app. Reset is always
+  enabled: with a loaded ROM it reloads the current ROM, and without one it starts the selected
+  BIOS alone if available. Status bar (ROM name + FPS + master-volume slider,
   0–100, applied to the cpal output via `AudioStream::set_volume` / `audio::scale_volume` and
   persisted). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
 
@@ -178,7 +207,9 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   Dragonball/Digimon Tamers boot into colour mode (set port 0x60 bit 7, populate palette RAM at 0xFE00,
   render full colour) — verified against real ROMs. Confirmed against ares that colour enable = port 0x60
   bit 7 (`color() = mode.bit(2)`), i.e. the 8b assumption was correct. The frontend runs `.wsc` images as
-  Color (`set_model`) and shows the model in the status bar. See DevelopmentPlan 実装メモ（8 追補）.
+  Color (`set_model`) and shows the model in the status bar. For real console BIOS images, `0xA0` writes
+  with bit 7 set also disable the boot-ROM overlay so the BIOS can hand off to the cartridge after the
+  splash/configuration path. See DevelopmentPlan 実装メモ（8 追補）.
 - **8f (done)**: Color APU extension — **HyperVoice** (`crates/core/src/apu/mod.rs`). A fifth,
   wave-channel-independent 8-bit PCM source per Mednafen `wswan/sound.c`: control `0x6A`
   (enable bit 7 / sample-extension mode bits 3-2 / volume shift bits 1-0), routing `0x6B`

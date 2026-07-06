@@ -49,6 +49,7 @@ export component MainWindow inherits Window {
     callback set-volume(int);
     callback toggle-pause();
     callback reset-emulation();
+    callback open-bios-settings();
     callback open-settings();
     callback show-about();
     callback quit();
@@ -106,8 +107,11 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: "Reset";
                 shortcut: @keys(Control + R);
-                enabled: root.has-rom;
                 activated => { root.reset-emulation(); }
+            }
+            MenuItem {
+                title: "BIOS Settings…";
+                activated => { root.open-bios-settings(); }
             }
         }
         Menu {

@@ -178,6 +178,33 @@ fn shl_rm8_by_immediate_count() {
     assert_eq!(cpu.regs.ax & 0xFF, 4);
 }
 
+#[test]
+fn wscputest_c0_c1_group_six_zero_destination_without_flags() {
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0x501A;
+            cpu.flags.carry = true;
+            cpu.flags.zero = true;
+        },
+        &[0xC1, 0xF0, 0x03],
+    );
+    assert_eq!(cpu.regs.ax, 0);
+    assert!(cpu.flags.carry);
+    assert!(cpu.flags.zero);
+
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0x101A;
+            cpu.flags.carry = true;
+            cpu.flags.zero = true;
+        },
+        &[0xC0, 0xF0, 0x02],
+    );
+    assert_eq!(cpu.regs.ax, 0x1000);
+    assert!(cpu.flags.carry);
+    assert!(cpu.flags.zero);
+}
+
 // ── POP r/m16 (0x8F) ─────────────────────────────────────────────────────────
 
 #[test]
@@ -204,6 +231,64 @@ fn pop_rm16_increments_sp() {
     cpu.regs.sp = 0xFFFC;
     cpu.step(&mut mem);
     assert_eq!(cpu.regs.sp, 0xFFFE);
+}
+
+#[test]
+fn wscputest_f6_f7_group_one_consumes_immediate_without_side_effects() {
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0xD01A;
+            cpu.flags.zero = true;
+            cpu.flags.carry = true;
+        },
+        &[0xF6, 0xC8, 0x90],
+    );
+    assert_eq!(cpu.regs.ax, 0xD01A);
+    assert_eq!(cpu.regs.ip, 3);
+    assert!(cpu.flags.zero);
+    assert!(cpu.flags.carry);
+
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0xD01A;
+            cpu.flags.zero = true;
+            cpu.flags.carry = true;
+        },
+        &[0xF7, 0xC8, 0x90, 0x90],
+    );
+    assert_eq!(cpu.regs.ax, 0xD01A);
+    assert_eq!(cpu.regs.ip, 4);
+    assert!(cpu.flags.zero);
+    assert!(cpu.flags.carry);
+}
+
+#[test]
+fn wscputest_fe_extended_groups_match_ff_variants() {
+    let mut mem = FlatMemory::new();
+    mem.load(0, &[0xFE, 0xF0]); // FE /6 acts like PUSH r/m16.
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0xFFFE;
+    cpu.regs.ax = 0xFE5A;
+    cpu.step(&mut mem);
+    assert_eq!(cpu.regs.sp, 0xFFFC);
+    assert_eq!(mem.read_u16(0xFFFC), 0xFE5A);
+}
+
+#[test]
+fn wscputest_ff_group_seven_is_noop() {
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0x55AA;
+            cpu.flags.carry = true;
+        },
+        &[0xFF, 0xF8],
+    );
+    assert_eq!(cpu.regs.ax, 0x55AA);
+    assert!(cpu.flags.carry);
+    assert_eq!(cpu.regs.ip, 2);
+    assert!(cpu.fault.is_none());
 }
 
 // ── BOUND (0x62) ─────────────────────────────────────────────────────────────

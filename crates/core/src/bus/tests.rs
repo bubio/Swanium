@@ -121,6 +121,34 @@ fn hw_flags_port_a0_ignores_writes() {
 }
 
 #[test]
+fn internal_eeprom_read_reports_ready_and_returns_default_word() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xBC, 0x00);
+    bus.write_io(0xBD, 0x18); // READ word 0 for 10-bit internal EEPROM.
+    bus.write_io(0xBE, 0x10);
+    assert_eq!(bus.read_io(0xBE) & 0x01, 0x01);
+    assert_eq!(bus.read_io(0xBA), 0x00);
+    assert_eq!(bus.read_io(0xBB), 0x00);
+}
+
+#[test]
+fn internal_eeprom_write_then_read_round_trips() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xBA, 0xEF);
+    bus.write_io(0xBB, 0xBE);
+    bus.write_io(0xBC, 0x00);
+    bus.write_io(0xBD, 0x14); // WRITE word 0.
+    bus.write_io(0xBE, 0x20);
+    assert_eq!(bus.read_io(0xBE) & 0x02, 0x02);
+
+    bus.write_io(0xBC, 0x00);
+    bus.write_io(0xBD, 0x18); // READ word 0.
+    bus.write_io(0xBE, 0x10);
+    assert_eq!(bus.read_io(0xBA), 0xEF);
+    assert_eq!(bus.read_io(0xBB), 0xBE);
+}
+
+#[test]
 fn color_retains_hypervoice_register_writes() {
     // On Color the HyperVoice registers (0x69 data, 0x6A control, 0x6B routing)
     // are writable; 0x6B is masked to 0x6F like Mednafen's `HVoiceChanCtrl`.

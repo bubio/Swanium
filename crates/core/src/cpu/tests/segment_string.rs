@@ -143,6 +143,27 @@ fn lea_with_displacement() {
     assert_eq!(cpu.regs.ax, 0x0112);
 }
 
+#[test]
+fn wscputest_lea_register_mode_uses_extended_address_table() {
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.ax = 0x1234;
+            cpu.regs.bx = 0x5678;
+        },
+        &[0x8D, 0xC8], // LEA CX,[BX+AX]
+    );
+    assert_eq!(cpu.regs.cx, 0x68AC);
+
+    let (cpu, _, _) = run_with(
+        |cpu| {
+            cpu.regs.bp = 0x1234;
+            cpu.regs.dx = 0x5678;
+        },
+        &[0x8D, 0xCA], // LEA CX,[BP+DX]
+    );
+    assert_eq!(cpu.regs.cx, 0x68AC);
+}
+
 // ── LES / LDS ────────────────────────────────────────────────────────────────
 
 #[test]
@@ -162,6 +183,23 @@ fn les_loads_offset_and_es_from_memory() {
 }
 
 #[test]
+fn wscputest_les_register_mode_uses_extended_address_table() {
+    let mut mem = FlatMemory::new();
+    mem.load(0, &[0xC4, 0xD8]); // LES BX,[DS:BX+AX]
+    mem.write_u16(0x0200, 0xF0AB);
+    mem.write_u16(0x0202, 0x570D);
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0xFFFE;
+    cpu.regs.ax = 0x0100;
+    cpu.regs.bx = 0x0100;
+    cpu.step(&mut mem);
+    assert_eq!(cpu.regs.bx, 0xF0AB);
+    assert_eq!(cpu.regs.es, 0x570D);
+}
+
+#[test]
 fn lds_loads_offset_and_ds_from_memory() {
     // LDS SI, [0x0040] (0xC5, modrm=00 110 110=0x36, disp16=0x0040)
     let mut mem = FlatMemory::new();
@@ -174,6 +212,23 @@ fn lds_loads_offset_and_ds_from_memory() {
     cpu.step(&mut mem);
     assert_eq!(cpu.regs.si, 0x5678);
     assert_eq!(cpu.regs.ds, 0x9ABC);
+}
+
+#[test]
+fn wscputest_lds_register_mode_uses_extended_address_table() {
+    let mut mem = FlatMemory::new();
+    mem.load(0, &[0xC5, 0xDE]); // LDS BX,[SS:BP+SI]
+    mem.write_u16(0x0300, 0xF0AB);
+    mem.write_u16(0x0302, 0x570D);
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0xFFFE;
+    cpu.regs.bp = 0x0100;
+    cpu.regs.si = 0x0200;
+    cpu.step(&mut mem);
+    assert_eq!(cpu.regs.bx, 0xF0AB);
+    assert_eq!(cpu.regs.ds, 0x570D);
 }
 
 // ── ENTER / LEAVE ─────────────────────────────────────────────────────────────
@@ -201,6 +256,26 @@ fn enter_creates_stack_frame_and_leave_tears_it_down() {
                         // word onto the stack, LEAVE pops it back), and bp is restored.
     assert_eq!(cpu.regs.sp, saved_sp);
     assert_eq!(cpu.regs.bp, 0xBEEF);
+}
+
+#[test]
+fn enter_with_nesting_pushes_frame_links() {
+    let mut mem = FlatMemory::new();
+    mem.load(0, &[0xC8, 0x04, 0x00, 0x02]); // ENTER 4, 2
+    let mut cpu = Cpu::new();
+    cpu.reset(0, 0);
+    cpu.regs.ss = 0;
+    cpu.regs.sp = 0x0100;
+    cpu.regs.bp = 0x0080;
+    mem.write_u16(0x007E, 0x1234);
+
+    cpu.step(&mut mem);
+
+    assert_eq!(cpu.regs.bp, 0x00FE);
+    assert_eq!(cpu.regs.sp, 0x00F6);
+    assert_eq!(mem.read_u16(0x00FE), 0x0080);
+    assert_eq!(mem.read_u16(0x00FC), 0x1234);
+    assert_eq!(mem.read_u16(0x00FA), 0x00FE);
 }
 
 // ── Far CALL / RET / JMP ─────────────────────────────────────────────────────
