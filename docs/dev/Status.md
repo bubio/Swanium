@@ -150,7 +150,10 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted) / Reset (Ctrl+R, reloads
   the current ROM and clears transient audio/input state) / BIOS Settings… (when a BIOS mode is
   selected, resets while holding Start for the first few frames, matching the real BIOS setup-menu
-  entry gesture). Capture-based
+  entry gesture). View shortcuts include Ctrl+1–4 for Scale and selection-style rotation:
+  Ctrl+Up for normal orientation, Ctrl+Left for rotate left, and Ctrl+Right for rotate right
+  (reselecting the active rotation no longer toggles back to normal). Settings is available via
+  Ctrl+Comma. Capture-based
   settings window with BIOS-ROM startup mode selection plus input remapping (keyboard via
   focus-scope key capture, controller via `poll_capture`) persisting to config. Changing the BIOS
   mode immediately resets/reloads the current emulation so the setting is visible without a manual

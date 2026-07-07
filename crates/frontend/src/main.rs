@@ -460,15 +460,7 @@ fn wire_menu(window: &MainWindow, app: &App) {
                 2 => RotationKind::Left,
                 _ => RotationKind::None,
             };
-            {
-                let mut c = app.config.borrow_mut();
-                // Selecting the active rotation again turns it back off.
-                c.rotation = if c.rotation == requested {
-                    RotationKind::None
-                } else {
-                    requested
-                };
-            }
+            app.config.borrow_mut().rotation = requested;
             save(&app);
             if let Some(window) = weak.upgrade() {
                 apply_view(&window, &app.config.borrow());

@@ -87,6 +87,7 @@ export component MainWindow inherits Window {
             MenuSeparator {}
             MenuItem {
                 title: "Settings…";
+                shortcut: @keys(Control + Comma);
                 activated => { root.open-settings(); }
             }
             MenuSeparator {}
@@ -124,18 +125,22 @@ export component MainWindow inherits Window {
                 title: "Scale";
                 MenuItem {
                     title: root.current-scale == 1 ? "✓ 1x" : "1x";
+                    shortcut: @keys(Control + "1");
                     activated => { root.set-scale(1); }
                 }
                 MenuItem {
                     title: root.current-scale == 2 ? "✓ 2x" : "2x";
+                    shortcut: @keys(Control + "2");
                     activated => { root.set-scale(2); }
                 }
                 MenuItem {
                     title: root.current-scale == 3 ? "✓ 3x" : "3x";
+                    shortcut: @keys(Control + "3");
                     activated => { root.set-scale(3); }
                 }
                 MenuItem {
                     title: root.current-scale == 4 ? "✓ 4x" : "4x";
+                    shortcut: @keys(Control + "4");
                     activated => { root.set-scale(4); }
                 }
             }
@@ -146,11 +151,18 @@ export component MainWindow inherits Window {
             }
             MenuSeparator {}
             MenuItem {
+                title: root.rotation == 0 ? "✓ Normal Orientation" : "Normal Orientation";
+                shortcut: @keys(Control + UpArrow);
+                activated => { root.set-rotation(0); }
+            }
+            MenuItem {
                 title: root.rotation == 2 ? "✓ Rotate Left" : "Rotate Left";
+                shortcut: @keys(Control + LeftArrow);
                 activated => { root.set-rotation(2); }
             }
             MenuItem {
                 title: root.rotation == 1 ? "✓ Rotate Right" : "Rotate Right";
+                shortcut: @keys(Control + RightArrow);
                 activated => { root.set-rotation(1); }
             }
             MenuSeparator {}
