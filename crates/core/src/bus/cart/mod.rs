@@ -43,7 +43,7 @@ pub struct Cartridge {
     pub sram: Vec<u8>,
     /// Serial EEPROM save medium (`None` unless the header selects EEPROM).
     eeprom: Option<Eeprom>,
-    /// Optional real-time clock (interface only until Phase 8).
+    /// Optional cartridge real-time clock.
     rtc: Option<Rtc>,
     /// Bank-switch chip; selects the bank-register width.
     mapper: Mapper,
@@ -249,7 +249,7 @@ impl Cartridge {
         }
     }
 
-    // ── RTC (interface only; see rtc.rs) ──────────────────────────────────
+    // ── RTC (see rtc.rs) ──────────────────────────────────────────────────
 
     /// Whether this cartridge carries a real-time clock.
     pub fn has_rtc(&self) -> bool {

@@ -32,6 +32,9 @@ const CONFIG_FILE: &str = "config.toml";
 /// Directory name for fixed-name BIOS ROM files.
 const BIOS_DIR: &str = "bios";
 
+/// Directory name for cartridge SRAM/EEPROM save files.
+const SAVES_DIR: &str = "saves";
+
 fn default_scale() -> u32 {
     DEFAULT_SCALE
 }
@@ -201,6 +204,13 @@ impl Config {
         let dirs =
             directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
         Ok(dirs.config_dir().join(BIOS_DIR))
+    }
+
+    /// Directory where cartridge SRAM/EEPROM save files are stored.
+    pub fn saves_dir() -> Result<PathBuf, SwaniumError> {
+        let dirs =
+            directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
+        Ok(dirs.config_dir().join(SAVES_DIR))
     }
 
     /// Path to the fixed BIOS ROM file for `kind`, or `None` when BIOS is disabled.

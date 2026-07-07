@@ -828,6 +828,7 @@ impl MemoryBus for Bus {
             // Cartridge RTC command/status and data ports (only when present)
             0xCA if self.cart.has_rtc() => self.cart.rtc().map_or(OPEN_BUS, |r| r.read_command()),
             0xCB if self.cart.has_rtc() => self.cart.rtc_mut().map_or(OPEN_BUS, |r| r.read_data()),
+            0xCA..=0xCB => OPEN_BUS,
             // Default: return raw shadow value
             p => self.ports[p as usize],
         }
@@ -1006,6 +1007,7 @@ impl MemoryBus for Bus {
                     r.write_data(value);
                 }
             }
+            0xCA..=0xCB => {}
             // Default: raw write
             p => self.ports[p as usize] = value,
         }

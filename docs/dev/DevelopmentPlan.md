@@ -383,7 +383,7 @@ video               audio                input
 ### 設計上の確定事項（Phase 6 実装時）
 
 -   **モジュール構成**: `crates/core/src/bus/cart/` 以下に分割。`header.rs`（フッタ解析）、
-    `eeprom.rs`（シリアルEEPROMデバイス）、`rtc.rs`（RTCインターフェーススタブ）、
+    `eeprom.rs`（シリアルEEPROMデバイス）、`rtc.rs`（RTCデバイス）、
     `mod.rs`（`Cartridge` 本体・バンキング・セーブデータAPI）。
 -   **ヘッダ解析**: ROMイメージ末尾16バイトのフッタ（物理 0xFFFF0–0xFFFFF。リセット時の
     CPU実行開始位置でもある）を `CartridgeHeader::parse` で解析。publisher / color フラグ /
@@ -403,22 +403,28 @@ video               audio                input
     EWEN/EWDS/WRAL/ERAL を実装。カートリッジEEPROMポート 0xC4–0xC8（データ/コマンドラッチ +
     制御）を配線。コマンドワードは `[start][2bit opcode][address]` 形式で、容量に応じたアドレス
     ビット幅（128B→6、1KiB→9、2KiB→10）を使用。
--   **RTC**: `Option<Rtc>` フィールドとして `Cartridge` に保持。Phase 6 ではインターフェース
-    （`Rtc` 型、`state`/`load_state`、`Cartridge::has_rtc`/`rtc()`）のみを公開し、実時間計時・
-    BCD レジスタ・ポート 0xCA/0xCB のコマンドプロトコルは Phase 8 で実装する。
+-   **RTC**: `Option<Rtc>` フィールドとして `Cartridge` に保持。Phase 8 で実時間計時・BCD レジスタ・
+    ポート 0xCA/0xCB のコマンドプロトコルを実装済み。Milestone 12 で RTC 非搭載時の 0xCA/0xCB は
+    未接続デバイスとして open bus を返す方針に固定した。
 -   **セーブデータAPI**: `Bus::save_data() -> &[u8]`（SRAM または EEPROM 内容のゼロコピー参照）、
     `Bus::load_save_data(&[u8])`、`Cartridge::has_save()`。ファイルI/O は frontend 側。
 
-### Phase 6 後続課題
+### Phase 6 / Milestone 12 確定事項
 
+-   **カートリッジ保存媒体**: `save_data()` はゲーム保存媒体である SRAM または cartridge EEPROM の
+    生バイト列を返す。cartridge EEPROM は WonderSwan エミュレーターとして永続化対象であり、
+    frontend が platform config directory 配下の `saves/<ROM file name>.sav` に保存し、
+    `load_save_data` で復元する。
 -   **内蔵EEPROM（IEEPROM）**: コンソール側の内蔵EEPROM（ポート 0xBA–0xBE、本体設定/名前保存）は
-    未配線。デバイス実装（`Eeprom`）は流用可能。Phase 7 のフロントエンド統合時に配線する。
--   **RTC本体**: 計時ロジック・レジスタ・コマンドプロトコルは Phase 8（Color/Crystal）で実装。
-    ヘッダからのRTC自動検出（フッタのRTCビット位置）も実機未検証のため Phase 8 で確定する。
--   **マッパー2003の実機検証**: 2003 の上位バイトバンクポート割り当て（0xD0–0xD5）は WonderCrab
-    参照実装に準拠。実カートリッジでの動作確認は未実施。
--   **セーブデータのフレーミング**: 現状 `save_data()` は単一媒体（SRAM xor EEPROM）の生バイト列。
-    将来 RTC状態を含む複合セーブが必要になれば、バージョン付きフレーミングを別途設計する。
+    BIOS/本体プロフィール用の別デバイスで、カートリッジ保存媒体ではない。Swanium では BIOS 起動に
+    必要な同期 READ/WRITE/COMMAND を配線し、起動時は決定論的なゼロ初期化とする。
+-   **RTC仕様**: 計時ロジック・レジスタ・コマンドプロトコルは Phase 8（Color/Crystal）で実装済み。
+    Milestone 12 でヘッダ RTC 検出、コマンド/データ順、ステータス、非搭載 open bus は synthetic test で固定。
+    アラームはレジスタとして保持し、カートリッジ IRQ は発生させない。
+-   **マッパー2003**: 上位バイトバンクポート（0xD0–0xD5）は Bandai 2003 でのみ有効。Milestone 12 の
+    large-ROM synthetic test で、高バイトが実アドレス選択へ反映されることを固定。
+-   **RTCと保存形式**: RTC 状態は `Rtc::state` / `load_state` で扱い、SRAM/cartridge EEPROM の raw save
+    bytes には混在させない。
 
 ---
 
@@ -631,18 +637,19 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         `Rtc` が master-clock サイクルを累積。`MASTER_CLOCK_HZ`（=1秒）ごとに秒を BCD 桁上げ（分/時/日/月/
         年/曜日、閏年は 2000–2099 の範囲で `year % 4 == 0`）。サブ秒剰余を保持し平均レートを一致させる。
 -   **コマンドプロトコル（ポート 0xCA=コマンド/ステータス, 0xCB=データ）**: `Bus::read_io`/`write_io` は
-    `cart.has_rtc()` の時のみ 0xCA/0xCB を RTC へルーティング（非搭載カートは従来どおりポートシャドウ）。
+    `cart.has_rtc()` の時のみ 0xCA/0xCB を RTC へルーティング（非搭載カートは未接続デバイスとして open bus）。
     0xCA 読みは「ready ビット(bit7)＋コマンド」。0xCB はアクティブコマンドのペイロードを内部ポインタで
     順次 read/write（末尾でラップ）。対応コマンド: RESET(0x10) / STATUS r/w(0x12,0x13) /
     DATETIME r/w(0x14,0x15、7バイト) / ALARM r/w(0x18,0x19、2バイト)。
 -   **ヘッダ RTC 検出**: フッタ flags バイト（0x0C）bit1 を RTC 有無として解釈（`CartridgeHeader.rtc`）。
     既存の synthetic テスト ROM は 0 のため無回帰。
--   **未検証の前提（実機/テストROMで要確認）**: コマンドバイト値・DATETIME/ALARM のバイト順・0xCA の
-    ready ビット意味・フッタ 0x0C bit1 の RTC ビット位置は WSdev/エミュレータ資料準拠だが実機未確認
-    （Color RTC テストROM 未入手）。
--   **今回のスコープ外（後続課題）**: アラームはレジスタ保持のみで、一致時のカートリッジ IRQ 配線は未実装
-    （WS カート RTC 割り込み経路が未検証のため）。RTC 状態を含む複合セーブ（バージョン付きフレーミング）も
-    §「セーブデータ形式」の方針どおり将来課題。
+-   **Milestone 12 で固定した範囲**: footer bit からの RTC 生成、0xCA ready readback、DATETIME の BCD
+    バイト順、STATUS read/write、非搭載 RTC の open bus、RTC-bearing cart で `save_data()` が空のまま
+    であることを `Bus` 経由の回帰テストで固定。RTC 状態は `Rtc::state` / `load_state` に分離し、
+    raw cartridge save API には混ぜない。
+-   **セーブデータ形式**: カートリッジの raw save API は SRAM または cartridge EEPROM の生バイト列専用。
+    RTC は時計デバイス状態として `Rtc::state` / `load_state` で扱い、カートリッジ EEPROM/SRAM の保存形式へ
+    混在させない。
 
 **実装メモ（8f: HyperVoice / Color APU 拡張）**
 -   **HyperVoice** は WSC 専用の 5 つ目の PCM ソース（4 wave チャネルとは独立）。実装は Mednafen

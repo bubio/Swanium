@@ -52,6 +52,7 @@ const STATUS_BAR_HEIGHT: f32 = 22.0;
 
 /// How often the status bar's FPS readout is refreshed.
 const FPS_REFRESH: Duration = Duration::from_millis(500);
+const SAVE_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const BIOS_SETTINGS_START_FRAMES: u8 = 12;
 
 /// Which input device an in-progress rebind is capturing.
@@ -182,6 +183,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let app_timer = app.clone();
     let mut frames_since_refresh: u32 = 0;
     let mut fps_anchor = Instant::now();
+    let mut save_anchor = Instant::now();
     timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
         let app = &app_timer;
 
@@ -211,6 +213,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             }
             frames_since_refresh = 0;
             fps_anchor = Instant::now();
+            save_anchor = Instant::now();
             return;
         }
         if app.reset_request.take() {
@@ -223,6 +226,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             }
             frames_since_refresh = 0;
             fps_anchor = Instant::now();
+            save_anchor = Instant::now();
             return;
         }
 
@@ -340,9 +344,15 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         if let Some(window) = window_weak.upgrade() {
             window.set_frame(Image::from_rgba8(buffer));
         }
+        drop(system_ref);
+
+        let now = Instant::now();
+        if now.duration_since(save_anchor) >= SAVE_FLUSH_INTERVAL {
+            save_current_cartridge(app);
+            save_anchor = now;
+        }
 
         frames_since_refresh += 1;
-        let now = Instant::now();
         let elapsed = now.duration_since(fps_anchor);
         if elapsed >= FPS_REFRESH {
             let fps = frames_since_refresh as f32 / elapsed.as_secs_f32();
@@ -355,6 +365,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     });
 
     window.run()?;
+    save_current_cartridge(&app);
     Ok(())
 }
 
@@ -377,8 +388,12 @@ fn wire_input(window: &MainWindow, app: &App) {
             }
         }
     });
-    window.on_quit(|| {
-        let _ = slint::quit_event_loop();
+    window.on_quit({
+        let app = app.clone();
+        move || {
+            save_current_cartridge(&app);
+            let _ = slint::quit_event_loop();
+        }
     });
 }
 
@@ -961,6 +976,7 @@ fn reset_emulation(app: &App, window: &MainWindow) {
 }
 
 fn start_bios_only(app: &App, window: &MainWindow) {
+    save_current_cartridge(app);
     let bios_kind = app.config.borrow().bios_rom;
     let Some((bios_path, boot_rom)) = load_bios_rom(bios_kind) else {
         *app.system.borrow_mut() = None;
@@ -1038,6 +1054,7 @@ fn open_rom_directory() -> std::io::Result<PathBuf> {
 fn load_into(path: &Path, app: &App, window: &MainWindow) {
     match std::fs::read(path) {
         Ok(bytes) => {
+            save_current_cartridge(app);
             tracing::info!(rom = %path.display(), bytes = bytes.len(), "loaded ROM");
             let bios_kind = app.config.borrow().bios_rom;
             let mut loaded_bios = None;
@@ -1059,6 +1076,7 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
             if let Some(model) = forced_model_from_bios(bios_kind) {
                 sys.set_model(model);
             }
+            load_cartridge_save(path, &mut sys);
             let kind = if sys.model().is_color() {
                 "Color"
             } else {
@@ -1088,6 +1106,79 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
         }
         Err(e) => tracing::error!(rom = %path.display(), "could not load ROM: {e}"),
     }
+}
+
+fn save_current_cartridge(app: &App) {
+    let Some(rom_path) = app.rom_path.borrow().clone() else {
+        return;
+    };
+    let system_ref = app.system.borrow();
+    let Some(system) = system_ref.as_ref() else {
+        return;
+    };
+    let data = system.save_data();
+    if data.is_empty() {
+        return;
+    }
+    let Ok(save_path) = save_path_for_rom(&rom_path) else {
+        tracing::warn!(rom = %rom_path.display(), "could not locate save directory");
+        return;
+    };
+    if let Some(parent) = save_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(save = %save_path.display(), "could not create save directory: {e}");
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(&save_path, data) {
+        tracing::warn!(save = %save_path.display(), "could not write cartridge save: {e}");
+    }
+}
+
+fn load_cartridge_save(rom_path: &Path, system: &mut System) {
+    if system.save_data().is_empty() {
+        return;
+    }
+    let Ok(save_path) = save_path_for_rom(rom_path) else {
+        tracing::warn!(rom = %rom_path.display(), "could not locate save directory");
+        return;
+    };
+    match std::fs::read(&save_path) {
+        Ok(data) => {
+            system.load_save_data(&data);
+            tracing::info!(
+                save = %save_path.display(),
+                bytes = data.len(),
+                "loaded cartridge save"
+            );
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(save = %save_path.display(), "could not load cartridge save: {e}"),
+    }
+}
+
+fn save_path_for_rom(rom_path: &Path) -> Result<PathBuf, common::error::SwaniumError> {
+    Ok(Config::saves_dir()?.join(save_file_name_for_rom(rom_path)))
+}
+
+fn save_file_name_for_rom(rom_path: &Path) -> String {
+    let raw = rom_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cartridge");
+    let mut name = String::with_capacity(raw.len() + 4);
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            name.push(ch);
+        } else {
+            name.push('_');
+        }
+    }
+    if name.is_empty() {
+        name.push_str("cartridge");
+    }
+    name.push_str(".sav");
+    name
 }
 
 /// Run one frame with per-scanline tracing and print a compact report of the
@@ -1159,5 +1250,21 @@ mod tests {
         let rom = empty_cartridge_rom();
         assert_eq!(&rom[0xFFF0..0xFFF5], &[0xEA, 0x00, 0x00, 0x00, 0x40]);
         assert_eq!(rom[0x0000], 0xF4);
+    }
+
+    #[test]
+    fn save_file_name_for_rom_keeps_rom_file_name() {
+        assert_eq!(
+            save_file_name_for_rom(Path::new("/tmp/Foo.ws")),
+            "Foo.ws.sav"
+        );
+    }
+
+    #[test]
+    fn save_file_name_for_rom_sanitizes_unsafe_characters() {
+        assert_eq!(
+            save_file_name_for_rom(Path::new("bad name!.wsc")),
+            "bad_name_.wsc.sav"
+        );
     }
 }

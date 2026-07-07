@@ -50,6 +50,7 @@ const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
 const SND_OUTPUT_CTRL: usize = 0x91; // speaker/headphone output mode and speaker shift
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
+
 // ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
 const HV_DIRECT_L_LO: usize = 0x64; // signed 16-bit direct left output
 const HV_DIRECT_L_HI: usize = 0x65;

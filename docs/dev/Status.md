@@ -8,7 +8,7 @@ Emulation-focused remaining work is tracked separately in
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 605 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 629 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -125,6 +125,21 @@ bus-stall validation, and the exact analog curve for speaker main volume.
 `load_save_data`). The `Cartridge.rtc: Option<Rtc>` device is realized in Phase 8e
 (BCD registers, 0xCA/0xCB command protocol, deterministic injected-time timekeeping).
 
+Milestone 12 tightened the save-related edges without changing the simple cartridge save API.
+Cartridge SRAM and cartridge EEPROM are game save media. The core exposes them through
+`save_data()` / `load_save_data()`, and the frontend persists those bytes under the platform
+config directory as `saves/<ROM file name>.sav`. Bandai 2003 high-byte bank ports are covered on a large
+ROM image rather than only modulo-wrapped small fixtures; cartridge EEPROM tests cover common
+initialization flows (`WRAL`, `EWDS`) and absent-device open-bus reads; and absent RTC command/data
+ports (`0xCA`/`0xCB`) now read open bus instead of a raw zero shadow. RTC-bearing cartridges keep
+RTC state outside the raw cartridge save byte slice; `save_data()` remains exactly SRAM-or-EEPROM
+bytes, while `Rtc::state` / `load_state` exposes the clock registers separately.
+
+Console internal EEPROM (`IEEPROM`, ports `0xBA`–`0xBE`) is a different device from cartridge
+EEPROM. It is used by the BIOS for console profile/configuration data and is not game save media.
+Swanium initializes it as zero-filled deterministic state at startup, matching NewOswan's
+newly-created `*_ieeprom.bin` behavior.
+
 ### System / keypad — Phase 7 core (`system.rs`, `keypad.rs`)
 `System { cpu, bus }` owns the machine and exposes frame-boundary `run_frame(keys)`
 (159 scanlines × 256 cycles, sequential CPU→APU/GDMA→scanline driving) plus the
@@ -156,6 +171,8 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   4 KiB boundary before mapping them at the top of the 20-bit address space.
   Those NewOswan stubs intentionally contain no boot splash or configuration menu;
   a splash requires a real console boot ROM image.
+  Cartridge SRAM/EEPROM saves are stored in `saves/` under the same platform config
+  directory, one raw `.sav` file per ROM file name.
 - `crates/frontend`: Slint UI compiled from `ui/*.slint` via `build.rs` + `include_modules!`
   (`MainWindow`, `SettingsWindow`, `AboutWindow`). Audio-paced timer drives
   `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:

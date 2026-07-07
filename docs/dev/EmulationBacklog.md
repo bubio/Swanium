@@ -75,21 +75,6 @@ Expected scope:
 - Keep the frame-boundary `System::run_frame` API stable for RetroAchievements
   compatibility.
 
-### RTC protocol and alarm IRQ validation
-
-The cartridge RTC is implemented with deterministic injected time and free-runs
-from the emulated master clock. Remaining uncertainty is around protocol details
-and interrupt behavior.
-
-Expected scope:
-
-- Verify footer RTC detection bit, command codes, byte order, status bits, and
-  read/write sequencing against hardware, test ROMs, or multiple reference
-  emulators.
-- Wire alarm-match IRQ behavior if software is found to depend on it.
-- Design a versioned save-data framing format if RTC state must be persisted
-  alongside SRAM/EEPROM in one frontend save file.
-
 ### Color PPU edge cases
 
 Color display works for real WSC ROMs, including palette RAM and 2bpp/4bpp tile
@@ -141,32 +126,6 @@ Expected scope:
 - Consider a band-limited resampler or a more hardware-like analog-output model.
 - Keep deterministic core output; host-device resampling belongs in
   `crates/audio`.
-
-### Mapper and cartridge edge validation
-
-Bandai 2001/2003, SRAM, EEPROM, and RTC are implemented, but some details are
-reference-derived rather than hardware-verified.
-
-Expected scope:
-
-- Validate Bandai 2003 high-byte bank ports on known large ROMs.
-- Expand EEPROM protocol tests with real save initialization patterns.
-- Confirm open-bus behavior for absent cart peripherals and mapper-specific
-  register reads.
-
-### Internal EEPROM persistence
-
-The console internal EEPROM is modeled enough for BIOS startup paths, but
-frontend persistence and full configuration behavior are not yet treated as a
-compatibility feature.
-
-Expected scope:
-
-- Decide whether internal EEPROM should be persisted per configured console
-  model.
-- If persisted, keep it separate from cartridge save media.
-- Add tests for BIOS configuration writes once a stable boot-ROM fixture policy
-  exists.
 
 ### Test ROM corpus and compatibility matrix
 

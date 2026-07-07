@@ -62,6 +62,16 @@ fn bandai_2003_high_byte_bank_port_extends_bank() {
     assert_eq!(bus.read_u8(0x20005), 0xA1);
 }
 
+#[test]
+fn bandai_2003_high_byte_selects_large_rom_bank_without_wrapping() {
+    let mut rom = rom_with_footer(0x0110_0000, &[(0xD, 0x01)]);
+    rom[0x0100_0005] = 0xD3;
+    let mut bus = Bus::new(rom);
+    bus.write_io(0xC2, 0);
+    bus.write_io(0xD3, 1);
+    assert_eq!(bus.read_u8(0x20005), 0xD3);
+}
+
 // ── SRAM persistence ─────────────────────────────────────────────────────────
 
 #[test]
@@ -140,9 +150,16 @@ fn eeprom_read_latches_high_byte() {
 }
 
 #[test]
-fn eeprom_ports_are_open_bus_without_eeprom() {
+fn absent_eeprom_status_port_reads_open_bus() {
     let mut bus = Bus::new(three_bank_rom(0x00)); // no EEPROM
     assert_eq!(bus.read_io(0xC8), 0x90); // open bus
+}
+
+#[test]
+fn absent_eeprom_data_port_reads_open_bus() {
+    let mut bus = Bus::new(three_bank_rom(0x00)); // no EEPROM
+    bus.write_io(0xC4, 0x5A);
+    assert_eq!(bus.read_io(0xC4), 0x90);
 }
 
 #[test]
@@ -154,4 +171,66 @@ fn eeprom_save_data_round_trips_through_bus() {
     bus.load_save_data(&blob);
     eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 0)); // READ word 0
     assert_eq!(bus.read_io(0xC4), 0xCD);
+}
+
+#[test]
+fn eeprom_write_all_initialization_fills_selected_word() {
+    let mut bus = eeprom_bus();
+    eeprom_op(&mut bus, 0b0010, 0x1234, cmd(0, 0b01 << 4)); // WRAL
+    eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 17)); // READ word 17
+    assert_eq!(bus.read_io(0xC4), 0x34);
+}
+
+#[test]
+fn eeprom_write_disable_initialization_blocks_later_write() {
+    let mut bus = eeprom_bus();
+    eeprom_op(&mut bus, 0b0100, 0x0000, cmd(0, 0b00 << 4)); // EWDS
+    eeprom_op(&mut bus, 0b0010, 0x1234, cmd(1, 0)); // WRITE word 0
+    eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 0)); // READ word 0
+    assert_eq!(bus.read_io(0xC4), 0xFF);
+}
+
+// ── Cartridge RTC through I/O ports ─────────────────────────────────────────
+
+/// Build a bus whose cartridge footer marks an RTC device as present.
+fn rtc_bus() -> Bus {
+    Bus::from_rom(rom_with_footer(0x10000, &[(0xC, 0x02)]))
+}
+
+#[test]
+fn rtc_footer_bit_exposes_ready_command_port() {
+    let mut bus = rtc_bus();
+    bus.write_io(0xCA, 0x14);
+    assert_eq!(bus.read_io(0xCA), 0x94);
+}
+
+#[test]
+fn rtc_datetime_read_returns_bcd_bytes_in_register_order() {
+    let mut bus = rtc_bus();
+    bus.set_rtc_datetime(26, 7, 3, 5, 12, 34, 56);
+    bus.write_io(0xCA, 0x14);
+    let got: Vec<u8> = (0..7).map(|_| bus.read_io(0xCB)).collect();
+    assert_eq!(got, vec![0x26, 0x07, 0x03, 5, 0x12, 0x34, 0x56]);
+}
+
+#[test]
+fn rtc_status_write_then_read_round_trips() {
+    let mut bus = rtc_bus();
+    bus.write_io(0xCA, 0x13);
+    bus.write_io(0xCB, 0xA5);
+    bus.write_io(0xCA, 0x12);
+    assert_eq!(bus.read_io(0xCB), 0xA5);
+}
+
+#[test]
+fn absent_rtc_command_port_reads_open_bus() {
+    let mut bus = Bus::from_rom(rom_with_footer(0x10000, &[]));
+    bus.write_io(0xCA, 0x14);
+    assert_eq!(bus.read_io(0xCA), 0x90);
+}
+
+#[test]
+fn rtc_bearing_cart_keeps_cartridge_save_data_empty() {
+    let bus = rtc_bus();
+    assert!(bus.save_data().is_empty());
 }

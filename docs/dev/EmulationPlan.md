@@ -204,19 +204,31 @@ Definition of done:
 Purpose: tighten save-related hardware behavior without compromising the simple
 core save API.
 
+Status: complete. Cartridge save persistence is implemented for both SRAM and
+cartridge EEPROM: the core exposes raw bytes through `save_data` / `load_save_data`,
+and the frontend reads/writes `saves/<ROM file name>.sav` under the platform config directory. RTC footer
+detection, the 0xCA/0xCB command/data protocol, BCD byte order, status/alarm
+registers, and absent-device open-bus behavior are pinned by tests. RTC state is
+kept separate from cartridge SRAM/EEPROM save bytes. Bandai 2003 high-byte bank
+selection is covered on a large ROM image, and cartridge EEPROM tests cover
+common initialization commands plus absent-device open bus. Console internal
+EEPROM is a separate BIOS/profile device, not cartridge save media; Swanium
+keeps it deterministic and zero-filled at startup.
+
 ### 12a. RTC protocol validation
 
 Scope:
 
 - Verify RTC footer detection, command codes, data order, status bits, and
   readable/writeable command sequencing.
-- Implement alarm-match IRQ only if a test or known title requires it.
-- Decide whether RTC state must be included in frontend save persistence.
+- Model alarm registers as RTC state; do not raise a cartridge IRQ from alarm
+  match.
+- Keep RTC state outside the raw cartridge SRAM/EEPROM save byte slice.
 
 Definition of done:
 
 - RTC assumptions in `DevelopmentPlan.md` / `Status.md` are updated with
-  verified behavior or explicit remaining risk.
+  the Milestone 12 behavior.
 - Tests cover any protocol changes.
 
 ### 12b. Mapper and EEPROM validation
@@ -237,15 +249,14 @@ Definition of done:
 
 Scope:
 
-- Decide whether console internal EEPROM should persist per hardware model.
-- If yes, design frontend storage separate from cartridge saves.
-- If no, document why zero-filled deterministic startup remains intentional.
+- Treat console internal EEPROM as BIOS/profile state, not cartridge save media.
+- Document console internal EEPROM as BIOS/profile state, separate from
+  cartridge saves.
+- Keep console internal EEPROM deterministic and zero-filled at startup.
 
 Definition of done:
 
 - The decision is recorded in `Status.md`.
-- Any persistence implementation has load/save tests outside `swanium-core` if
-  it touches frontend/common storage.
 
 ## Milestone 13 — Timing precision phase
 

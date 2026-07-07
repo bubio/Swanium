@@ -1,5 +1,5 @@
 //! Unit tests for cartridge header parsing, mapper-aware banking, the serial
-//! EEPROM device, the RTC interface stub, and save-data serialisation.
+//! EEPROM device, the RTC interface, and save-data serialisation.
 //!
 //! One assertion per test (Apollo Rust best practices, Ch. 5.1).
 
@@ -305,7 +305,7 @@ fn cartridge_eeprom_control_write_then_read() {
     assert_eq!(read, 0xBEEF);
 }
 
-// ── 6d: RTC interface stub ───────────────────────────────────────────────────
+// ── 6d/8e: RTC interface ─────────────────────────────────────────────────────
 
 #[test]
 fn cartridge_has_no_rtc_in_phase_6() {

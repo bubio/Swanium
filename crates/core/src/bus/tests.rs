@@ -1094,12 +1094,18 @@ fn rom_with_rtc() -> Vec<u8> {
 }
 
 #[test]
-fn cart_without_rtc_leaves_ports_ca_cb_as_open_shadow() {
+fn cart_without_rtc_reads_open_bus_on_command_port() {
     let mut bus = Bus::from_rom(rom_with_color_flag(true));
     assert!(!bus.has_rtc());
-    // No RTC: 0xCA/0xCB fall through to the raw port shadow (0 by default).
     bus.write_io(0xCA, 0x14);
-    assert_eq!(bus.read_io(0xCA), 0x14);
+    assert_eq!(bus.read_io(0xCA), 0x90);
+}
+
+#[test]
+fn cart_without_rtc_reads_open_bus_on_data_port() {
+    let mut bus = Bus::from_rom(rom_with_color_flag(true));
+    bus.write_io(0xCB, 0x56);
+    assert_eq!(bus.read_io(0xCB), 0x90);
 }
 
 #[test]
