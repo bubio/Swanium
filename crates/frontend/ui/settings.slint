@@ -6,7 +6,7 @@
 // `key-captured`. Controller capture is polled on the Rust side while
 // `rebind-pad` is armed.
 
-import { Button, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Button, CheckBox, Palette, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 export struct BindingRow {
     label: string,
@@ -20,7 +20,7 @@ component SectionButton inherits Rectangle {
     callback clicked();
 
     height: 44px;
-    background: root.selected ? #e8e8e8 : #00000000;
+    background: root.selected ? Palette.control-background : transparent;
 
     Text {
         x: 16px;
@@ -29,7 +29,7 @@ component SectionButton inherits Rectangle {
         text: root.text;
         font-size: 14px;
         vertical-alignment: center;
-        color: #202020;
+        color: Palette.foreground;
     }
 
     TouchArea {
@@ -64,6 +64,7 @@ export component SettingsWindow inherits Window {
     in property <string> listening-hint;
 
     out property <int> selected-section: 0;
+    private property <length> button-column-width: 72px;
 
     callback set-bios-rom-mode(int);
     callback open-rom-directory();
@@ -76,10 +77,11 @@ export component SettingsWindow inherits Window {
     callback close-settings();
 
     title: "Swanium - Settings";
-    min-width: 640px;
-    max-width: 820px;
+    min-width: 760px;
+    max-width: 760px;
     preferred-width: 760px;
     min-height: 520px;
+    max-height: 32767px;
     preferred-height: 640px;
     forward-focus: scope;
 
@@ -94,14 +96,14 @@ export component SettingsWindow inherits Window {
 
             Rectangle {
                 width: 210px;
-                background: #d4d4d4;
+                background: Palette.alternate-background;
 
                 VerticalLayout {
                     spacing: 0px;
 
                     Rectangle {
                         height: 68px;
-                        background: #d4d4d4;
+                        background: Palette.alternate-background;
                         Text {
                             x: 16px;
                             width: parent.width - 32px;
@@ -109,7 +111,7 @@ export component SettingsWindow inherits Window {
                             text: "Swanium Settings";
                             font-size: 20px;
                             vertical-alignment: center;
-                            color: #111111;
+                            color: Palette.foreground;
                         }
                     }
 
@@ -128,11 +130,11 @@ export component SettingsWindow inherits Window {
 
             Rectangle {
                 width: 1px;
-                background: #c0c0c0;
+                background: Palette.border;
             }
 
             Rectangle {
-                background: #f7f7f7;
+                background: Palette.background;
                 horizontal-stretch: 1;
 
                 VerticalLayout {
@@ -147,11 +149,13 @@ export component SettingsWindow inherits Window {
                             text: "ROM";
                             font-size: 24px;
                             font-weight: 700;
+                            color: Palette.foreground;
                         }
                         Text {
                             text: "BIOS ROM";
                             font-size: 16px;
                             font-weight: 700;
+                            color: Palette.foreground;
                         }
                         VerticalBox {
                             BiosCheckBox {
@@ -197,35 +201,49 @@ export component SettingsWindow inherits Window {
                             text: "Input";
                             font-size: 24px;
                             font-weight: 700;
+                            color: Palette.foreground;
                         }
-                        HorizontalBox {
+                        HorizontalLayout {
+                            alignment: stretch;
                             spacing: 12px;
-                            Text { text: "Button"; width: 120px; font-weight: 700; }
-                            Rectangle {
+                            Text { text: "Button"; width: root.button-column-width; font-weight: 700; color: Palette.foreground; }
+                            Text {
+                                text: "Keyboard";
                                 horizontal-stretch: 1;
-                                Text { text: "Keyboard"; font-weight: 700; }
+                                min-width: 0px;
+                                font-weight: 700;
+                                color: Palette.foreground;
                             }
-                            Rectangle {
+                            Text {
+                                text: "Controller";
                                 horizontal-stretch: 1;
-                                Text { text: "Controller"; font-weight: 700; }
+                                min-width: 0px;
+                                font-weight: 700;
+                                color: Palette.foreground;
                             }
                         }
                         ScrollView {
+                            viewport-height: root.rows.length * 56px;
+                            horizontal-stretch: 1;
                             vertical-stretch: 1;
-                            VerticalBox {
-                                alignment: start;
-                                for row[i] in root.rows: HorizontalBox {
-                                    height: 44px;
-                                    spacing: 12px;
+                            rows-grid := GridLayout {
+                                width: parent.visible-width;
+                                spacing: 12px;
+                                for row[i] in root.rows: Row {
                                     Text {
                                         text: row.label;
-                                        width: 120px;
+                                        width: root.button-column-width;
+                                        height: 44px;
                                         vertical-alignment: center;
+                                        color: Palette.foreground;
                                     }
                                     Rectangle {
                                         horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        height: 44px;
                                         Button {
                                             text: row.key;
+                                            y: 7px;
                                             width: parent.width;
                                             height: 30px;
                                             clicked => {
@@ -236,8 +254,11 @@ export component SettingsWindow inherits Window {
                                     }
                                     Rectangle {
                                         horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        height: 44px;
                                         Button {
                                             text: row.pad;
+                                            y: 7px;
                                             width: parent.width;
                                             height: 30px;
                                             clicked => { root.rebind-pad(i); }
