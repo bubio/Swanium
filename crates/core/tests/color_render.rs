@@ -112,6 +112,7 @@ fn mono_model_drops_palette_ram_writes() {
 /// `data = 0x10` in unsigned mode (ctrl bit pattern 0x80, shift 0) expands to
 /// `0x10 << 8 = 0x1000`, `>> 5 = 128`, then `× MIX_SCALE (32) = 4096` per side.
 fn setup_hypervoice(bus: &mut Bus) {
+    bus.write_io(0x60, 0x80); // WSC color mode: HyperVoice is unavailable without it
     bus.write_io(0x91, 0x80); // headphone path: preserve HyperVoice routing
     bus.write_io(0x6A, 0x80); // HV_CTRL: enable, unsigned mode, shift 0
     bus.write_io(0x6B, 0x60); // HV_CHAN_CTRL: route left (0x40) + right (0x20)
@@ -139,6 +140,52 @@ fn color_hypervoice_routes_left_only() {
     bus.tick_apu(128);
     let samples = bus.audio_samples();
     assert_eq!(samples[0], 4096);
+    assert_eq!(samples[1], 0);
+}
+
+#[test]
+fn color_hypervoice_direct_output_emits_signed_stereo_words() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0x60, 0x80);
+    bus.write_io(0x91, 0x80);
+    bus.write_io(0x6A, 0x80);
+    bus.write_io(0x64, 0x00);
+    bus.write_io(0x65, 0x10);
+    bus.write_io(0x66, 0x00);
+    bus.write_io(0x67, 0xF0);
+    bus.tick_apu(128);
+    let samples = bus.audio_samples();
+    assert_eq!(samples[0], 4096);
+    assert_eq!(samples[1], -4096);
+}
+
+#[test]
+fn color_hypervoice_direct_zero_silences_prior_8_bit_latch() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Color);
+    setup_hypervoice(&mut bus);
+    bus.write_io(0x64, 0x00);
+    bus.write_io(0x65, 0x00);
+    bus.write_io(0x66, 0x00);
+    bus.write_io(0x67, 0x00);
+    bus.tick_apu(128);
+    let samples = bus.audio_samples();
+    assert_eq!(samples[0], 0);
+    assert_eq!(samples[1], 0);
+}
+
+#[test]
+fn color_mode_disabled_is_silent_with_hypervoice_registers_set() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0x91, 0x80);
+    bus.write_io(0x6A, 0x80);
+    bus.write_io(0x69, 0x10);
+    bus.write_io(0x6B, 0x60);
+    bus.tick_apu(128);
+    let samples = bus.audio_samples();
+    assert_eq!(samples[0], 0);
     assert_eq!(samples[1], 0);
 }
 

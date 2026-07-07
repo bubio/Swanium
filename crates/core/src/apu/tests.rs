@@ -331,9 +331,18 @@ fn output_control_speaker_shift_attenuates_mono_sum() {
 }
 
 #[test]
+fn output_control_speaker_path_ignores_unvalidated_speaker_volume() {
+    let mut ports = [0u8; 0x100];
+    ports[SND_OUTPUT_CTRL] = 0x00;
+    ports[0x9E] = 0x00;
+    assert_eq!(apply_output_control(100, 300, &ports), (400, 400));
+}
+
+#[test]
 fn output_control_headphone_preserves_stereo() {
     let mut ports = [0u8; 0x100];
     ports[SND_OUTPUT_CTRL] = 0x80;
+    ports[0x9E] = 0x00;
     assert_eq!(apply_output_control(100, 300, &ports), (100, 300));
 }
 
@@ -488,6 +497,25 @@ fn hypervoice_output_routes_left_only() {
     ports[HV_DATA] = 0x40;
     ports[HV_CHAN_CTRL] = HV_LEFT;
     assert_eq!(hypervoice_output(&ports, true), (16384, 0));
+}
+
+#[test]
+fn hypervoice_direct_output_uses_signed_16_bit_words() {
+    let mut ports = [0u8; 0x100];
+    ports[HV_CTRL] = HV_ENABLE;
+    [ports[HV_DIRECT_L_LO], ports[HV_DIRECT_L_HI]] = 0x1234i16.to_le_bytes();
+    [ports[HV_DIRECT_R_LO], ports[HV_DIRECT_R_HI]] = (-0x1234i16).to_le_bytes();
+    assert_eq!(hypervoice_output(&ports, true), (0x1234, -0x1234));
+}
+
+#[test]
+fn hypervoice_direct_output_takes_precedence_over_8_bit_latch() {
+    let mut ports = [0u8; 0x100];
+    ports[HV_CTRL] = HV_ENABLE;
+    ports[HV_DATA] = 0x40;
+    ports[HV_CHAN_CTRL] = HV_LEFT | HV_RIGHT;
+    [ports[HV_DIRECT_L_LO], ports[HV_DIRECT_L_HI]] = 0x0100i16.to_le_bytes();
+    assert_eq!(hypervoice_output(&ports, true), (0x0100, 0));
 }
 
 #[test]

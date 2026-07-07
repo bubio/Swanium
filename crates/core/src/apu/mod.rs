@@ -21,13 +21,12 @@
 //! reload uses a saturating subtraction (a deviation from WonderCrab) so a zero
 //! sweep-time register cannot underflow.
 //!
-//! **HyperVoice** (WonderSwan Color only) is an extra 8-bit PCM source, separate
-//! from the four wave channels, expanded to a signed ~11-bit sample and summed
-//! into the stereo output. It follows Mednafen's `wswan/sound.c`: control at port
-//! `0x6A` (enable / sample-extension mode / volume shift), left/right routing at
-//! `0x6B`, and the 8-bit data latch at `0x69`. The Color gate lives in the bus
-//! (mono drops writes to `0x69`–`0x6B`), so the enable bit is only ever seen on
-//! Color hardware and the APU itself stays model-agnostic.
+//! **HyperVoice** (WonderSwan Color only) is an extra PCM source, separate from
+//! the four wave channels. The normal path expands 8-bit samples to a signed
+//! ~11-bit sample and sums it into the stereo output. The direct path accepts
+//! signed 16-bit left/right output words at ports `0x64`–`0x67`, matching Sacred
+//! Tech Scroll's direct-access description. The Color/video-mode gate lives in
+//! the bus, so mono or color-mode-disabled hardware skips the mix.
 
 #[cfg(test)]
 mod tests;
@@ -51,8 +50,11 @@ const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
 const SND_OUTPUT_CTRL: usize = 0x91; // speaker/headphone output mode and speaker shift
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
-
 // ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
+const HV_DIRECT_L_LO: usize = 0x64; // signed 16-bit direct left output
+const HV_DIRECT_L_HI: usize = 0x65;
+const HV_DIRECT_R_LO: usize = 0x66; // signed 16-bit direct right output
+const HV_DIRECT_R_HI: usize = 0x67;
 const HV_DATA: usize = 0x69; // 8-bit PCM data latch (Sound DMA / manual write)
 const HV_CTRL: usize = 0x6A; // enable / sample-extension mode / volume shift
 const HV_CHAN_CTRL: usize = 0x6B; // left/right output routing
@@ -405,11 +407,20 @@ fn hypervoice_output(ports: &[u8], color: bool) -> (i32, i32) {
     if !color || ctrl & HV_ENABLE == 0 {
         return (0, 0);
     }
+    let direct_l = hypervoice_direct_sample(ports, HV_DIRECT_L_LO, HV_DIRECT_L_HI);
+    let direct_r = hypervoice_direct_sample(ports, HV_DIRECT_R_LO, HV_DIRECT_R_HI);
+    if direct_l != 0 || direct_r != 0 {
+        return (direct_l, direct_r);
+    }
     let sample = hypervoice_sample(ctrl, ports[HV_DATA]) as i32 * MIX_SCALE;
     let chan = ports[HV_CHAN_CTRL];
     let left = if chan & HV_LEFT != 0 { sample } else { 0 };
     let right = if chan & HV_RIGHT != 0 { sample } else { 0 };
     (left, right)
+}
+
+fn hypervoice_direct_sample(ports: &[u8], lo: usize, hi: usize) -> i32 {
+    i16::from_le_bytes([ports[lo], ports[hi]]) as i32
 }
 
 /// Mix the four channel samples into one interleaved stereo (`L`, `R`) frame,

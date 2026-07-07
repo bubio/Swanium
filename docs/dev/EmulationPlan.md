@@ -160,6 +160,16 @@ Definition of done:
 Purpose: finish the remaining WSC audio paths after SDMA establishes the
 sample-feeding path.
 
+Status: complete at implementation/test-triage scope. The 16-bit HyperVoice
+direct-output path is implemented and covered by deterministic tests. Port
+`0x9E` is implemented as the WonderSwan built-in speaker main-volume register:
+all models keep the low two bits for software-visible readback. The analog
+speaker-volume transfer is not applied to the mix yet because the exact curve
+and reset/write behaviour remain hardware-uncertain and a literal 0=mute mapping
+breaks existing software. PCM quality measurement is documented in
+`docs/dev/AudioAccuracy.md`; actual commercial-ROM comparisons remain
+local/manual evidence.
+
 ### 11a. WSC master volume and direct output
 
 Scope:

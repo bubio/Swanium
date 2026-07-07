@@ -162,14 +162,61 @@ fn color_retains_hypervoice_register_writes() {
 }
 
 #[test]
+fn color_hypervoice_direct_register_writes_clear_8_bit_latch() {
+    let mut bus = color_bus();
+    bus.write_io(0x69, 0x40);
+    bus.write_io(0x64, 0x34);
+    bus.write_io(0x65, 0x12);
+    assert_eq!(bus.read_io(0x64), 0x34);
+    assert_eq!(bus.read_io(0x65), 0x12);
+    assert_eq!(bus.read_io(0x69), 0x00);
+}
+
+#[test]
+fn color_hypervoice_8_bit_latch_writes_clear_direct_registers() {
+    let mut bus = color_bus();
+    bus.write_io(0x64, 0x34);
+    bus.write_io(0x65, 0x12);
+    bus.write_io(0x69, 0x40);
+    assert_eq!(bus.read_io(0x64), 0x00);
+    assert_eq!(bus.read_io(0x65), 0x00);
+    assert_eq!(bus.read_io(0x69), 0x40);
+}
+
+#[test]
 fn mono_drops_hypervoice_register_writes() {
-    // HyperVoice does not exist on mono hardware: writes to 0x69–0x6B are
+    // HyperVoice does not exist on mono hardware: writes to 0x64–0x6B are
     // dropped, so the enable bit is never set and the APU stays silent. Promote
     // to Color afterwards and confirm nothing was stored.
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x64, 0x34);
     bus.write_io(0x6A, 0x80);
     bus.set_model(HardwareModel::Color);
+    assert_eq!(bus.read_io(0x64), 0x00);
     assert_eq!(bus.read_io(0x6A), 0x00);
+}
+
+#[test]
+fn speaker_volume_register_defaults_to_max() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    assert_eq!(bus.read_io(0x9E), 0x03);
+}
+
+#[test]
+fn speaker_volume_register_keeps_low_two_bits() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x9E, 0xFF);
+    assert_eq!(bus.read_io(0x9E), 0x03);
+}
+
+#[test]
+fn speaker_volume_register_survives_model_switch() {
+    let mut bus = color_bus();
+    bus.write_io(0x9E, 0x02);
+    bus.set_model(HardwareModel::Mono);
+    assert_eq!(bus.read_io(0x9E), 0x02);
+    bus.set_model(HardwareModel::Color);
+    assert_eq!(bus.read_io(0x9E), 0x02);
 }
 
 #[test]
@@ -624,6 +671,7 @@ fn gdma_leaves_destination_unchanged_without_enable_bit() {
 
 fn color_bus_with_sdma_voice() -> Bus {
     let mut bus = color_bus();
+    bus.write_io(0x91, 0x80); // headphone path: keep voice tests independent of speaker volume
     bus.write_io(0x90, 0x20); // channel 2 voice mode
     bus.write_io(0x94, 0x05); // full left + full right voice routing
     bus

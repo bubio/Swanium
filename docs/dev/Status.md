@@ -104,16 +104,20 @@ analog output stage averages out, so the interleave no longer reads as a buzz. F
 write stream — not a value sampled once per scanline by the mixer — is required to preserve both
 halves of the multiplexed stream.
 Further reconstruction-quality tuning (residual multiplex ripple from write-per-scanline jitter)
-is still open. **HyperVoice** (WSC-only,
-Phase 8f) adds a fifth independent 8-bit PCM source: control at port `0x6A`
-(enable / sample-extension mode / volume shift), L/R routing at `0x6B`, data latch at `0x69`;
-the 8-bit sample is expanded and summed into the stereo output at the wave-mix level
-(`hypervoice_sample` / `hypervoice_output`, Mednafen `wswan/sound.c`). The Color gate is applied on
-both read and write: `Bus::write_io` drops mono writes to `0x69`–`0x6B`, and `Apu::tick(…, color)`
-skips the HyperVoice mix on non-Color hardware so a stale enable bit cannot leak through a runtime
-`set_model` downgrade. The 16-bit
-direct-output path (`0x64`–`0x67`), Sound-DMA feeding (SDMA engine unimplemented), and the sample-rate
-divisor are deferred/unverified — see DevelopmentPlan 実装メモ（8f）.
+is still open; `docs/dev/AudioAccuracy.md` records the manual comparison plan. **HyperVoice**
+(WSC-only, Phase 8f + Milestone 11) adds a fifth independent PCM source. The 8-bit path uses
+control at port `0x6A` (enable / sample-extension mode / volume shift), L/R routing at `0x6B`,
+and data latch at `0x69`; the sample is expanded and summed into the stereo output at the
+wave-mix level (`hypervoice_sample` / `hypervoice_output`, Mednafen `wswan/sound.c`). The
+16-bit direct path at `0x64`–`0x67` writes signed little-endian left/right output words, which
+take precedence over the 8-bit latch when non-zero. The gate is applied on both read/write and
+mixing: `Bus::write_io` drops mono writes to `0x64`–`0x6B`, and `Apu::tick(…, color)` receives
+`color=true` only when the machine is Color/Crystal and port `0x60` bit 7 enables color mode.
+Port `0x9E` is implemented as the built-in speaker main-volume register on all models for
+software-visible low-two-bit readback. It is not applied to the mix yet because the exact analog
+curve and observed zero-write behaviour still need hardware validation. Sound DMA feeds the voice
+latch from ports `0x4A`–`0x52`; remaining audio risks are sample-rate divisor/update cadence, SDMA
+bus-stall validation, and the exact analog curve for speaker main volume.
 
 ### Cartridge / save RAM — Phase 6 (`bus/cart/`)
 16-byte footer header parse, Bandai 2001/2003 banking via a `Mapper` enum, SRAM and
@@ -235,15 +239,17 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   (left bit 6 / right bit 5, write-masked `0x6F`), data latch `0x69`. `hypervoice_sample` expands the
   8-bit latch to a signed ~11-bit value (`i16`-truncated then `>> 5`) and `hypervoice_output` scales it
   by `MIX_SCALE` and routes it, so it sums into the same output domain as the four wave channels — which
-  never saturate alone, so `mix` stays exact and the final clamp runs once after HyperVoice is added. The
-  Color gate covers read and write (like the 8d upper-RAM window): `Bus::write_io` drops mono `0x69`–`0x6B`
-  writes and `Apu::tick(…, color)` skips the mix on non-Color hardware. Sound DMA is implemented in the
+  never saturate alone, so `mix` stays exact and the final clamp runs once after HyperVoice is added.
+  Milestone 11 adds the signed 16-bit direct path at `0x64`–`0x67` and gates HyperVoice mixing on WSC
+  color mode (`0x60` bit 7), not only the hardware model. The Color gate covers read and write (like the
+  8d upper-RAM window): `Bus::write_io` drops mono `0x64`–`0x6B` writes and `Apu::tick(…, color)` skips
+  the mix when HyperVoice is unavailable. Sound DMA is implemented in the
   bus: ports `0x4A`–`0x52` form a Color-only SDMA engine clocked from the APU path at `128 * rate`
   master cycles per byte, and delivered bytes go through the same `0x89` voice-latch helper as CPU I/O
   writes so `Apu::write_voice` sees the real stream. Terminal count clears bit 7 unless repeat is set;
   repeat reloads source/counter shadows; hold outputs zero without advancing. Deferred/unverified: the
-  exact hardware bus-stall/timing details, the 16-bit direct path `0x64`–`0x67`, the sample-rate divisor,
-  and the 0x69-vs-Mednafen-0x95 data-port choice — see DevelopmentPlan 実装メモ（8f）.
+  exact hardware bus-stall/timing details, sample-rate divisor/update cadence, and the exact
+  analog transfer curve for `0x9E` speaker main volume.
 - **8g (done)**: integration-level test consolidation for the Phase 8 features and mono-regression
   parity, plus this final doc pass. New end-to-end tests drive the Color paths through the same public
   API the frontend uses, each pinned against its mono-regression twin: `crates/core/tests/color_render.rs`

@@ -106,18 +106,21 @@ Expected scope:
 - Keep mono compatibility tests paired with Color tests when changing shared PPU
   logic.
 
-### HyperVoice and WSC audio extensions
+### HyperVoice and WSC audio validation
 
-HyperVoice 8-bit PCM and SDMA feeding are implemented, but several WSC audio
-paths remain unverified or missing.
+HyperVoice 8-bit PCM, 16-bit direct output, and SDMA feeding are implemented.
+The remaining risk is validation against public ROMs, reference emulators, or
+hardware captures rather than untriaged register coverage.
 
 Expected scope:
 
-- Implement or explicitly rule out the 16-bit direct output path at ports
-  `0x64`-`0x67`.
-- Verify the HyperVoice data-port choice and sample-extension mode semantics.
-- Implement the WSC master volume bits at port `0x9E`.
-- Confirm the sample-rate divisor behavior if software-visible.
+- Confirm the sample-rate divisor/update cadence if software-visible. The
+  current 8-bit path follows the existing Mednafen-style latch conversion, while
+  the 16-bit direct path at `0x64`-`0x67` writes signed left/right output words.
+- Validate the exact analog transfer curve for port `0x9E`. It is implemented
+  as the documented built-in speaker main-volume register, with low two bits
+  retained for readback. Attenuation is deliberately not applied yet because
+  the exact analog curve and zero-write behaviour need hardware validation.
 - Validate SDMA's exact bus-stall and sample-cadence timing against public tests,
   reference emulators, or hardware captures. The current implementation feeds one
   byte every `128 * rate` master cycles and is covered by register/terminal-count

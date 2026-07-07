@@ -97,6 +97,15 @@ pub struct Bus {
 }
 
 impl Bus {
+    fn init_port_defaults(ports: &mut [u8; 0x100]) {
+        // INT_ENABLE: VBLANK (bit 6) is always forced on.
+        ports[0xB2] = 1 << IrqSource::VBlank as u8;
+        // Keep the speaker path audible unless software explicitly lowers the
+        // built-in speaker main volume. Treating reset as 0 mutes games/tests
+        // that rely on the default speaker route and never touch port 0x9E.
+        ports[0x9E] = 0x03;
+    }
+
     /// Create a bus with the given ROM bytes (and no SRAM).
     pub fn new(rom: Vec<u8>) -> Self {
         let mut bus = Self {
@@ -111,8 +120,7 @@ impl Bus {
             keys: KeyState::NONE,
             model: HardwareModel::Mono,
         };
-        // INT_ENABLE: VBLANK (bit 6) is always forced on.
-        bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
+        Self::init_port_defaults(&mut bus.ports);
         bus
     }
 
@@ -130,7 +138,7 @@ impl Bus {
             keys: KeyState::NONE,
             model: HardwareModel::Mono,
         };
-        bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
+        Self::init_port_defaults(&mut bus.ports);
         bus
     }
 
@@ -153,7 +161,7 @@ impl Bus {
             keys: KeyState::NONE,
             model,
         };
-        bus.ports[0xB2] = 1 << IrqSource::VBlank as u8;
+        Self::init_port_defaults(&mut bus.ports);
         bus
     }
 
@@ -435,6 +443,10 @@ impl Bus {
         self.model.is_color() && (self.ports[0x60] & 0x80 != 0)
     }
 
+    fn hypervoice_enabled(&self) -> bool {
+        self.color_rendering_enabled()
+    }
+
     /// The current PPU framebuffer: 224×144 [`Rgb444`] colors, row-major.
     /// Stable read API for the frontend and RetroAchievements.
     pub fn framebuffer(&self) -> &[Rgb444] {
@@ -461,15 +473,16 @@ impl Bus {
         if !self.model.is_color() || self.ports[0x52] & SDMA_ENABLE == 0 {
             self.sdma.running = false;
             self.sdma.clock = 0;
+            let hypervoice = self.hypervoice_enabled();
             self.apu
-                .tick(cycles, &self.wram, &mut self.ports, self.model.is_color());
+                .tick(cycles, &self.wram, &mut self.ports, hypervoice);
             return;
         }
 
         for _ in 0..cycles {
             self.tick_sdma_cycle();
-            self.apu
-                .tick(1, &self.wram, &mut self.ports, self.model.is_color());
+            let hypervoice = self.hypervoice_enabled();
+            self.apu.tick(1, &self.wram, &mut self.ports, hypervoice);
         }
     }
 
@@ -576,6 +589,16 @@ impl Bus {
         if self.ports[0x90] & SND_CTRL_VOICE != 0 {
             self.apu.write_voice(value);
         }
+    }
+
+    fn write_hypervoice_direct(&mut self, port: u8, value: u8) {
+        self.ports[port as usize] = value;
+        self.ports[0x69] = 0;
+    }
+
+    fn write_hypervoice_data_latch(&mut self, value: u8) {
+        self.ports[0x64..=0x67].fill(0);
+        self.ports[0x69] = value;
     }
 
     fn sdma_rate(&self) -> u16 {
@@ -851,15 +874,22 @@ impl MemoryBus for Bus {
                     self.boot_rom = None;
                 }
             }
-            // HyperVoice (WonderSwan Color only): 8-bit PCM data latch (0x69),
-            // control (0x6A: enable/mode/shift), and channel routing (0x6B). On
-            // mono hardware these registers do not exist, so writes are dropped
-            // (the same open-bus-on-mono treatment as the 8d upper-RAM window);
-            // the APU then never sees the enable bit and HyperVoice stays silent.
-            0x69 if self.model.is_color() => self.ports[0x69] = value,
+            // HyperVoice (WonderSwan Color only): signed 16-bit direct output
+            // words (0x64-0x67), 8-bit PCM data latch (0x69), control (0x6A),
+            // and channel routing (0x6B). On mono hardware these registers do
+            // not exist, so writes are dropped (the same open-bus-on-mono
+            // treatment as the 8d upper-RAM window). The APU mix is also gated
+            // by port 0x60 bit 7, because HyperVoice is unavailable when WSC
+            // color mode is disabled.
+            0x64..=0x67 if self.model.is_color() => self.write_hypervoice_direct(port, value),
+            0x68 if self.model.is_color() => self.ports[0x68] = value,
+            0x69 if self.model.is_color() => self.write_hypervoice_data_latch(value),
             0x6A if self.model.is_color() => self.ports[0x6A] = value,
             0x6B if self.model.is_color() => self.ports[0x6B] = value & 0x6F,
-            0x69..=0x6B => {} // mono: HyperVoice absent
+            0x64..=0x6B => {} // mono: HyperVoice absent
+            // Built-in speaker main volume. WSdev documents only the low two
+            // bits as meaningful; the APU applies it to the speaker path only.
+            0x9E => self.ports[0x9E] = value & 0x03,
             // Voice (channel-2 PCM) data latch. In voice mode every write feeds
             // the APU's reconstruction filter, so it sees the full PCM stream
             // (games write it faster than the audio rate); outside voice mode the

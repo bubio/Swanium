@@ -342,9 +342,9 @@ video               audio                input
 -   テスト数: APUユニット 32 + `apu_render.rs` 8 = Phase 5で +40。
 
 **Phase 5 後続課題**
-1.  **Sound DMA(SDMA)連携**: ボイスチャンネルへのSDMA転送（port 0x4A–0x52, Phase 2でレジスタ
-    配線済み）と `tick_apu` の連動が未実装。現状ボイスは port 0x89 を直接読む。SDMAが
-    サンプルを 0x89 へ供給する経路を実装する（Phase 7のフロントエンド実プレイ前に推奨）。
+1.  **Sound DMA(SDMA)連携（解決済み）**: port 0x4A–0x52 のSDMA転送は実装済み。APU駆動経路から
+    サンプルを 0x89 の voice latch helper へ供給し、`Apu::write_voice` がCPU直書きと同じPCMストリームを
+    受け取る。残る課題は実機/公開ROMでのbus-stall・sample cadence検証。
 2.  **`tick` のサイクル単位ループ**: `tick` は1サウンドクロックずつループする（1フレーム約5万回）。
     性能上は問題ないが、サンプル境界までのバッチ処理（次のチャンネル前進までの最小公倍数で
     まとめて進める）に最適化する余地がある。cycle-accuracy方針上のドット/サウンド単位駆動
@@ -352,8 +352,9 @@ video               audio                input
 3.  **高品質リサンプル**: 現状は3.072 MHz生成値を128サイクルごとに単純間引き（デシメーション）
     しており、ナイキスト以上の成分はエイリアスする。Blip_Buffer相当の帯域制限リサンプルは
     audio品質フェーズで検討（DoDの「正しい波形のサンプル列」は満たす）。
-4.  **マスター音量(0x9E)**: WSCのマスター音量2bitは未実装。スピーカー/ヘッドホン切替・
-    出力シフト(0x91)は APU 最終段で実装済み。
+4.  **スピーカー主音量(0x9E)**: WSdev `Sound Speaker Main Volume` に従い、low 2bit の
+    readback は実装済み。出力への減衰は未適用（0=mute の仮適用で既存ソフトが無音化したため）。
+    正確なアナログ曲線と zero-write 挙動は audio品質フェーズで検証する。
 5.  **ノイズタップ/スイープ周期の実機検証**: タップ位置テーブルとスイープ8192tick周期は
     WonderCrab由来。実機/他エミュとの突き合わせは精度フェーズで実施。
 
@@ -654,18 +655,27 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     -   **データラッチ 0x69（`HV_DATA`）**: 8bit PCM。8bit→16bit 拡張後 `>> 5` で ~11bit 域へ戻し、
         wave チャネル和と同一ドメインで加算（`MIX_SCALE` を掛けてミックス）。中間値は Mednafen の
         `int16` 代入に合わせ `i16` へ切り詰めてから `>> 5`（mode 0/0xC の大値は負に wrap）。
--   **Color ゲートは read/write 両方**（8d の上位 RAM 窓と同じ非対称回避）。`Bus::write_io` が 0x69–0x6B への
-    書き込みを `model.is_color()` でゲートし mono では破棄、加えて `Apu::tick(..., color)` に本体モデルを渡して
-    `hypervoice_output` が `color=false` なら（enable ビットが port shadow に残っていても）ミックスをスキップ。
-    これで実行時に `set_model(Color→Mono)` しても mono に HyperVoice が漏れない（8d の read/write 両ゲートと対称）。
+-   **Color ゲートは read/write 両方**（8d の上位 RAM 窓と同じ非対称回避）。`Bus::write_io` が 0x64–0x6B への
+    書き込みを `model.is_color()` でゲートし mono では破棄、加えて `Apu::tick(..., color)` には
+    `model.is_color() && port 0x60 bit7` を渡して、Color機でも color mode disabled なら
+    `hypervoice_output` がミックスをスキップする。これで実行時に `set_model(Color→Mono)` しても mono に
+    HyperVoice が漏れない（8d の read/write 両ゲートと対称）。
 -   **wave/voice ミックスは単独で飽和しない**（4ch×15×15×32 = 28 800 < i16 max）ため、`mix()` は正確な
     pre-clamp 値を返し、HyperVoice 加算後に一度だけ clamp する（既存 `mix` の契約・テストは無改修）。
--   **今回のスコープ外（後続/未検証）**:
+-   **Milestone 11 追補**:
+    -   **16bit 直接出力パス**: Sacred Tech Scroll の Direct Access 記述に従い、0x64/0x65 を signed little-endian
+        左出力、0x66/0x67 を signed little-endian 右出力として保持し、`hypervoice_output` が 8bit ラッチより優先して
+        stereo mix へ加算する。mono では 0x64–0x67 書き込みも破棄。APU単体/Bus/Color統合テストで固定。
+    -   **0x9E speaker main volume**: WSdev `Sound` の `Sound Speaker Main Volume` 記述に従い、
+        全モデルで low 2bit を保持する。内蔵スピーカー経路への倍率適用は、0=mute の仮実装で既存ソフトが
+        無音化したため保留。STS の `LCD_VOLUME` は port 0x1A のLCDアイコン状態であり、port 0x9E とは別物。
+        正確なアナログ曲線は実機/録音比較待ち。
+    -   **AudioAccuracy.md**: PCM-heavy fixture候補と比較手順を `docs/dev/AudioAccuracy.md` に分離。
+-   **残る未検証項目**:
     -   **データポートの不確定性**: WSdev は 0x69（8bit 入力、Sound DMA ターゲット）、Mednafen は
         0x95（"Pick a port, any port?!" と自認する当て推量）。本実装は WSdev 準拠の 0x69 を採用。
-    -   **16bit 直接出力パス**（0x64–0x67 への signed 16bit 書き込み）は未実装（8bit 変換パスのみ）。
-    -   **Sound DMA からの供給**: SDMA 転送エンジン自体が未実装（レジスタ shadow のみ）のため、
-        HyperVoice へのデータは現状 CPU 直書きのみ（WSdev も手動書き込みを許容）。
+    -   **Sound DMA からの供給**: SDMA 転送エンジンは実装済みだが、実機の bus-stall / sample cadence は
+        public ROM または reference capture で未検証。
     -   **サンプルレート分周**（WSdev 記載の 24k–2kHz 分周）は Mednafen 同様モデル化せず、出力サンプル毎に
         現ラッチ値を連続出力。相対音量（`MIX_SCALE` 共用）も実機/テストROM 未検証の想定。
 
