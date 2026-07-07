@@ -6,7 +6,7 @@
 // `key-captured`. Controller capture is polled on the Rust side while
 // `rebind-pad` is armed.
 
-import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Button, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 export struct BindingRow {
     label: string,
@@ -14,14 +14,59 @@ export struct BindingRow {
     pad: string,
 }
 
+component SectionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 44px;
+    background: root.selected ? #e8e8e8 : #00000000;
+
+    Text {
+        x: 16px;
+        width: parent.width - 32px;
+        height: parent.height;
+        text: root.text;
+        font-size: 14px;
+        vertical-alignment: center;
+        color: #202020;
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component BiosCheckBox inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback clicked();
+
+    height: 30px;
+
+    CheckBox {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        checked: root.checked;
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 export component SettingsWindow inherits Window {
     // 0 = disabled/direct boot, 1 = WonderSwan, 2 = WonderSwan Color, 3 = SwanCrystal.
     in property <int> bios-rom-mode;
     in property <[BindingRow]> rows;
-    // Non-empty while waiting for a key/button, e.g. "Press a key for A…".
+    // Non-empty while waiting for a key/button, e.g. "Press a key for A...".
     in property <string> listening-hint;
 
+    out property <int> selected-section: 0;
+
     callback set-bios-rom-mode(int);
+    callback open-rom-directory();
     callback rebind-key(int);
     callback rebind-pad(int);
     // Fired for every key press while the window has focus; Rust ignores it
@@ -30,9 +75,12 @@ export component SettingsWindow inherits Window {
     callback reset-defaults();
     callback close-settings();
 
-    title: "Swanium — Settings";
-    preferred-width: 480px;
-    preferred-height: 620px;
+    title: "Swanium - Settings";
+    min-width: 640px;
+    max-width: 820px;
+    preferred-width: 760px;
+    min-height: 520px;
+    preferred-height: 640px;
     forward-focus: scope;
 
     scope := FocusScope {
@@ -41,82 +89,177 @@ export component SettingsWindow inherits Window {
             accept
         }
 
-        VerticalBox {
-            Text {
-                text: "BIOS ROM";
-                font-size: 16px;
-                font-weight: 700;
-            }
-            VerticalBox {
-                Button {
-                    text: root.bios-rom-mode == 0
-                        ? "✓ Do not use (current WonderSwan Color direct boot)"
-                        : "Do not use (current WonderSwan Color direct boot)";
-                    clicked => { root.set-bios-rom-mode(0); }
-                }
-                Button {
-                    text: root.bios-rom-mode == 1 ? "✓ WonderSwan" : "WonderSwan";
-                    clicked => { root.set-bios-rom-mode(1); }
-                }
-                Button {
-                    text: root.bios-rom-mode == 2 ? "✓ WonderSwan Color" : "WonderSwan Color";
-                    clicked => { root.set-bios-rom-mode(2); }
-                }
-                Button {
-                    text: root.bios-rom-mode == 3 ? "✓ SwanCrystal" : "SwanCrystal";
-                    clicked => { root.set-bios-rom-mode(3); }
-                }
-            }
-            Text {
-                text: "Input bindings";
-                font-size: 16px;
-                font-weight: 700;
-            }
-            HorizontalBox {
-                Text { text: "Button"; width: 130px; font-weight: 700; }
-                Text { text: "Keyboard"; horizontal-stretch: 1; font-weight: 700; }
-                Text { text: "Controller"; horizontal-stretch: 1; font-weight: 700; }
-            }
-            ScrollView {
-                vertical-stretch: 1;
-                VerticalBox {
-                    alignment: start;
-                    for row[i] in root.rows: HorizontalBox {
+        HorizontalLayout {
+            spacing: 0px;
+
+            Rectangle {
+                width: 210px;
+                background: #d4d4d4;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Rectangle {
+                        height: 68px;
+                        background: #d4d4d4;
                         Text {
-                            text: row.label;
-                            width: 130px;
+                            x: 16px;
+                            width: parent.width - 32px;
+                            height: parent.height;
+                            text: "Swanium Settings";
+                            font-size: 20px;
                             vertical-alignment: center;
+                            color: #111111;
                         }
-                        Button {
-                            text: row.key;
-                            horizontal-stretch: 1;
-                            clicked => {
-                                scope.focus();
-                                root.rebind-key(i);
-                            }
-                        }
-                        Button {
-                            text: row.pad;
-                            horizontal-stretch: 1;
-                            clicked => { root.rebind-pad(i); }
-                        }
+                    }
+
+                    SectionButton {
+                        text: "ROM";
+                        selected: root.selected-section == 0;
+                        clicked => { root.selected-section = 0; }
+                    }
+                    SectionButton {
+                        text: "Input";
+                        selected: root.selected-section == 1;
+                        clicked => { root.selected-section = 1; }
                     }
                 }
             }
-            Text {
-                text: root.listening-hint;
-                color: #d0a020;
-                height: 20px;
+
+            Rectangle {
+                width: 1px;
+                background: #c0c0c0;
             }
-            HorizontalBox {
-                alignment: end;
-                Button {
-                    text: "Reset Input Defaults";
-                    clicked => { root.reset-defaults(); }
-                }
-                Button {
-                    text: "Close";
-                    clicked => { root.close-settings(); }
+
+            Rectangle {
+                background: #f7f7f7;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 12px;
+
+                    if root.selected-section == 0: VerticalBox {
+                        spacing: 16px;
+                        vertical-stretch: 1;
+
+                        Text {
+                            text: "ROM";
+                            font-size: 24px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "BIOS ROM";
+                            font-size: 16px;
+                            font-weight: 700;
+                        }
+                        VerticalBox {
+                            BiosCheckBox {
+                                text: "Direct boot without BIOS";
+                                checked: root.bios-rom-mode == 0;
+                                clicked => { root.set-bios-rom-mode(0); }
+                            }
+                            BiosCheckBox {
+                                text: "WonderSwan";
+                                checked: root.bios-rom-mode == 1;
+                                clicked => { root.set-bios-rom-mode(1); }
+                            }
+                            BiosCheckBox {
+                                text: "WonderSwan Color";
+                                checked: root.bios-rom-mode == 2;
+                                clicked => { root.set-bios-rom-mode(2); }
+                            }
+                            BiosCheckBox {
+                                text: "SwanCrystal";
+                                checked: root.bios-rom-mode == 3;
+                                clicked => { root.set-bios-rom-mode(3); }
+                            }
+                        }
+
+                        HorizontalBox {
+                            alignment: start;
+                            Button {
+                                text: "Open ROM Directory";
+                                clicked => { root.open-rom-directory(); }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+
+                    if root.selected-section == 1: VerticalBox {
+                        spacing: 12px;
+                        vertical-stretch: 1;
+
+                        Text {
+                            text: "Input";
+                            font-size: 24px;
+                            font-weight: 700;
+                        }
+                        HorizontalBox {
+                            spacing: 12px;
+                            Text { text: "Button"; width: 120px; font-weight: 700; }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                Text { text: "Keyboard"; font-weight: 700; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                Text { text: "Controller"; font-weight: 700; }
+                            }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalBox {
+                                alignment: start;
+                                for row[i] in root.rows: HorizontalBox {
+                                    height: 44px;
+                                    spacing: 12px;
+                                    Text {
+                                        text: row.label;
+                                        width: 120px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        Button {
+                                            text: row.key;
+                                            width: parent.width;
+                                            height: 30px;
+                                            clicked => {
+                                                scope.focus();
+                                                root.rebind-key(i);
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        Button {
+                                            text: row.pad;
+                                            width: parent.width;
+                                            height: 30px;
+                                            clicked => { root.rebind-pad(i); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.listening-hint;
+                            color: #d0a020;
+                            height: 20px;
+                        }
+                    }
+
+                    if root.selected-section == 1: HorizontalBox {
+                        alignment: end;
+                        Button {
+                            text: "Reset Input Defaults";
+                            clicked => { root.reset-defaults(); }
+                        }
+                    }
                 }
             }
         }

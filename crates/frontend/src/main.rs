@@ -602,7 +602,24 @@ fn open_settings(app: &App, main: &MainWindow) {
                 w.set_bios_rom_mode(bios_rom_index(kind));
             }
             if let Some(window) = main.upgrade() {
-                reset_emulation(&app, &window);
+                if app.rom_path.borrow().is_some() {
+                    window.set_status_text("BIOS ROM setting updated".into());
+                } else {
+                    app.bios_settings_start_frames.set(0);
+                    app.reset_request.set(true);
+                }
+            }
+        }
+    });
+    settings.on_open_rom_directory({
+        let weak = settings.as_weak();
+        move || match open_rom_directory() {
+            Ok(path) => tracing::info!(path = %path.display(), "opened ROM directory"),
+            Err(e) => {
+                tracing::warn!("could not open ROM directory: {e}");
+                if let Some(w) = weak.upgrade() {
+                    w.set_listening_hint(format!("Could not open ROM directory: {e}").into());
+                }
             }
         }
     });
@@ -651,6 +668,7 @@ fn open_settings(app: &App, main: &MainWindow) {
 
     settings.set_bios_rom_mode(bios_rom_index(app.config.borrow().bios_rom));
     settings.set_rows(binding_rows(&app.config.borrow(), &app.keymap.borrow()));
+    settings.window().set_size(LogicalSize::new(760.0, 640.0));
     if let Err(e) = settings.show() {
         tracing::error!("could not show settings window: {e}");
         return;
@@ -933,7 +951,13 @@ fn cpu_context(system: &System) -> String {
 }
 
 fn reset_emulation(app: &App, window: &MainWindow) {
-    if let Some(path) = app.rom_path.borrow().clone() {
+    if app.bios_settings_start_frames.get() > 0 {
+        start_bios_only(app, window);
+        return;
+    }
+
+    let current_rom = app.rom_path.borrow().clone();
+    if let Some(path) = current_rom {
         load_into(&path, app, window);
         if app.paused.get() {
             window.set_status_text(format!("{} — paused", app.rom_label.borrow()).into());
@@ -941,6 +965,10 @@ fn reset_emulation(app: &App, window: &MainWindow) {
         return;
     }
 
+    start_bios_only(app, window);
+}
+
+fn start_bios_only(app: &App, window: &MainWindow) {
     let bios_kind = app.config.borrow().bios_rom;
     let Some((bios_path, boot_rom)) = load_bios_rom(bios_kind) else {
         *app.system.borrow_mut() = None;
@@ -994,6 +1022,23 @@ fn pick_rom(start_dir: Option<&Path>) -> Option<PathBuf> {
     dialog.pick_file()
 }
 
+/// Open the fixed BIOS ROM directory in the platform file manager.
+fn open_rom_directory() -> std::io::Result<PathBuf> {
+    let path = Config::bios_dir().map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(&path)?;
+
+    #[cfg(target_os = "macos")]
+    drop(std::process::Command::new("open").arg(&path).spawn()?);
+
+    #[cfg(target_os = "windows")]
+    drop(std::process::Command::new("explorer").arg(&path).spawn()?);
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    drop(std::process::Command::new("xdg-open").arg(&path).spawn()?);
+
+    Ok(path)
+}
+
 /// Read `path`, build a fresh [`System`] from it, and update the window.
 ///
 /// A read failure is non-fatal: it is logged and the current machine (if any)
@@ -1019,7 +1064,7 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
             {
                 sys.set_model(HardwareModel::Color);
             }
-            if let Some(model) = forced_model_from_bios(app.config.borrow().bios_rom) {
+            if let Some(model) = forced_model_from_bios(bios_kind) {
                 sys.set_model(model);
             }
             let kind = if sys.model().is_color() {
