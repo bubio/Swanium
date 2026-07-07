@@ -3,8 +3,9 @@
 //! These tests are marked `#[ignore]` by default because the ROM files are not
 //! committed to the repository (licensing constraints).  To run them:
 //!
-//! 1. Download the ROM(s) from the sources listed in `tests/README.md`.
-//! 2. Set the relevant environment variable to the path of the ROM file.
+//! 1. Build/download the ROM(s) from the sources listed in `tests/README.md`.
+//! 2. Place them at the shared local paths below, or set the relevant
+//!    environment variable to override the path.
 //! 3. Run with the `--include-ignored` flag:
 //!
 //! ```sh
@@ -20,7 +21,7 @@ use swanium_core::system::System;
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_WS_CPU_TEST_ROM: &str = "tests/fixtures/cpu/public/WSCpuTest.wsc";
+const DEFAULT_WS_CPU_TEST_ROM: &str = "/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc";
 const WSC_CPU_TEST_MAX_FRAMES: usize = 75 * 180;
 const WSC_CPU_TEST_BACKGROUND_MAP: u32 = 0x1000;
 const WSC_CPU_TEST_TILEMAP_WIDTH: usize = 32;
@@ -28,7 +29,7 @@ const WSC_CPU_TEST_TILEMAP_HEIGHT: usize = 32;
 const WSC_CPU_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WSC_CPU_TEST_IS_TESTING_ADDR: u32 = 0x0136;
 const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
-    "tests/fixtures/cpu/public/ws-test-suite/mono/cpu/80186_quirks.ws";
+    "/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws";
 const WS_TEST_SUITE_MAX_FRAMES: usize = 120;
 const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
 const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
@@ -128,8 +129,9 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
 /// # ROM output format
 ///
 /// Build with `nasm -f bin -o WSCpuTest.wsc WSCpuTest.asm` from the upstream
-/// v0.7.1 source, then set `WS_CPU_TEST_ROM` to the `.wsc` path or place it at
-/// `tests/fixtures/cpu/public/WSCpuTest.wsc`.
+/// v0.7.1 source, then place it at
+/// `/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc` or set
+/// `WS_CPU_TEST_ROM` to the `.wsc` path.
 ///
 /// The upstream README documents the externally visible protocol: the ROM
 /// writes `Ok!` after successful tests and prints `Failed!` plus expected/tested
@@ -141,7 +143,7 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
 /// Run with: `WS_CPU_TEST_ROM=/path/to/WSCpuTest.wsc cargo test -p swanium-core
 ///   --test public_roms -- --include-ignored wscputest`
 #[test]
-#[ignore = "requires WSCpuTest.wsc; set WS_CPU_TEST_ROM or place it under tests/fixtures/cpu/public"]
+#[ignore = "requires WSCpuTest.wsc; default path is /Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc"]
 fn wscputest_all_tests_pass() {
     let path = rom_path_from_env_or_default("WS_CPU_TEST_ROM", DEFAULT_WS_CPU_TEST_ROM);
     let rom = read_rom(&path, "WS_CPU_TEST_ROM");
@@ -171,13 +173,14 @@ fn wscputest_all_tests_pass() {
 /// has three checks, all at offset 0, so rows 0–2 at tile-map x=27 must be tile
 /// 5 and must not be tile 6.
 ///
-/// Set `WS_TEST_SUITE_ROM` to that ROM path, or place it at
-/// `tests/fixtures/cpu/public/ws-test-suite/mono/cpu/80186_quirks.ws`.
+/// Place it at
+/// `/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws`
+/// or set `WS_TEST_SUITE_ROM` to that ROM path.
 ///
 /// Run with: `WS_TEST_SUITE_ROM=/path/to/test.ws cargo test -p swanium-core
 ///   --test public_roms -- --include-ignored ws_test_suite`
 #[test]
-#[ignore = "requires a ws-test-suite ROM; set WS_TEST_SUITE_ROM=/path/to/test.ws"]
+#[ignore = "requires ws-test-suite mono/cpu/80186_quirks.ws; default path is /Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws"]
 fn ws_test_suite_rom_passes() {
     let path =
         rom_path_from_env_or_default("WS_TEST_SUITE_ROM", DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM);
