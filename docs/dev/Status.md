@@ -8,7 +8,7 @@ Emulation-focused remaining work is tracked separately in
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 599 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 605 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -62,7 +62,7 @@ injects A to start the default `Test All` menu item, and decodes the background 
 5/6 in `screen_1` at WRAM `0x1800`. Unknown ws-test-suite ROMs are rejected instead of using
 the former placeholder HLT + `WRAM[0x0000] == 0` convention.
 
-### PPU — Phase 4 (`ppu/`)
+### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
 sprite layer (OAM 4-byte entries, priority, X/Y flip), window mask (SCR2 inside/outside +
 sprite window). Palette resolution abstracted behind the `PaletteResolver` trait with
@@ -72,6 +72,16 @@ per pixel with output unchanged (verified by framebuffer hash): sprites are deco
 Y-filtered once per line (`collect_line_sprites`), and each background layer is resolved once per
 line (`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel
 span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
+The scanline renderer now enforces the hardware's 32-sprites-per-scanline limit in OAM order:
+the first 32 sprites whose 8-pixel-tall box covers the line are considered, and later sprites on
+that line are ignored even if the earlier entries are transparent at the sampled pixel. Regression
+tests cover overflow ordering and a 33rd priority-1 sprite that would otherwise draw in front of
+SCR2.
+
+Milestone 10's raster audit keeps the PPU at scanline granularity for now. `System::run_frame_traced`
+is covered for one trace row per visible line and CPU-written scroll state before line rendering;
+frame-driver tests cover line-compare IRQs, HBlank timer coverage across visible+VBlank scanlines,
+and VBlank IRQ timing. No current public fixture or known title justifies a dot-level rewrite yet.
 
 ### APU — Phase 5 (`apu/`) + Phase 8f HyperVoice
 Four 32-sample × 4-bit wave-table channels, per-channel L/R nibble volume, stereo mix;
@@ -241,6 +251,10 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   colour-bit path — with mono/colour-bit-clear falling back to the shade path and dropping HyperVoice) and
   two `crates/core/tests/system_frame.rs` cases (a colour tile reaching the framebuffer through
   `System::run_frame`, and the RTC free-running one second across frames from the frame driver alone).
+- **Milestone 10 Color PPU validation (done at synthetic-test level)**: implementation tests now pin
+  color-zero transparency, backdrop palette indexing, 4bpp planar byte order, packed high/low nibble
+  order, background tile-map bank selection, and sprite attribute bit 13 as priority rather than a
+  tile-bank selector. Hardware/public-ROM validation remains tracked in `EmulationBacklog.md`.
 
 ## Tooling — profiling & benchmarks
 

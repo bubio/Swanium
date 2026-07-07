@@ -39,21 +39,25 @@ Expected scope:
 
 ## P1 — accuracy and hardware coverage
 
-### PPU dot-level and sprite limits
+### PPU dot-level timing
 
 Rendering is scanline-driven. This is sufficient for many games, but it cannot
-model mid-scanline register effects exactly and it does not yet enforce the
-hardware's 32-sprites-per-scanline limit.
+model mid-scanline register effects exactly.
+
+Milestone 10 decided **not to move to a dot-level PPU core yet**. The current
+evidence only requires scanline-boundary behavior: `System::run_frame_traced`
+now has regression coverage for trace coverage, CPU-written scroll state before
+line rendering, line-compare IRQs, HBlank timer frame coverage, and VBlank IRQ
+timing. The hardware's 32-sprites-per-scanline limit is implemented in the
+scanline renderer.
 
 Expected scope:
 
-- Decide whether the next step is full dot-level PPU timing or a narrower
-  scanline renderer enhancement.
-- Enforce the 32 visible sprites per scanline limit in OAM order.
 - Preserve the existing scanline-optimized renderer behavior for games that do
   not need dot-level effects.
-- Add regression tests for sprite overflow ordering and raster register changes
-  around HBlank/line-compare timing.
+- Revisit dot-level timing only when a public test ROM, hardware capture, or
+  known title demonstrates a mid-scanline register effect that the current
+  renderer cannot represent.
 
 ### CPU and bus timing decomposition
 
@@ -89,13 +93,16 @@ Expected scope:
 ### Color PPU edge cases
 
 Color display works for real WSC ROMs, including palette RAM and 2bpp/4bpp tile
-modes. Several low-level rules are still documented assumptions.
+modes. Milestone 10 added synthetic regression coverage for the Color PPU
+assumptions currently modeled in the core: color-zero transparency, backdrop
+palette indexing, 4bpp planar byte order, 4bpp packed nibble order, background
+tile-bank selection, and the sprite bit-13 priority meaning.
 
 Expected scope:
 
-- Verify color transparency rules, backdrop palette indexing, and 4bpp
-  planar/packed byte order with test ROMs or reference captures.
-- Validate tile bank selection and sprite attribute interpretation in Color mode.
+- Validate these Color PPU rules against public test ROMs, hardware captures, or
+  multiple reference emulators; the current checks are implementation-level
+  tests rather than hardware proof.
 - Keep mono compatibility tests paired with Color tests when changing shared PPU
   logic.
 

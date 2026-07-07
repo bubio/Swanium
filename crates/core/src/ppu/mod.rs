@@ -85,6 +85,8 @@ const SPRITE_PALETTE_OFFSET: u8 = 8;
 const SPRITE_SIZE: usize = 8;
 /// The sprite attribute table holds up to 128 four-byte entries.
 const SPRITE_TABLE_LEN: usize = 128;
+/// Hardware only evaluates the first 32 sprites that overlap a scanline.
+const SPRITES_PER_SCANLINE: usize = 32;
 
 /// Decoded view of the display-control register (I/O port 0x00).
 ///
@@ -198,7 +200,8 @@ impl Ppu {
         let row = y * SCREEN_WIDTH;
 
         // Decode the sprite attribute table once per scanline and keep only the
-        // entries that cover this line (preserving table order, i.e. priority).
+        // entries that cover this line (preserving table order, i.e. priority),
+        // up to the hardware's 32-sprites-per-scanline limit.
         // The per-pixel sprite sampler then walks this short list instead of
         // re-decoding all 128 entries for every pixel — the dominant PPU cost
         // (see docs/dev/Profiling.md). Zero-allocation: a stack-resident array
@@ -657,6 +660,9 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
 
 /// Decode the sprite attribute table into `out`, keeping (in table order,
 /// i.e. priority order) only the sprites whose 8-pixel-tall box covers `line`.
+/// Collection stops after 32 matching sprites, matching the hardware's
+/// per-scanline overflow behavior: later OAM entries on that line are ignored
+/// even if earlier entries are transparent at a given pixel.
 /// Returns how many entries were written.
 ///
 /// Called once per scanline by [`Ppu::render_scanline`] so the per-pixel
@@ -681,6 +687,9 @@ fn collect_line_sprites(
         if ly >= sy && ly < sy + SPRITE_SIZE {
             out[n] = sprite;
             n += 1;
+            if n == SPRITES_PER_SCANLINE {
+                break;
+            }
         }
     }
     n

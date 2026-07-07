@@ -103,6 +103,13 @@ Definition of done:
 Purpose: close visible rendering gaps that are likely to affect games before
 attempting a full dot-level rewrite.
 
+Status: complete at scanline-renderer scope. The 32-sprites-per-scanline limit
+is implemented and tested; scanline-boundary raster behavior is covered by
+`System::run_frame_traced` / frame-driver regressions; Color PPU assumptions are
+pinned by synthetic tests. A dot-level PPU rewrite remains deferred until a
+specific public test, hardware capture, or known title requires mid-scanline
+effects.
+
 ### 10a. Sprite overflow behavior
 
 Scope:

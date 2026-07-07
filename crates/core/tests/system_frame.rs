@@ -9,7 +9,9 @@
 use swanium_core::bus::IrqSource;
 use swanium_core::cpu::MemoryBus;
 use swanium_core::keypad::KeyState;
-use swanium_core::system::{System, CYCLES_PER_FRAME, MASTER_CLOCK_HZ, SCANLINES_PER_FRAME};
+use swanium_core::system::{
+    System, CYCLES_PER_FRAME, MASTER_CLOCK_HZ, SCANLINES_PER_FRAME, VISIBLE_SCANLINES,
+};
 use swanium_core::HardwareModel;
 
 /// A 64 KiB ROM whose reset entry (`0xFFFF0`, the last 16 bytes) is `HLT`.
@@ -17,6 +19,14 @@ fn halting_rom() -> Vec<u8> {
     let mut rom = vec![0u8; 0x10000];
     let len = rom.len();
     rom[len - 16] = 0xF4; // HLT
+    rom
+}
+
+fn rom_with_reset_code(code: &[u8]) -> Vec<u8> {
+    assert!(code.len() <= 16);
+    let mut rom = vec![0u8; 0x10000];
+    let start = rom.len() - 16;
+    rom[start..start + code.len()].copy_from_slice(code);
     rom
 }
 
@@ -102,6 +112,55 @@ fn hblank_timer_counts_visible_and_vblank_scanlines_per_frame() {
         system.bus_mut().pending_irq(),
         Some(IrqSource::HBlankTimer as u8)
     );
+}
+
+#[test]
+fn traced_frame_records_each_visible_scanline() {
+    let mut system = System::new(halting_rom());
+    let trace = system.run_frame_traced(KeyState::NONE);
+
+    assert_eq!(trace.len(), VISIBLE_SCANLINES as usize);
+    assert_eq!(trace.first().map(|t| t.line), Some(0));
+    assert_eq!(
+        trace.last().map(|t| t.line),
+        Some((VISIBLE_SCANLINES - 1) as u8)
+    );
+}
+
+#[test]
+fn traced_frame_observes_scroll_written_before_scanline_render() {
+    // MOV AL,7 ; OUT 0x11,AL ; HLT. The CPU runs before line 0 is traced and
+    // rendered, so this fixes the current scanline-boundary ordering.
+    let mut system = System::new(rom_with_reset_code(&[0xB0, 0x07, 0xE6, 0x11, 0xF4]));
+    let trace = system.run_frame_traced(KeyState::NONE);
+
+    assert_eq!(trace[0].scr1_scroll_y, 7);
+}
+
+#[test]
+fn line_compare_irq_is_raised_during_frame_drive() {
+    let mut system = System::new(halting_rom());
+    {
+        let bus = system.bus_mut();
+        bus.write_io(0xB2, 0xFF); // enable all IRQ sources
+        bus.write_io(0x03, 12); // LCD line compare
+    }
+
+    system.run_frame(KeyState::NONE);
+
+    let cause = system.bus_mut().read_io(0xB4);
+    assert_ne!(cause & (1 << IrqSource::ScanlineMatch as u8), 0);
+}
+
+#[test]
+fn vblank_irq_is_raised_after_visible_scanlines() {
+    let mut system = System::new(halting_rom());
+    system.bus_mut().write_io(0xB2, 0xFF); // enable all IRQ sources
+
+    system.run_frame(KeyState::NONE);
+
+    let cause = system.bus_mut().read_io(0xB4);
+    assert_ne!(cause & (1 << IrqSource::VBlank as u8), 0);
 }
 
 #[test]

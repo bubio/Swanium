@@ -638,6 +638,56 @@ fn sprite_priority_0_drawn_behind_scr2() {
     assert_eq!(ppu.framebuffer()[0], grey(3));
 }
 
+#[test]
+fn sprite_overflow_ignores_33rd_sprite_on_scanline() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x04; // SPR enable
+    ports[0x04] = 0x01; // OAM base 0x200
+    ports[0x05] = 0;
+    ports[0x06] = 33;
+    set_identity_sprite_palette(&mut ports);
+
+    // First 32 line-overlapping sprites count toward the hardware overflow
+    // limit even though their palette makes color zero transparent.
+    for idx in 0..32 {
+        write_sprite(&mut wram, 0x200, idx, 4 << 9, 0, 0);
+    }
+    // Sprite 33 would draw at x=0 if it were considered.
+    write_sprite(&mut wram, 0x200, 32, 1, 0, 0);
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0);
+
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
+}
+
+#[test]
+fn sprite_overflow_applies_before_priority_sampling() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x06; // SCR2 + SPR
+    ports[0x04] = 0x01; // OAM base 0x200
+    ports[0x05] = 0;
+    ports[0x06] = 33;
+    set_identity_palette(&mut ports);
+    set_identity_sprite_palette(&mut ports);
+
+    write_map_entry(&mut wram, 0, 0, 0, 5);
+    write_tile_row(&mut wram, 5, 0, 0b1000_0000, 0b1000_0000); // SCR2 pixel 3
+
+    for idx in 0..32 {
+        write_sprite(&mut wram, 0x200, idx, 4 << 9, 0, 0);
+    }
+    // Priority-1/front sprite would beat SCR2 if overflow did not discard it.
+    write_sprite(&mut wram, 0x200, 32, 1 | (1 << 13), 0, 0);
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0);
+
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(3));
+}
+
 // ── Window masking (4e) ───────────────────────────────────────────────────────
 
 #[test]
@@ -1008,4 +1058,28 @@ fn color_4bpp_renders_pixel_from_second_tile_bank_area() {
     let resolver = ColorPaletteResolver::new(&wram);
     ppu.render_scanline(0, &wram, &ports, &resolver);
     assert_eq!(ppu.framebuffer()[0], 0x0DEF);
+}
+
+#[test]
+fn color_sprite_attribute_bit_13_is_priority_not_tile_bank() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x04; // SPR enable
+    ports[0x04] = 0x01; // OAM base 0x200
+    ports[0x05] = 0;
+    ports[0x06] = 1;
+    ports[0x60] = 0x80; // color 2bpp: background tile maps are banked
+
+    // Attribute bit 13 is sprite priority. If it were incorrectly treated like
+    // a background bank bit, this would sample tile 513 instead of tile 1.
+    write_sprite(&mut wram, 0x200, 0, 1 | (1 << 13), 0, 0);
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0); // x0 = color 1
+    write_tile_row(&mut wram, 513, 0, 0, 0b1000_0000); // x0 = color 2
+    write_palette_color(&mut wram, 8, 1, 0x0111);
+    write_palette_color(&mut wram, 8, 2, 0x0222);
+
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0111);
 }
