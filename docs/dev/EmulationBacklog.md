@@ -7,8 +7,8 @@ application milestone. GUI polish, packaging, and frontend convenience features
 belong in `Status.md` or separate UI issues; this file is only for emulation
 correctness, compatibility, determinism, and hardware coverage.
 
-Execution order and milestone definitions are tracked in
-`docs/dev/EmulationPlan.md`.
+Current implementation status is summarized in `docs/dev/Status.md`. Execution
+order and milestone definitions are tracked in `docs/dev/EmulationPlan.md`.
 
 ## Priority guide
 
@@ -156,12 +156,10 @@ Expected scope:
 
 ## Suggested next milestone
 
-The next emulator-focused milestone should be:
+Milestone 13 is the current emulator-focused milestone. Keep the next work tied
+to evidence:
 
-1. Implement Sound DMA feeding into voice PCM.
-2. Replace the `ws-test-suite` placeholder with a real pass/fail decoder.
-3. Add a small compatibility matrix covering CPU, SDMA audio, mono PPU, Color
-   PPU, RTC, and mapper saves.
-
-That milestone gives the project a stronger compatibility signal before taking
-on larger timing rewrites.
+1. Use `docs/dev/V30MZ-Timing.md` to audit CPU/bus timing gaps.
+2. Expand public-ROM coverage when a source-confirmed result protocol is known.
+3. Revisit dot-level PPU, exact SDMA cadence, or audio analog behaviour only when
+   tests, hardware captures, or known titles show a software-visible issue.

@@ -7,6 +7,19 @@ goal is not to keep adding features blindly; it is to raise confidence that the
 emulated hardware is correct enough to run a broad WonderSwan / WonderSwan Color
 library and to keep regressions measurable.
 
+For the quickest progress check, see `docs/dev/Status.md`. For the full document
+map, see `docs/dev/README.md`.
+
+## Progress at a glance
+
+| Milestone | Status | Summary |
+|---|---|---|
+| 9. Compatibility baseline | Complete | SDMA implemented/tested, one real `ws-test-suite` oracle added, compatibility matrix created. |
+| 10. PPU correctness pass | Complete at scanline-renderer scope | 10a sprite overflow, 10b raster audit, and 10c Color PPU synthetic validation are done. Dot-level rendering remains deferred until evidence requires it. |
+| 11. Audio and WSC extension pass | Complete at implementation/test-triage scope | 16-bit HyperVoice direct output and `0x9E` readback are implemented/tested; analog volume curve remains validation work. |
+| 12. Cartridge, RTC, and persistence pass | Complete | SRAM/EEPROM persistence, RTC protocol tests, mapper/save coverage, and internal EEPROM decision are recorded. |
+| 13. Timing precision phase | Current | Audit timing precision only where public tests, hardware captures, or known titles show a need. |
+
 ## Guiding rules
 
 - Keep `swanium-core` deterministic and platform-independent.
@@ -295,9 +308,12 @@ Before calling the emulator side "v1-compatible enough", require:
 
 ## Recommended immediate sequence
 
-1. Milestone 9a: implement and test SDMA.
-2. Milestone 9b: make `ws-test-suite` pass/fail decoding real.
-3. Milestone 9c: create the compatibility matrix while the test evidence is
-   fresh.
-4. Milestone 10a: enforce sprite-per-line overflow.
-5. Reassess PPU dot-level timing after the matrix shows real failures.
+1. Milestone 13: audit timing-sensitive failures or suspected timing gaps before
+   decomposing CPU/bus timing.
+2. Expand public-ROM coverage in `crates/core/tests/public_roms.rs` only after
+   confirming each ROM's pass/fail protocol from source.
+3. Add compatibility-matrix rows whenever a new public ROM, synthetic hardware
+   test, or manual smoke check becomes meaningful evidence.
+4. Revisit dot-level PPU or more exact SDMA/audio timing only when a public test,
+   hardware capture, reference-emulator comparison, or known title demonstrates a
+   software-visible gap.

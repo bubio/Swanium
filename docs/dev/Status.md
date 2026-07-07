@@ -1,10 +1,21 @@
 # Implementation status
 
 Last updated: 2026-07-07. Update this file (not AGENTS.md) when implementation progress changes.
-Emulation-focused remaining work is tracked separately in
-`docs/dev/EmulationBacklog.md`; execution order is tracked in
-`docs/dev/EmulationPlan.md`. Compatibility evidence is tracked in
-`docs/dev/CompatibilityMatrix.md`.
+
+This is the source of truth for current progress. For the broader document map,
+start with `docs/dev/README.md`.
+
+## Progress summary
+
+| Track | Current state | Notes |
+|---|---|---|
+| Architecture / workspace | Complete | Stable Rust workspace with core/frontend/audio/video/input/common crates. |
+| Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
+| Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
+| Current emulator focus | Milestone 13 | Timing precision: CPU/bus timing decomposition only where evidence shows software-visible need. |
+| Remaining emulator risks | Tracked in `docs/dev/EmulationBacklog.md` | Main risks are broader public ROM coverage, dot-level PPU only if proven needed, exact audio/SDMA timing validation, and CPU/bus timing precision. |
+| Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
+| Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
