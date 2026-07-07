@@ -620,6 +620,117 @@ fn gdma_leaves_destination_unchanged_without_enable_bit() {
     assert_eq!(bus.wram[0x10], 0xAB);
 }
 
+// ── SDMA ─────────────────────────────────────────────────────────────────────
+
+fn color_bus_with_sdma_voice() -> Bus {
+    let mut bus = color_bus();
+    bus.write_io(0x90, 0x20); // channel 2 voice mode
+    bus.write_io(0x94, 0x05); // full left + full right voice routing
+    bus
+}
+
+fn arm_sdma(bus: &mut Bus, source: u32, counter: u32, ctrl: u8) {
+    let [src_lo, src_hi] = (source as u16).to_le_bytes();
+    bus.write_io(0x4A, src_lo);
+    bus.write_io(0x4B, src_hi);
+    bus.write_io(0x4C, ((source >> 16) & 0x0F) as u8);
+    let [count_lo, count_hi] = (counter as u16).to_le_bytes();
+    bus.write_io(0x4E, count_lo);
+    bus.write_io(0x4F, count_hi);
+    bus.write_io(0x50, ((counter >> 16) & 0x0F) as u8);
+    bus.write_io(0x52, ctrl);
+}
+
+#[test]
+fn sdma_segment_registers_keep_low_nibble_only() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_io(0x4C, 0xF7);
+    bus.write_io(0x50, 0xE3);
+    assert_eq!(bus.read_io(0x4C), 0x07);
+    assert_eq!(bus.read_io(0x50), 0x03);
+}
+
+#[test]
+fn sdma_ignored_when_disabled() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x03);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x89), 0x00);
+    assert_eq!(bus.read_io(0x4E), 0x01);
+}
+
+#[test]
+fn sdma_ignored_on_mono_hardware() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x90, 0x20);
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x83);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x89), 0x00);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+}
+
+#[test]
+fn sdma_copies_memory_byte_to_voice_latch() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x83);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x89), 0xC8);
+}
+
+#[test]
+fn sdma_voice_transfer_produces_non_silent_samples() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x83);
+    bus.tick_apu(128);
+    assert!(bus.audio_samples().iter().any(|&sample| sample != 0));
+}
+
+#[test]
+fn sdma_terminal_count_clears_enable_and_writes_back_registers() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x83);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
+    assert_eq!(bus.read_io(0x4A), 0x11);
+    assert_eq!(bus.read_io(0x4E), 0x00);
+}
+
+#[test]
+fn sdma_decrement_direction_updates_source_backwards() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0xC3);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x4A), 0x0F);
+}
+
+#[test]
+fn sdma_repeat_reloads_source_and_counter_without_clearing_enable() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_u8(0x0010, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x8B);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+    assert_eq!(bus.read_io(0x4A), 0x10);
+    assert_eq!(bus.read_io(0x4E), 0x01);
+}
+
+#[test]
+fn sdma_hold_outputs_zero_without_advancing_counter() {
+    let mut bus = color_bus_with_sdma_voice();
+    bus.write_io(0x89, 0xC8);
+    arm_sdma(&mut bus, 0x0010, 1, 0x87);
+    bus.tick_apu(128);
+    assert_eq!(bus.read_io(0x89), 0x00);
+    assert_eq!(bus.read_io(0x4E), 0x01);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+}
+
 #[test]
 fn gdma_clears_enable_bit_after_transfer() {
     let rom = vec![0xFFu8; 0x10000];

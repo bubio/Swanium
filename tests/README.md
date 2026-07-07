@@ -54,6 +54,29 @@ WS_CPU_TEST_ROM=/path/to/WSCpuTest.wsc \
   cargo test -p swanium-core --test public_roms -- --include-ignored wscputest
 ```
 
+### ws-test-suite の実行例
+
+asiekierka/ws-test-suite は ROM ごとに出力規約が異なるため、`public_roms.rs` に
+ソース確認済みのデコーダを追加した ROM だけを自動判定対象にする。現在の対象は
+`mono/cpu/80186_quirks.ws`。
+
+上流リポジトリでビルドした ROM は、以下のどちらかで指定する。
+
+```sh
+WS_TEST_SUITE_ROM=/path/to/80186_quirks.ws \
+  cargo test -p swanium-core --test public_roms -- --include-ignored ws_test_suite
+```
+
+または、リポジトリ内の ignored fixture 置き場に次の相対パスで配置する。
+
+```text
+tests/fixtures/cpu/public/ws-test-suite/mono/cpu/80186_quirks.ws
+```
+
+複数の ws-test-suite ROM を使う場合も、上流の `src/...` 構造と同じ相対パスで
+`tests/fixtures/cpu/public/ws-test-suite/` 配下に置き、ROM ごとの合否判定規約を
+テストコードに明記する。
+
 ## 自作テストROMの方針
 
 V30MZアセンブリでテストパターンを記述し、結果を固定アドレスにダンプする。Rust側のテストコードが

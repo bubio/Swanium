@@ -23,6 +23,11 @@ const BOOT_ROM_ALIGNMENT: usize = 0x1000;
 
 /// Sound-control (port 0x90) bit 5: channel 2 acts as the 8-bit PCM voice.
 const SND_CTRL_VOICE: u8 = 0x20;
+const SDMA_ENABLE: u8 = 0x80;
+const SDMA_DECREMENT: u8 = 0x40;
+const SDMA_REPEAT: u8 = 0x08;
+const SDMA_HOLD: u8 = 0x04;
+const SDMA_CYCLES_PER_SAMPLE: u16 = 128;
 
 /// Hardware interrupt request sources (bit positions in INT_CAUSE / INT_ENABLE).
 ///
@@ -81,6 +86,9 @@ pub struct Bus {
     ppu: Ppu,
     /// Audio processing unit (samples waveforms from `wram` + sound registers).
     apu: Apu,
+    /// Sound DMA internal state. Register shadows live in `ports[0x4A..=0x52]`;
+    /// these fields track the currently-running transfer and sample-rate clock.
+    sdma: SdmaState,
     /// Currently-held keys, presented on port 0xB5 when scanned.
     keys: KeyState,
     /// Emulated hardware variant, selecting model-dependent behaviour (palette
@@ -99,6 +107,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            sdma: SdmaState::default(),
             keys: KeyState::NONE,
             model: HardwareModel::Mono,
         };
@@ -117,6 +126,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            sdma: SdmaState::default(),
             keys: KeyState::NONE,
             model: HardwareModel::Mono,
         };
@@ -139,6 +149,7 @@ impl Bus {
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
+            sdma: SdmaState::default(),
             keys: KeyState::NONE,
             model,
         };
@@ -447,8 +458,19 @@ impl Bus {
     /// generating audio samples from the waveform data in WRAM and the sound
     /// registers. Sweep and noise write back into the register file.
     pub fn tick_apu(&mut self, cycles: u32) {
-        self.apu
-            .tick(cycles, &self.wram, &mut self.ports, self.model.is_color());
+        if !self.model.is_color() || self.ports[0x52] & SDMA_ENABLE == 0 {
+            self.sdma.running = false;
+            self.sdma.clock = 0;
+            self.apu
+                .tick(cycles, &self.wram, &mut self.ports, self.model.is_color());
+            return;
+        }
+
+        for _ in 0..cycles {
+            self.tick_sdma_cycle();
+            self.apu
+                .tick(1, &self.wram, &mut self.ports, self.model.is_color());
+        }
     }
 
     /// The interleaved stereo samples (`L, R, …`) generated so far, at
@@ -548,6 +570,130 @@ impl Bus {
         let base = ADDRESS_SPACE_SIZE - len;
         (addr >= base).then(|| boot_rom[(addr - base) as usize])
     }
+
+    fn write_voice_data_latch(&mut self, value: u8) {
+        self.ports[0x89] = value;
+        if self.ports[0x90] & SND_CTRL_VOICE != 0 {
+            self.apu.write_voice(value);
+        }
+    }
+
+    fn sdma_rate(&self) -> u16 {
+        match self.ports[0x52] & 0x03 {
+            0 => 6,
+            1 => 4,
+            2 => 2,
+            _ => 1,
+        }
+    }
+
+    fn sdma_source_from_ports(&self) -> u32 {
+        let offset = u16::from_le_bytes([self.ports[0x4A], self.ports[0x4B]]) as u32;
+        let segment = (self.ports[0x4C] & 0x0F) as u32;
+        (segment << 16) | offset
+    }
+
+    fn sdma_counter_from_ports(&self) -> u32 {
+        let offset = u16::from_le_bytes([self.ports[0x4E], self.ports[0x4F]]) as u32;
+        let segment = (self.ports[0x50] & 0x0F) as u32;
+        (segment << 16) | offset
+    }
+
+    fn write_sdma_source(&mut self, value: u32) {
+        let [lo, hi] = (value as u16).to_le_bytes();
+        self.ports[0x4A] = lo;
+        self.ports[0x4B] = hi;
+        self.ports[0x4C] = ((value >> 16) & 0x0F) as u8;
+    }
+
+    fn write_sdma_counter(&mut self, value: u32) {
+        let [lo, hi] = (value as u16).to_le_bytes();
+        self.ports[0x4E] = lo;
+        self.ports[0x4F] = hi;
+        self.ports[0x50] = ((value >> 16) & 0x0F) as u8;
+    }
+
+    fn start_sdma_if_needed(&mut self) -> bool {
+        if !self.model.is_color() || self.ports[0x52] & SDMA_ENABLE == 0 {
+            self.sdma.running = false;
+            self.sdma.clock = 0;
+            return false;
+        }
+        if self.sdma.running {
+            return true;
+        }
+
+        let counter = self.sdma_counter_from_ports();
+        if counter == 0 {
+            self.ports[0x52] &= !SDMA_ENABLE;
+            return false;
+        }
+
+        let source = self.sdma_source_from_ports();
+        self.sdma.source = source;
+        self.sdma.counter = counter;
+        self.sdma.source_shadow = source;
+        self.sdma.counter_shadow = counter;
+        self.sdma.clock = 0;
+        self.sdma.running = true;
+        true
+    }
+
+    fn tick_sdma_cycle(&mut self) {
+        if !self.start_sdma_if_needed() {
+            return;
+        }
+
+        self.sdma.clock += 1;
+        let period = SDMA_CYCLES_PER_SAMPLE * self.sdma_rate();
+        if self.sdma.clock < period {
+            return;
+        }
+        self.sdma.clock -= period;
+        self.step_sdma_transfer();
+    }
+
+    fn step_sdma_transfer(&mut self) {
+        let ctrl = self.ports[0x52];
+        if ctrl & SDMA_HOLD != 0 {
+            self.write_voice_data_latch(0);
+            return;
+        }
+
+        let byte = self.read_u8_phys(self.sdma.source);
+        self.write_voice_data_latch(byte);
+
+        if ctrl & SDMA_DECREMENT != 0 {
+            self.sdma.source = self.sdma.source.wrapping_sub(1) & ADDRESS_MASK;
+        } else {
+            self.sdma.source = self.sdma.source.wrapping_add(1) & ADDRESS_MASK;
+        }
+        self.sdma.counter = self.sdma.counter.wrapping_sub(1) & ADDRESS_MASK;
+
+        if self.sdma.counter == 0 {
+            if ctrl & SDMA_REPEAT != 0 {
+                self.sdma.source = self.sdma.source_shadow;
+                self.sdma.counter = self.sdma.counter_shadow;
+            } else {
+                self.ports[0x52] &= !SDMA_ENABLE;
+                self.sdma.running = false;
+                self.sdma.clock = 0;
+            }
+        }
+
+        self.write_sdma_source(self.sdma.source);
+        self.write_sdma_counter(self.sdma.counter);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SdmaState {
+    source: u32,
+    counter: u32,
+    source_shadow: u32,
+    counter_shadow: u32,
+    clock: u16,
+    running: bool,
 }
 
 impl MemoryBus for Bus {
@@ -718,12 +864,7 @@ impl MemoryBus for Bus {
             // the APU's reconstruction filter, so it sees the full PCM stream
             // (games write it faster than the audio rate); outside voice mode the
             // register is just channel-2's volume.
-            0x89 => {
-                self.ports[0x89] = value;
-                if self.ports[0x90] & SND_CTRL_VOICE != 0 {
-                    self.apu.write_voice(value);
-                }
-            }
+            0x89 => self.write_voice_data_latch(value),
             // HBlank timer period: writing also resets the counter
             0xA4 => {
                 self.ports[0xA4] = value;

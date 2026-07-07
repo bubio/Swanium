@@ -1,10 +1,14 @@
 # Implementation status
 
-Last updated: 2026-07-06. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-07. Update this file (not AGENTS.md) when implementation progress changes.
+Emulation-focused remaining work is tracked separately in
+`docs/dev/EmulationBacklog.md`; execution order is tracked in
+`docs/dev/EmulationPlan.md`. Compatibility evidence is tracked in
+`docs/dev/CompatibilityMatrix.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 589 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 599 passing
 tests (+2 opt-in, env-gated public-ROM tests marked `ignored`).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -53,8 +57,10 @@ stack, string instructions, HLT. Public WSCPUTest / ws-test-suite ROMs are opt-i
 env-gated in `tests/public_roms.rs` (2 `ignored`). The WSCPUTest path is verified against
 FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::run_frame`,
 injects A to start the default `Test All` menu item, and decodes the background tile map for
-`Ok!` / `Failed!` output. The ws-test-suite output-format verification is still a Phase 3
-residual task.
+`Ok!` / `Failed!` output. The ws-test-suite path now has one source-confirmed decoded oracle:
+`mono/cpu/80186_quirks.ws` from asiekierka/ws-test-suite, whose pass/fail markers are tile
+5/6 in `screen_1` at WRAM `0x1800`. Unknown ws-test-suite ROMs are rejected instead of using
+the former placeholder HLT + `WRAM[0x0000] == 0` convention.
 
 ### PPU — Phase 4 (`ppu/`)
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
@@ -221,10 +227,13 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   by `MIX_SCALE` and routes it, so it sums into the same output domain as the four wave channels — which
   never saturate alone, so `mix` stays exact and the final clamp runs once after HyperVoice is added. The
   Color gate covers read and write (like the 8d upper-RAM window): `Bus::write_io` drops mono `0x69`–`0x6B`
-  writes and `Apu::tick(…, color)` skips the mix on non-Color hardware. Deferred/unverified: the 16-bit
-  direct path `0x64`–`0x67`, Sound-DMA feeding
-  (SDMA transfer engine still unimplemented — registers shadowed only), the sample-rate divisor, and the
-  0x69-vs-Mednafen-0x95 data-port choice — see DevelopmentPlan 実装メモ（8f）.
+  writes and `Apu::tick(…, color)` skips the mix on non-Color hardware. Sound DMA is implemented in the
+  bus: ports `0x4A`–`0x52` form a Color-only SDMA engine clocked from the APU path at `128 * rate`
+  master cycles per byte, and delivered bytes go through the same `0x89` voice-latch helper as CPU I/O
+  writes so `Apu::write_voice` sees the real stream. Terminal count clears bit 7 unless repeat is set;
+  repeat reloads source/counter shadows; hold outputs zero without advancing. Deferred/unverified: the
+  exact hardware bus-stall/timing details, the 16-bit direct path `0x64`–`0x67`, the sample-rate divisor,
+  and the 0x69-vs-Mednafen-0x95 data-port choice — see DevelopmentPlan 実装メモ（8f）.
 - **8g (done)**: integration-level test consolidation for the Phase 8 features and mono-regression
   parity, plus this final doc pass. New end-to-end tests drive the Color paths through the same public
   API the frontend uses, each pinned against its mono-regression twin: `crates/core/tests/color_render.rs`

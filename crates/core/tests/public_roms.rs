@@ -14,8 +14,6 @@
 
 use std::path::{Path, PathBuf};
 
-use swanium_core::bus::Bus;
-use swanium_core::cpu::{Cpu, MemoryBus};
 use swanium_core::keypad::KeyState;
 use swanium_core::model::HardwareModel;
 use swanium_core::system::System;
@@ -29,21 +27,13 @@ const WSC_CPU_TEST_TILEMAP_WIDTH: usize = 32;
 const WSC_CPU_TEST_TILEMAP_HEIGHT: usize = 32;
 const WSC_CPU_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WSC_CPU_TEST_IS_TESTING_ADDR: u32 = 0x0136;
-
-/// Minimal legacy harness for ROMs whose pass/fail protocol is still unknown.
-/// This is not suitable for WSCpuTest because that ROM uses HLT as a normal
-/// VBlank wait and needs the full [`System`] frame driver.
-fn boot_rom_until_hlt(rom: Vec<u8>, max_cycles: u64) -> (Cpu, Bus) {
-    let mut bus = Bus::new(rom);
-    let mut cpu = Cpu::new();
-    cpu.reset(0xFFFF, 0x0000);
-    cpu.regs.sp = 0x3FFE;
-    let mut cycles = 0u64;
-    while !cpu.halted && cycles < max_cycles {
-        cycles += cpu.step(&mut bus) as u64;
-    }
-    (cpu, bus)
-}
+const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
+    "tests/fixtures/cpu/public/ws-test-suite/mono/cpu/80186_quirks.ws";
+const WS_TEST_SUITE_MAX_FRAMES: usize = 120;
+const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
+const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
+const WS_TEST_SUITE_PASS_TILE: u8 = 5;
+const WS_TEST_SUITE_FAIL_TILE: u8 = 6;
 
 fn rom_path_from_env_or_default(env_var: &str, default_path: &str) -> PathBuf {
     std::env::var_os(env_var)
@@ -69,6 +59,24 @@ fn background_map_text(system: &System) -> String {
             let addr = WSC_CPU_TEST_BACKGROUND_MAP
                 + y as u32 * WSC_CPU_TEST_TILEMAP_STRIDE_BYTES
                 + x as u32 * 2;
+            let byte = system.read_memory_at(addr);
+            let ch = match byte {
+                0 => ' ',
+                0x20..=0x7E => byte as char,
+                _ => '.',
+            };
+            text.push(ch);
+        }
+        text.push('\n');
+    }
+    text
+}
+
+fn tilemap_text(system: &System, base: u32, rows: usize) -> String {
+    let mut text = String::with_capacity((WSC_CPU_TEST_TILEMAP_WIDTH + 1) * rows);
+    for y in 0..rows {
+        for x in 0..WSC_CPU_TEST_TILEMAP_WIDTH {
+            let addr = base + y as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES + x as u32 * 2;
             let byte = system.read_memory_at(addr);
             let ch = match byte {
                 0 => ' ',
@@ -156,28 +164,64 @@ fn wscputest_all_tests_pass() {
 
 /// Runs a single ROM from the ws-test-suite (asiekierka/ws-test-suite).
 ///
-/// Set `WS_TEST_SUITE_ROM` to the path of a specific test ROM from the suite.
+/// The first decoded oracle is `mono/cpu/80186_quirks.ws`, built from
+/// asiekierka/ws-test-suite `src/mono/cpu/80186_quirks`. That source defines
+/// `screen_1` in WRAM section `.iramcx_1800`; `draw_pass_fail(y, offset, result)`
+/// writes tile 5 for pass and tile 6 for fail at `(x=27-offset, y)`. The test
+/// has three checks, all at offset 0, so rows 0–2 at tile-map x=27 must be tile
+/// 5 and must not be tile 6.
+///
+/// Set `WS_TEST_SUITE_ROM` to that ROM path, or place it at
+/// `tests/fixtures/cpu/public/ws-test-suite/mono/cpu/80186_quirks.ws`.
 ///
 /// Run with: `WS_TEST_SUITE_ROM=/path/to/test.ws cargo test -p swanium-core
 ///   --test public_roms -- --include-ignored ws_test_suite`
 #[test]
 #[ignore = "requires a ws-test-suite ROM; set WS_TEST_SUITE_ROM=/path/to/test.ws"]
 fn ws_test_suite_rom_passes() {
-    let path = std::env::var("WS_TEST_SUITE_ROM")
-        .expect("WS_TEST_SUITE_ROM must point to a ws-test-suite .ws ROM");
-    let rom = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-
-    let max_cycles = 3_072_000u64 * 10;
-    let (cpu, bus) = boot_rom_until_hlt(rom, max_cycles);
-
-    // TODO(issue): confirm ws-test-suite output convention and update accordingly.
+    let path =
+        rom_path_from_env_or_default("WS_TEST_SUITE_ROM", DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM);
+    let path_text = path.to_string_lossy();
     assert!(
-        cpu.halted,
-        "ws-test-suite ROM did not reach HLT within the cycle budget"
+        path_text.ends_with("80186_quirks.ws"),
+        "only ws-test-suite mono/cpu/80186_quirks.ws has a decoded oracle; got {}",
+        path.display()
+    );
+    let rom = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}; set WS_TEST_SUITE_ROM=<rom path> or place the ROM at {}",
+            path.display(),
+            DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM
+        )
+    });
+
+    let mut system = System::from_rom(rom);
+    system.set_model(HardwareModel::Mono);
+
+    let mut markers = [0u8; 3];
+    for _ in 0..WS_TEST_SUITE_MAX_FRAMES {
+        system.run_frame(KeyState::NONE);
+        for (row, marker) in markers.iter_mut().enumerate() {
+            let addr =
+                WS_TEST_SUITE_SCREEN_1 + row as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES + 27 * 2;
+            *marker = system.read_memory_at(addr);
+        }
+        if markers
+            .iter()
+            .all(|&tile| tile == WS_TEST_SUITE_PASS_TILE || tile == WS_TEST_SUITE_FAIL_TILE)
+        {
+            break;
+        }
+    }
+
+    let visible_text = tilemap_text(&system, WS_TEST_SUITE_SCREEN_1, 4);
+    assert!(
+        !markers.contains(&WS_TEST_SUITE_FAIL_TILE),
+        "ws-test-suite 80186_quirks reported failure markers {markers:?}; visible text:\n{visible_text}"
     );
     assert_eq!(
-        bus.read_u8(0x0000),
-        0x00,
-        "ws-test-suite result byte at WRAM[0x0000] is non-zero"
+        markers, [WS_TEST_SUITE_PASS_TILE; 3],
+        "ws-test-suite 80186_quirks did not produce all pass markers within \
+         {WS_TEST_SUITE_MAX_FRAMES} frames; markers={markers:?}; visible text:\n{visible_text}"
     );
 }
