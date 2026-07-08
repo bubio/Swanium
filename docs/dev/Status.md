@@ -12,7 +12,7 @@ start with `docs/dev/README.md`.
 | Architecture / workspace | Complete | Stable Rust workspace with core/frontend/audio/video/input/common crates. |
 | Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
 | Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
-| Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest page-0 and WSHWTest `Test All` public oracles pass; additional timing pages remain evidence-driven follow-up. |
+| Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest pages 0-28 and WSHWTest `Test All` public oracles pass; further precision work is evidence-driven follow-up. |
 | Remaining emulator risks | Tracked in `docs/dev/EmulationBacklog.md` | Main risks are broader public ROM coverage, dot-level PPU only if proven needed, exact audio/SDMA timing validation, and CPU/bus timing precision. |
 | Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
 | Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
@@ -73,21 +73,22 @@ injects A to start the default `Test All` menu item, and decodes the background 
 5/6 in `screen_1` at WRAM `0x1800`. Unknown ws-test-suite ROMs are rejected instead of using
 the former placeholder HLT + `WRAM[0x0000] == 0` convention.
 
-Milestone 13 added the first public CPU timing oracle: FluBBaOfWard/WSTimingTest v0.4.0
-page 0. The source-confirmed decoder reads the background tile map at WRAM `0x1800` and
-checks the Pass column marker (`o` / `x`) at byte offset `row * 64 + 48`. That page now
-passes against a locally built `timingtest.ws`, validating baseline loop timing, `NOP`,
-`INC`, `CLI`, fixed/DX port I/O, stack push/pop, memory MOV, taken branch timing, the
-odd-address branch penalty, and taken `LOOP`. CPU timing was adjusted accordingly:
-`NOP` is 1 cycle, fixed-port `IN`/`OUT` is 7 cycles, DX-port `IN`/`OUT` is 5 cycles,
-taken `Jcc` is 5 cycles plus 1 for odd targets, and taken `LOOP` is 6 cycles.
+Milestone 13 added FluBBaOfWard/WSTimingTest v0.4.0 as a public CPU timing oracle
+covering pages 0-28. The source-confirmed decoder reads the background tile map at
+WRAM `0x1800` and checks the Pass column marker (`o` / `x`) at byte offset
+`row * 64 + 48`; page/row lists mirror upstream `testcalls.asm`. The full timing
+suite now passes against the local `timingtest.ws`, covering baseline timing,
+primary opcode groups, addressing variants, REP/string I/O, exception/interrupt timing,
+and loop edges. CPU timing was adjusted accordingly: `NOP` is 1 cycle, fixed-port
+`IN`/`OUT` is 7 cycles, DX-port `IN`/`OUT` is 5 cycles, taken `Jcc` is 5 cycles
+plus 1 for odd targets, and taken `LOOP` is 6 cycles.
 Milestone 13 also added FluBBaOfWard/WSHWTest `Test All` as a public hardware-register
 oracle. Passing it required hardware-visible interrupt semantics (interrupt sources latch only
 when enabled, but an already-latched cause remains pending after `INT_ENABLE` changes), the
 HBlank timer counter-1 latch behavior, color-mode-dependent DMA visibility, and broad I/O
 register read/write masks across display, palette, DMA, audio, serial, timer, and interrupt
-ports. Additional WSTimingTest pages remain a Milestone 13 follow-up rather than a broad
-per-clock scheduler rewrite.
+ports. Further timing work remains evidence-driven rather than a broad per-clock
+scheduler rewrite.
 
 ### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),

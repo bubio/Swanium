@@ -106,9 +106,9 @@ cargo test -p swanium-core --test public_roms -- --include-ignored wstimingtest
 ```
 
 別の場所に置く場合は `WS_TIMING_TEST_ROM=/path/to/timingtest.ws` で上書きする。
-現在の自動 oracle は page 0 の Pass 列を対象にしている。追加ページを有効化する場合は、
-各ページの行数と既知の許容差を WSTimingTest ソースで確認してから
-`crates/core/tests/public_roms.rs` に明記する。
+現在の自動 oracle は pages 0-28 の Pass 列を対象にしている。ページ/行リストは
+上流 `testcalls.asm` の `testgroup` / `execute` に合わせて
+`crates/core/tests/public_roms.rs` に明記している。
 
 ### WSHWTest の実行例
 

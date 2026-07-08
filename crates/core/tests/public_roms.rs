@@ -50,10 +50,43 @@ const WS_HW_TEST_BACKGROUND_MAP: u32 = 0x1000;
 const WS_HW_TEST_ROM_LOAD_OFFSET: usize = 0x40000;
 const WS_HW_TEST_MAPPED_ROM_SIZE: usize = 0x100000;
 
-const WS_TIMING_TEST_PAGE_ROWS: &[(usize, &[usize])] = &[(
-    0,
-    &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-)];
+const WS_TIMING_TEST_PAGE_ROWS: &[(usize, &[usize])] = &[
+    (
+        0,
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    ),
+    (1, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (2, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (3, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (4, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (5, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (6, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (7, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (
+        8,
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    ),
+    (9, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (10, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (11, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (12, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (13, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (14, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (15, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (16, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    (17, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (18, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    (19, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (20, &[1, 2, 3, 4, 5, 6, 7, 8]),
+    (21, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]),
+    (22, &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    (23, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    (24, &[1, 2, 3, 4, 5, 6]),
+    (25, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    (26, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    (27, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    (28, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+];
 
 fn rom_path_from_env_or_default(env_var: &str, default_path: &str) -> PathBuf {
     std::env::var_os(env_var)
@@ -328,7 +361,7 @@ fn ws_test_suite_rom_passes() {
 
 // ── WSTimingTest (FluBBaOfWard) ──────────────────────────────────────────────
 
-/// Runs selected pages from FluBBaOfWard/WSTimingTest.
+/// Runs all source-confirmed pages from FluBBaOfWard/WSTimingTest.
 ///
 /// WSTimingTest measures V30MZ instruction timing by running each test loop
 /// 1000 times and displaying the expected scanline count, actual scanline
@@ -345,6 +378,9 @@ fn ws_test_suite_rom_passes() {
 /// - `okfail` writes ASCII `o` for pass or `x` for fail at byte offset
 ///   `row * 64 + 48`, i.e. tile-map column 24.
 /// - The program starts on page 0; X2 increments the page counter.
+///
+/// `testcalls.asm` defines pages 0 through 28. Each tuple in
+/// `WS_TIMING_TEST_PAGE_ROWS` records the rows that page executes.
 ///
 /// Build with `nasm -f bin -o timingtest.ws timingtest.asm` from
 /// FluBBaOfWard/WSTimingTest, then place it at the default path or set
