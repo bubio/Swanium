@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-Last updated: 2026-07-07.
+Last updated: 2026-07-08.
 
 This matrix tracks license-clean compatibility evidence. Public test ROMs are
 referenced by source and local path convention only; binaries are not committed.
@@ -10,8 +10,10 @@ Commercial ROM checks are manual notes and must not include ROM assets.
 
 | Area | ROM / test | Source | Local path / env var | Coverage | Expected result | Current result | Notes |
 |---|---|---|---|---|---|---|---|
-| CPU | WSCpuTest v0.7.1 `Test All` | FluBBaOfWard/WSCpuTest | `WS_CPU_TEST_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc` | V30MZ instruction behavior | Background tile map prints `Ok!`; no `Failed!` | Passes from default local path | Test injects A to start the default menu item and decodes the BG tile map. |
-| CPU | `mono/cpu/80186_quirks.ws` | asiekierka/ws-test-suite | `WS_TEST_SUITE_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws` | AAM/AAD non-10 immediates, SALC | WRAM `screen_1` pass/fail markers are tile `5,5,5` | Passes from default local path | Source defines `screen_1` at WRAM `0x1800`; markers are at x=27, rows 0-2. |
+| CPU | WSCpuTest v0.7.1 `Test All` | FluBBaOfWard/WSCpuTest | `WS_CPU_TEST_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest/WSCpuTest.wsc` | V30MZ instruction behavior | Background tile map prints `Ok!`; no `Failed!` | Passes from default local path | Test injects A to start the default menu item and decodes the BG tile map. |
+| CPU | `mono/cpu/80186_quirks.ws` | asiekierka/ws-test-suite | `WS_TEST_SUITE_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws` | AAM/AAD non-10 immediates, SALC | WRAM `screen_1` pass/fail markers are tile `5,5,5` | Passes from default local path | Source defines `screen_1` at WRAM `0x1800`; markers are at x=27, rows 0-2. |
+| CPU timing | WSTimingTest v0.4.0 page 0 | FluBBaOfWard/WSTimingTest | `WS_TIMING_TEST_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/Tests/WSTimingTest/timingtest.ws` | Baseline loop, `NOP`, `INC`, flag op, fixed/DX port I/O, stack push/pop, memory MOV, taken branch, odd branch target, `LOOP` | Page 0 Pass column contains ASCII `o` for every checked row | Passes from default local path | Source-confirmed oracle: background map at WRAM `0x1800`, pass/fail marker at row * 64 + 48 (`o`/`x`). Additional pages remain Milestone 13 follow-up. |
+| Hardware register suite | WSHWTest `Test All` | FluBBaOfWard/WSHWTest | `WS_HW_TEST_ROM` or `/Volumes/CrucialX6/roms/WonderSwan/Tests/WSHWTest.wsc` | Interrupt manager, HBlank timers, I/O register masks, window/sprite/LCD/sound/noise sections | No `Failed!`; reaches final `Sound Noise Values` section | Passes from default local path | Test drives the menu with X3 then A, maps the 4 Mbit ROM at `0x40000` for direct boot, and decodes text from WRAM `0x1000`. |
 | SDMA audio | Internal SDMA unit/integration tests | Swanium self-built tests | `cargo test -p swanium-core sdma` | SDMA register masks, Color gate, voice-latch delivery, terminal count, repeat, hold | All focused SDMA tests pass | Covered by normal test suite | No external ROM fixture selected yet. |
 | WSC audio | Internal HyperVoice/direct-output tests | Swanium self-built tests | `cargo test -p swanium-core hypervoice` / `cargo test -p swanium-core speaker_volume` | 8-bit HyperVoice latch, 16-bit direct output, Color-mode gate, mono drop, `0x9E` speaker main-volume readback | All focused HyperVoice/speaker-volume tests pass | Covered by normal test suite | `0x9E` attenuation is deferred pending hardware capture; a literal zero=mute mapping breaks observed software. |
 | Mono PPU | Synthetic PPU render tests | Swanium self-built tests | `cargo test -p swanium-core ppu` | Mono tile/sprite/window/palette path | Framebuffer assertions pass | Covered by normal test suite | Public PPU ROM coverage still needs fixture selection. |

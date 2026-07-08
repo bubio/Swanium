@@ -21,10 +21,11 @@ fn jmp_short_negative_offset_wraps_backward() {
 
 #[test]
 fn jz_taken_when_zero_flag_set() {
-    // JZ +0x03 (0x74 0x03), taken.
+    // JZ +0x03 (0x74 0x03), taken to odd address 5.
+    // WSTimingTest records a one-cycle penalty for odd branch targets.
     let (cpu, cycles, _) = run_with(|cpu| cpu.flags.zero = true, &[0x74, 0x03]);
     assert_eq!(cpu.regs.ip, 5);
-    assert_eq!(cycles, 4);
+    assert_eq!(cycles, 6);
 }
 
 #[test]

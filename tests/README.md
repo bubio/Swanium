@@ -29,6 +29,8 @@ tests/
 - [WSDev Wiki](https://ws.nesdev.org/wiki/WSdev_Wiki)
 - [WonderSwan - Sacred Tech Scroll](http://perfectkiosk.net/stsws.html)
 - [WonderSwan CPU test (FluBBaOfWard/WSCPUTest)](https://github.com/FluBBaOfWard/WSCPUTest)
+- [WonderSwan Timing test (FluBBaOfWard/WSTimingTest)](https://github.com/FluBBaOfWard/WSTimingTest)
+- [WonderSwan Hardware test (FluBBaOfWard/WSHWTest)](https://github.com/FluBBaOfWard/WSHWTest)
 - [WonderSwan test suite (asiekierka/ws-test-suite)](https://github.com/asiekierka/ws-test-suite)
 
 仕様確認は WSDev Wiki / Sacred Tech Scroll を一次資料として扱い、互換性確認は
@@ -50,7 +52,7 @@ nasm -f bin -o WSCpuTest.wsc WSCpuTest.asm
 生成した `WSCpuTest.wsc` は既定では次の場所に置く。
 
 ```text
-/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc
+/Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest/WSCpuTest.wsc
 ```
 
 別の場所に置く場合は `WS_CPU_TEST_ROM` でパスを指定して実行する。
@@ -68,7 +70,7 @@ asiekierka/ws-test-suite は ROM ごとに出力規約が異なるため、`publ
 上流リポジトリでビルドした ROM は、既定では次の場所に置く。
 
 ```text
-/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws
+/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws
 ```
 
 実行:
@@ -79,8 +81,59 @@ cargo test -p swanium-core --test public_roms -- --include-ignored ws_test_suite
 
 別の場所に置く場合は `WS_TEST_SUITE_ROM=/path/to/80186_quirks.ws` で上書きする。
 複数の ws-test-suite ROM を使う場合も、上流の `src/...` 構造と同じ相対パスで
-`/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/` 配下に置き、ROM ごとの合否判定規約を
+`/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/` 配下に置き、ROM ごとの合否判定規約を
 テストコードに明記する。
+
+### WSTimingTest の実行例
+
+FluBBaOfWard/WSTimingTest v0.4.0 は V30MZ 命令タイミングを実機採取値と比較する。
+上流リポジトリで以下のようにビルドできる。
+
+```sh
+nasm -f bin -o timingtest.ws timingtest.asm
+```
+
+生成した `timingtest.ws` は既定では次の場所に置く。
+
+```text
+/Volumes/CrucialX6/roms/WonderSwan/Tests/WSTimingTest/timingtest.ws
+```
+
+実行:
+
+```sh
+cargo test -p swanium-core --test public_roms -- --include-ignored wstimingtest
+```
+
+別の場所に置く場合は `WS_TIMING_TEST_ROM=/path/to/timingtest.ws` で上書きする。
+現在の自動 oracle は page 0 の Pass 列を対象にしている。追加ページを有効化する場合は、
+各ページの行数と既知の許容差を WSTimingTest ソースで確認してから
+`crates/core/tests/public_roms.rs` に明記する。
+
+### WSHWTest の実行例
+
+FluBBaOfWard/WSHWTest は interrupt manager、timer、I/O register、window/sprite/LCD、
+sound/noise などをメニューから検査する。上流リポジトリで以下のようにビルドできる。
+
+```sh
+nasm -f bin -o WSHWTest.wsc WSHWTest.asm
+```
+
+生成した `WSHWTest.wsc` は既定では次の場所に置く。
+
+```text
+/Volumes/CrucialX6/roms/WonderSwan/Tests/WSHWTest.wsc
+```
+
+実行:
+
+```sh
+cargo test -p swanium-core --test public_roms -- --include-ignored wshwtest
+```
+
+別の場所に置く場合は `WS_HW_TEST_ROM=/path/to/WSHWTest.wsc` で上書きする。
+この ROM は 4 Mbit イメージとして `0x40000` から実行されるため、テスト harness では
+direct boot 用に 1 MiB イメージへ配置してから起動する。
 
 ## 自作テストROMの方針
 

@@ -21,7 +21,8 @@ use swanium_core::system::System;
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_WS_CPU_TEST_ROM: &str = "/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc";
+const DEFAULT_WS_CPU_TEST_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest/WSCpuTest.wsc";
 const WSC_CPU_TEST_MAX_FRAMES: usize = 75 * 180;
 const WSC_CPU_TEST_BACKGROUND_MAP: u32 = 0x1000;
 const WSC_CPU_TEST_TILEMAP_WIDTH: usize = 32;
@@ -29,12 +30,30 @@ const WSC_CPU_TEST_TILEMAP_HEIGHT: usize = 32;
 const WSC_CPU_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WSC_CPU_TEST_IS_TESTING_ADDR: u32 = 0x0136;
 const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
-    "/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws";
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws";
 const WS_TEST_SUITE_MAX_FRAMES: usize = 120;
 const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
 const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WS_TEST_SUITE_PASS_TILE: u8 = 5;
 const WS_TEST_SUITE_FAIL_TILE: u8 = 6;
+const DEFAULT_WS_TIMING_TEST_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/WSTimingTest/timingtest.ws";
+const WS_TIMING_TEST_BACKGROUND_MAP: u32 = 0x1800;
+const WS_TIMING_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
+const WS_TIMING_TEST_PASS_X: u32 = 24;
+const WS_TIMING_TEST_PASS_TILE: u8 = b'o';
+const WS_TIMING_TEST_FAIL_TILE: u8 = b'x';
+const WS_TIMING_TEST_MAX_FRAMES_PER_PAGE: usize = 180;
+const DEFAULT_WS_HW_TEST_ROM: &str = "/Volumes/CrucialX6/roms/WonderSwan/Tests/WSHWTest.wsc";
+const WS_HW_TEST_MAX_FRAMES: usize = 75 * 60;
+const WS_HW_TEST_BACKGROUND_MAP: u32 = 0x1000;
+const WS_HW_TEST_ROM_LOAD_OFFSET: usize = 0x40000;
+const WS_HW_TEST_MAPPED_ROM_SIZE: usize = 0x100000;
+
+const WS_TIMING_TEST_PAGE_ROWS: &[(usize, &[usize])] = &[(
+    0,
+    &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+)];
 
 fn rom_path_from_env_or_default(env_var: &str, default_path: &str) -> PathBuf {
     std::env::var_os(env_var)
@@ -45,9 +64,8 @@ fn rom_path_from_env_or_default(env_var: &str, default_path: &str) -> PathBuf {
 fn read_rom(path: &Path, env_var: &str) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| {
         panic!(
-            "cannot read {}: {e}; set {env_var}=<rom path> or place the ROM at {}",
+            "cannot read {}: {e}; set {env_var}=<rom path>",
             path.display(),
-            DEFAULT_WS_CPU_TEST_ROM
         )
     })
 }
@@ -91,6 +109,85 @@ fn tilemap_text(system: &System, base: u32, rows: usize) -> String {
     text
 }
 
+fn timing_test_pass_marker(system: &System, row: usize) -> u8 {
+    let addr = WS_TIMING_TEST_BACKGROUND_MAP
+        + row as u32 * WS_TIMING_TEST_TILEMAP_STRIDE_BYTES
+        + WS_TIMING_TEST_PASS_X * 2;
+    system.read_memory_at(addr)
+}
+
+fn run_wstimingtest_page(system: &mut System, page: usize, rows: &[usize]) -> Vec<u8> {
+    for _ in 0..page {
+        system.run_frame(KeyState::X2);
+        system.run_frame(KeyState::NONE);
+    }
+
+    let mut markers = vec![0; rows.len()];
+    for _ in 0..WS_TIMING_TEST_MAX_FRAMES_PER_PAGE {
+        system.run_frame(KeyState::NONE);
+        for (marker, &row) in markers.iter_mut().zip(rows) {
+            *marker = timing_test_pass_marker(system, row);
+        }
+        if markers
+            .iter()
+            .all(|&tile| tile == WS_TIMING_TEST_PASS_TILE || tile == WS_TIMING_TEST_FAIL_TILE)
+        {
+            break;
+        }
+    }
+    markers
+}
+
+fn run_wshwtest_all_until_result(rom: Vec<u8>) -> (System, String) {
+    let mut system = System::from_rom(rom);
+    system.set_model(HardwareModel::Color);
+
+    for _ in 0..8 {
+        system.run_frame(KeyState::NONE);
+    }
+    // WSHWTest starts with "ShowStartup Registers" selected; move once to
+    // "Test All", release, then press A to run it.
+    system.run_frame(KeyState::X3);
+    system.run_frame(KeyState::NONE);
+    system.run_frame(KeyState::A);
+    system.run_frame(KeyState::NONE);
+
+    let mut latest_text = String::new();
+    for _ in 0..WS_HW_TEST_MAX_FRAMES {
+        system.run_frame(KeyState::NONE);
+        latest_text = tilemap_text(
+            &system,
+            WS_HW_TEST_BACKGROUND_MAP,
+            WSC_CPU_TEST_TILEMAP_HEIGHT,
+        );
+        if latest_text.contains("Failed!") {
+            break;
+        }
+        if latest_text.contains("Sound Noise Values")
+            && (latest_text.contains("Ok!") || latest_text.contains("Done."))
+        {
+            break;
+        }
+    }
+
+    (system, latest_text)
+}
+
+fn map_wshwtest_rom_for_direct_boot(rom: Vec<u8>) -> Vec<u8> {
+    if rom.len() >= WS_HW_TEST_MAPPED_ROM_SIZE {
+        return rom;
+    }
+    let mut mapped = vec![0x00; WS_HW_TEST_MAPPED_ROM_SIZE];
+    let end = WS_HW_TEST_ROM_LOAD_OFFSET + rom.len();
+    assert!(
+        end <= mapped.len(),
+        "WSHWTest ROM is too large to map at 0x{WS_HW_TEST_ROM_LOAD_OFFSET:05X}: {} bytes",
+        rom.len()
+    );
+    mapped[WS_HW_TEST_ROM_LOAD_OFFSET..end].copy_from_slice(&rom);
+    mapped
+}
+
 fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
     let mut system = System::from_rom(rom);
     system.set_model(HardwareModel::Color);
@@ -130,7 +227,7 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
 ///
 /// Build with `nasm -f bin -o WSCpuTest.wsc WSCpuTest.asm` from the upstream
 /// v0.7.1 source, then place it at
-/// `/Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc` or set
+/// `/Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest/WSCpuTest.wsc` or set
 /// `WS_CPU_TEST_ROM` to the `.wsc` path.
 ///
 /// The upstream README documents the externally visible protocol: the ROM
@@ -143,7 +240,7 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
 /// Run with: `WS_CPU_TEST_ROM=/path/to/WSCpuTest.wsc cargo test -p swanium-core
 ///   --test public_roms -- --include-ignored wscputest`
 #[test]
-#[ignore = "requires WSCpuTest.wsc; default path is /Volumes/CrucialX6/roms/WonderSwan/WSCpuTest/WSCpuTest.wsc"]
+#[ignore = "requires WSCpuTest.wsc; default path is /Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest/WSCpuTest.wsc"]
 fn wscputest_all_tests_pass() {
     let path = rom_path_from_env_or_default("WS_CPU_TEST_ROM", DEFAULT_WS_CPU_TEST_ROM);
     let rom = read_rom(&path, "WS_CPU_TEST_ROM");
@@ -174,13 +271,13 @@ fn wscputest_all_tests_pass() {
 /// 5 and must not be tile 6.
 ///
 /// Place it at
-/// `/Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws`
+/// `/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws`
 /// or set `WS_TEST_SUITE_ROM` to that ROM path.
 ///
 /// Run with: `WS_TEST_SUITE_ROM=/path/to/test.ws cargo test -p swanium-core
 ///   --test public_roms -- --include-ignored ws_test_suite`
 #[test]
-#[ignore = "requires ws-test-suite mono/cpu/80186_quirks.ws; default path is /Volumes/CrucialX6/roms/WonderSwan/ws-test-suite/mono/cpu/80186_quirks.ws"]
+#[ignore = "requires ws-test-suite mono/cpu/80186_quirks.ws; default path is /Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws"]
 fn ws_test_suite_rom_passes() {
     let path =
         rom_path_from_env_or_default("WS_TEST_SUITE_ROM", DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM);
@@ -226,5 +323,91 @@ fn ws_test_suite_rom_passes() {
         markers, [WS_TEST_SUITE_PASS_TILE; 3],
         "ws-test-suite 80186_quirks did not produce all pass markers within \
          {WS_TEST_SUITE_MAX_FRAMES} frames; markers={markers:?}; visible text:\n{visible_text}"
+    );
+}
+
+// ── WSTimingTest (FluBBaOfWard) ──────────────────────────────────────────────
+
+/// Runs selected pages from FluBBaOfWard/WSTimingTest.
+///
+/// WSTimingTest measures V30MZ instruction timing by running each test loop
+/// 1000 times and displaying the expected scanline count, actual scanline
+/// count, and a pass marker. Its README notes that measured values can differ
+/// by one scanline on hardware in some circumstances; this test follows the
+/// ROM's own `okfail` result instead of reimplementing tolerance logic.
+///
+/// Source-confirmed output protocol:
+///
+/// - `timingtest.asm` defines `backgroundMap = WS_TILE_BANK - MAP_SIZE`, i.e.
+///   WRAM `0x1800`.
+/// - `runtest` receives a row number, prints the test at that row, and calls
+///   `okfail`.
+/// - `okfail` writes ASCII `o` for pass or `x` for fail at byte offset
+///   `row * 64 + 48`, i.e. tile-map column 24.
+/// - The program starts on page 0; X2 increments the page counter.
+///
+/// Build with `nasm -f bin -o timingtest.ws timingtest.asm` from
+/// FluBBaOfWard/WSTimingTest, then place it at the default path or set
+/// `WS_TIMING_TEST_ROM`.
+#[test]
+#[ignore = "requires WSTimingTest timingtest.ws; default path is /Volumes/CrucialX6/roms/WonderSwan/Tests/WSTimingTest/timingtest.ws"]
+fn wstimingtest_selected_pages_pass() {
+    let path = rom_path_from_env_or_default("WS_TIMING_TEST_ROM", DEFAULT_WS_TIMING_TEST_ROM);
+    let rom = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}; set WS_TIMING_TEST_ROM=<rom path> or place the ROM at {}",
+            path.display(),
+            DEFAULT_WS_TIMING_TEST_ROM
+        )
+    });
+
+    for &(page, rows) in WS_TIMING_TEST_PAGE_ROWS {
+        let mut system = System::from_rom(rom.clone());
+        system.set_model(HardwareModel::Color);
+        let markers = run_wstimingtest_page(&mut system, page, rows);
+        let visible_text = tilemap_text(&system, WS_TIMING_TEST_BACKGROUND_MAP, 18);
+
+        assert!(
+            !markers.contains(&WS_TIMING_TEST_FAIL_TILE),
+            "WSTimingTest page {page} reported failure markers {markers:?}; visible text:\n{visible_text}"
+        );
+        assert!(
+            markers.iter().all(|&tile| tile == WS_TIMING_TEST_PASS_TILE),
+            "WSTimingTest page {page} did not finish within {WS_TIMING_TEST_MAX_FRAMES_PER_PAGE} frames; \
+             markers={markers:?}; visible text:\n{visible_text}"
+        );
+    }
+}
+
+// ── WSHWTest (FluBBaOfWard) ──────────────────────────────────────────────────
+
+/// Runs FluBBaOfWard/WSHWTest's menu item "Test All".
+///
+/// The ROM is menu-driven: it starts on "ShowStartup Registers", X3 moves the
+/// selection down to "Test All", and A starts the selected item. The text is
+/// emitted through INT 0x10 into the background tile map at WRAM `0x1000`
+/// (`backgroundMap = WS_TILE_BANK - MAP_SIZE - MAP_SIZE`). This test treats
+/// `Failed!` as a hard failure and waits until the run reaches the final
+/// "Sound Noise Values" section with an `Ok!`/`Done.` marker.
+///
+/// Build with `nasm -f bin -o WSHWTest.wsc WSHWTest.asm` from
+/// FluBBaOfWard/WSHWTest, then place it at the default path or set
+/// `WS_HW_TEST_ROM`.
+#[test]
+#[ignore = "requires WSHWTest.wsc; default path is /Volumes/CrucialX6/roms/WonderSwan/Tests/WSHWTest.wsc"]
+fn wshwtest_all_tests_pass() {
+    let path = rom_path_from_env_or_default("WS_HW_TEST_ROM", DEFAULT_WS_HW_TEST_ROM);
+    let rom = map_wshwtest_rom_for_direct_boot(read_rom(&path, "WS_HW_TEST_ROM"));
+    let (system, text) = run_wshwtest_all_until_result(rom);
+
+    assert!(
+        !text.contains("Failed!"),
+        "WSHWTest reported failure; visible background text:\n{text}"
+    );
+    assert!(
+        text.contains("Sound Noise Values") && (text.contains("Ok!") || text.contains("Done.")),
+        "WSHWTest did not reach the expected completion marker within {WS_HW_TEST_MAX_FRAMES} frames; \
+         cpu_halted={}, visible background text:\n{text}",
+        system.cpu().halted
     );
 }

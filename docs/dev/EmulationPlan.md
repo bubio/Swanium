@@ -1,6 +1,6 @@
 # Emulation development plan
 
-Last updated: 2026-07-07.
+Last updated: 2026-07-08.
 
 This document turns `docs/dev/EmulationBacklog.md` into an execution plan. The
 goal is not to keep adding features blindly; it is to raise confidence that the
@@ -18,7 +18,7 @@ map, see `docs/dev/README.md`.
 | 10. PPU correctness pass | Complete at scanline-renderer scope | 10a sprite overflow, 10b raster audit, and 10c Color PPU synthetic validation are done. Dot-level rendering remains deferred until evidence requires it. |
 | 11. Audio and WSC extension pass | Complete at implementation/test-triage scope | 16-bit HyperVoice direct output and `0x9E` readback are implemented/tested; analog volume curve remains validation work. |
 | 12. Cartridge, RTC, and persistence pass | Complete | SRAM/EEPROM persistence, RTC protocol tests, mapper/save coverage, and internal EEPROM decision are recorded. |
-| 13. Timing precision phase | Current | Audit timing precision only where public tests, hardware captures, or known titles show a need. |
+| 13. Timing precision phase | Current | WSTimingTest page-0 and WSHWTest `Test All` oracles are integrated; continue timing precision only where public tests, hardware captures, or known titles show a need. |
 
 ## Guiding rules
 

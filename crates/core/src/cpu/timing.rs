@@ -9,15 +9,16 @@
 //!
 //! Source of truth: the WonderSwan hardware reference "Sacred Tech Scroll"
 //! (<http://perfectkiosk.net/stsws.html>), whose per-instruction cycle counts
-//! are hardware-verified, cross-checked against the µPD70116 (V30) datasheet.
+//! are hardware-verified, cross-checked against the µPD70116 (V30) datasheet
+//! and FluBBaOfWard/WSTimingTest where an opt-in public ROM oracle is available.
 //!
 //! stsws lists register/memory operand instructions as a range `reg-mem`; the
 //! low value is the register-operand cost and the high value the memory-operand
 //! cost. Branches are listed as `N+`: `N` clocks when not taken, plus a
-//! prefetch-queue refill when taken (a taken conditional branch behaves like a
-//! near jump, which stsws lists at 4 clocks, i.e. a ~+3 refill). These
-//! per-instruction totals fold the operand fetch/refill into one number; a
-//! future phase may decompose them into per-clock timing.
+//! prefetch-queue refill when taken. WSTimingTest page 0 pins the common taken
+//! `Jcc` case at 5 clocks, with an additional clock when the target address is
+//! odd. These per-instruction totals fold the operand fetch/refill into one
+//! number; a future phase may decompose them into per-clock timing.
 
 use super::decode::RegMem;
 

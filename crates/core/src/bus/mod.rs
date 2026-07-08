@@ -98,12 +98,19 @@ pub struct Bus {
 
 impl Bus {
     fn init_port_defaults(ports: &mut [u8; 0x100]) {
-        // INT_ENABLE: VBLANK (bit 6) is always forced on.
-        ports[0xB2] = 1 << IrqSource::VBlank as u8;
         // Keep the speaker path audible unless software explicitly lowers the
         // built-in speaker main volume. Treating reset as 0 mutes games/tests
         // that rely on the default speaker route and never touch port 0x9E.
         ports[0x9E] = 0x03;
+    }
+
+    fn mono_palette_port_mask(port: u8) -> u8 {
+        match port {
+            0x20..=0x27 | 0x30..=0x37 => 0x77,
+            0x28..=0x2F | 0x38..=0x3F if port & 1 == 0 => 0x70,
+            0x28..=0x2F | 0x38..=0x3F => 0x77,
+            _ => 0xFF,
+        }
     }
 
     /// Create a bus with the given ROM bytes (and no SRAM).
@@ -240,7 +247,7 @@ impl Bus {
 
     /// Assert a hardware interrupt request source.
     pub fn request_irq(&mut self, src: IrqSource) {
-        self.ports[0xB4] |= 1 << src as u8;
+        self.ports[0xB4] |= (1 << src as u8) & self.ports[0xB2];
     }
 
     /// Returns the interrupt vector number for the highest-priority pending
@@ -250,7 +257,7 @@ impl Bus {
     /// The caller must check `cpu.flags.interrupt` for maskable IRQs before
     /// calling `cpu.handle_irq(bus, vector)`.
     pub fn pending_irq(&self) -> Option<u8> {
-        let pending = self.ports[0xB4] & self.ports[0xB2];
+        let pending = self.ports[0xB4];
         if pending == 0 {
             return None;
         }
@@ -270,12 +277,12 @@ impl Bus {
     /// Decrements the HBlank timer counter (if enabled); fires
     /// [`IrqSource::HBlankTimer`] when the counter reaches zero.
     pub fn on_hblank(&mut self) {
-        if self.ports[0xA2] & 1 == 0 {
-            return; // HBlank timer disabled
-        }
         let counter = u16::from_le_bytes([self.ports[0xA8], self.ports[0xA9]]);
         if counter == 0 {
             return;
+        }
+        if self.ports[0xA2] & 1 == 0 && counter != 1 {
+            return; // HBlank timer disabled, except the counter=1 latch quirk.
         }
         if counter == 1 {
             self.ports[0xB4] |= (1 << IrqSource::HBlankTimer as u8) & self.ports[0xB2];
@@ -299,7 +306,8 @@ impl Bus {
     /// Fires [`IrqSource::VBlank`] (always enabled) and decrements the
     /// VBlank timer counter, firing [`IrqSource::VBlankTimer`] at zero.
     pub fn on_vblank(&mut self) {
-        // VBLANK interrupt (bit 6 always enabled)
+        // VBLANK interrupt (latched only when enabled; WSHWTest verifies that
+        // disabled interrupt sources do not appear in INT_CAUSE).
         self.ports[0xB4] |= (1 << IrqSource::VBlank as u8) & self.ports[0xB2];
 
         if self.ports[0xA2] & 4 == 0 {
@@ -745,6 +753,28 @@ impl MemoryBus for Bus {
 
     fn read_io(&mut self, port: u8) -> u8 {
         match port {
+            // DISP_CTRL: layer/window enable bits; upper bits read as zero.
+            0x00 => self.ports[0x00] & 0x3F,
+            // BG_PAL/backdrop: mono-compatible mode exposes a 3-bit shade-pool
+            // index; color mode uses the full palette-RAM index.
+            0x01 if self.color_rendering_enabled() => self.ports[0x01],
+            0x01 => self.ports[0x01] & 0x07,
+            // SPR_AREA: color mode can address the larger WRAM/tile space.
+            0x04 if self.color_rendering_enabled() => self.ports[0x04] & 0x3F,
+            0x04 => self.ports[0x04] & 0x1F,
+            // Sprite start/count and screen-map base masks.
+            0x05 => self.ports[0x05] & 0x7F,
+            0x07 if self.color_rendering_enabled() => self.ports[0x07],
+            0x07 => self.ports[0x07] & 0x77,
+            // LCD segment data exposes the six icon bits.
+            0x15 => self.ports[0x15] & 0x3F,
+            // Unused LCD control holes.
+            0x19 | 0x1B => 0,
+            // Monochrome palette mapping ports expose only 3-bit shade-pool
+            // selectors per nibble; some entries have no low-nibble selector.
+            0x20..=0x3F => self.ports[port as usize] & Self::mono_palette_port_mask(port),
+            // Color DMA register window is not visible in mono-compatible mode.
+            0x40..=0x5F if !self.color_rendering_enabled() => 0,
             // GDMA source low: bit 0 always reads as 0
             0x40 => self.ports[0x40] & 0xFE,
             // GDMA source segment: bits 4-7 undefined (read as 0)
@@ -760,33 +790,55 @@ impl MemoryBus for Bus {
                 self.ports[0x48] = 0;
                 v
             }
+            0x49 => 0,
             // SDMA source segment: bits 4-7 undefined
             0x4C => self.ports[0x4C] & 0x0F,
             0x4D => 0,
             // SDMA counter segment: bits 4-7 undefined
             0x50 => self.ports[0x50] & 0x0F,
             0x51 => 0,
+            0x52 => self.ports[0x52] & 0x5F,
+            0x53..=0x5F => 0,
+            // Unused system-control holes.
+            0x61 | 0x63 => 0,
+            // HyperVoice direct/data latches feed the audio path but are not
+            // readable as ordinary state registers.
+            0x64..=0x69 => 0,
+            0x6A => self.ports[0x6A],
+            0x6B => self.ports[0x6B] & 0x6F,
+            0x6C..=0x7F => 0,
+            // APU register masks.
+            0x81 | 0x83 | 0x85 | 0x87 => self.ports[port as usize] & 0x07,
+            0x8D => self.ports[0x8D] & 0x1F,
+            0x8E => self.ports[0x8E] & 0x17,
+            0x90 => self.ports[0x90] & 0xEF,
+            0x91 => self.ports[0x91] & 0x8F,
+            0x92 | 0x93 => 0,
+            0x94 => self.ports[0x94] & 0x0F,
+            0x9E => self.ports[0x9E] & 0x03,
+            0x9F => 0,
+            0xA1 => 0,
+            0xA2 | 0xA3 => self.ports[port as usize] & 0x0F,
             // HW_FLAGS (0xA0): console-model / system flags. Reads as a fixed
             // pattern with bit 0 = colour hardware — 0x87 on Color/Crystal, 0x86
             // on mono (Mednafen `gfx.c`: `wsc ? 0x87 : 0x86`). Games read this at
             // boot to detect a WonderSwan Color and take their colour path; a raw
             // 0x00 here makes them mis-initialise or hang.
             0xA0 => {
-                if self.model.is_color() {
-                    0x87
-                } else {
-                    0x86
-                }
+                let base = if self.model.is_color() { 0x87 } else { 0x86 };
+                base | (self.ports[0xA0] & 0x08)
             }
             // HBlank/VBlank timer counters (read-only)
             0xA8 => self.ports[0xA8],
             0xA9 => self.ports[0xA9],
             0xAA => self.ports[0xAA],
             0xAB => self.ports[0xAB],
-            // INT_ENABLE: VBLANK (bit 6) is always set
-            0xB2 => self.ports[0xB2] | (1 << IrqSource::VBlank as u8),
-            // SERIAL_STATUS stub: TX empty, RX empty
-            0xB3 => 0x84,
+            0xAD..=0xAF => 0,
+            0xB0 => self.ports[0xB0] & 0xF8,
+            0xB1 => self.ports[0xB1],
+            0xB2 => self.ports[0xB2],
+            // SERIAL_STATUS: writable control/status bits exposed by WSHWTest.
+            0xB3 => self.ports[0xB3] & 0xC4,
             // INT_CAUSE: reading clears edge-triggered bits (1, 4, 5, 6, 7)
             0xB4 => {
                 let v = self.ports[0xB4];
@@ -836,6 +888,19 @@ impl MemoryBus for Bus {
 
     fn write_io(&mut self, port: u8, value: u8) {
         match port {
+            // DISP_CTRL: layer/window enable bits; upper bits are not writable.
+            0x00 => self.ports[0x00] = value & 0x3F,
+            0x04 if self.color_rendering_enabled() => self.ports[0x04] = value & 0x3F,
+            0x04 => self.ports[0x04] = value & 0x1F,
+            0x05 => self.ports[0x05] = value & 0x7F,
+            0x07 if self.color_rendering_enabled() => self.ports[0x07] = value,
+            0x07 => self.ports[0x07] = value & 0x77,
+            0x15 => self.ports[0x15] = value & 0x3F,
+            0x19 | 0x1B => {}
+            0x20..=0x3F => {
+                self.ports[port as usize] = value & Self::mono_palette_port_mask(port);
+            }
+            0x40..=0x5F if !self.color_rendering_enabled() => {}
             // LCD_LINE (0x02) is read-only
             0x02 => {}
             // GDMA source low: bit 0 forced to 0
@@ -859,12 +924,16 @@ impl MemoryBus for Bus {
                 self.ports[0x48] = value;
                 self.tick_gdma();
             }
+            0x49 => {}
             // SDMA source segment: bits 4-7 ignored
             0x4C => self.ports[0x4C] = value & 0x0F,
             0x4D => {}
             // SDMA counter segment: bits 4-7 ignored
             0x50 => self.ports[0x50] = value & 0x0F,
             0x51 => {}
+            0x52 => self.ports[0x52] = value,
+            0x53..=0x5F => {}
+            0x61 | 0x63 => {}
             // HW_FLAGS / system control. The real BIOS finishes by running a
             // tiny WRAM trampoline that reads 0xA0, increments it, writes it
             // back, and jumps to the cartridge reset vector. Treat writes with
@@ -887,7 +956,17 @@ impl MemoryBus for Bus {
             0x69 if self.model.is_color() => self.write_hypervoice_data_latch(value),
             0x6A if self.model.is_color() => self.ports[0x6A] = value,
             0x6B if self.model.is_color() => self.ports[0x6B] = value & 0x6F,
-            0x64..=0x6B => {} // mono: HyperVoice absent
+            0x64..=0x7F => {} // mono/unused HyperVoice-adjacent holes
+            0x81 | 0x83 | 0x85 | 0x87 => self.ports[port as usize] = value & 0x07,
+            0x8D => self.ports[0x8D] = value & 0x1F,
+            0x8E => self.ports[0x8E] = value & 0x17,
+            0x90 => self.ports[0x90] = value & 0xEF,
+            0x91 => self.ports[0x91] = value & 0x8F,
+            0x92 | 0x93 => {}
+            0x94 => self.ports[0x94] = value & 0x0F,
+            0x9F => {}
+            0xA1 => {}
+            0xA2 | 0xA3 => self.ports[port as usize] = value & 0x0F,
             // Built-in speaker main volume. WSdev documents only the low two
             // bits as meaningful; the APU applies it to the speaker path only.
             0x9E => self.ports[0x9E] = value & 0x03,
@@ -916,10 +995,11 @@ impl MemoryBus for Bus {
             }
             // Timer counters are read-only
             0xA8..=0xAB => {}
-            // INT_ENABLE: VBLANK (bit 6) always forced on
-            0xB2 => self.ports[0xB2] = value | (1 << IrqSource::VBlank as u8),
-            // SERIAL_STATUS is read-only
-            0xB3 => {}
+            0xAD..=0xAF => {}
+            0xB0 => self.ports[0xB0] = value & 0xF8,
+            0xB1 => {}
+            0xB2 => self.ports[0xB2] = value,
+            0xB3 => self.ports[0xB3] = value & 0xC4,
             // INT_CAUSE is read-only (clear via INT_CAUSE_CLEAR)
             0xB4 => {}
             // KEYPAD: only the group-selector nibble is writable

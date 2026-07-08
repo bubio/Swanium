@@ -95,6 +95,7 @@ fn frame_leaves_background_clear_where_no_tile_pixel() {
 #[test]
 fn frame_signals_vblank_interrupt() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
     render_frame(&mut bus);
     let cause = bus.read_io(0xB4);
     assert_ne!(cause & (1 << IrqSource::VBlank as u8), 0);

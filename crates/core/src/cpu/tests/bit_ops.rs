@@ -178,7 +178,7 @@ fn loop_decrements_cx_and_branches_while_nonzero() {
     let (cpu, cycles, _) = run_with(|cpu| cpu.regs.cx = 0x0002, &[0xE2, 0xFE]);
     assert_eq!(cpu.regs.cx, 1);
     assert_eq!(cpu.regs.ip, 0);
-    assert_eq!(cycles, 5);
+    assert_eq!(cycles, 6);
 }
 
 #[test]

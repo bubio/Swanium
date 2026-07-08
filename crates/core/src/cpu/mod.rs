@@ -321,8 +321,9 @@ impl Cpu {
             0x70..=0x7F => {
                 let rel = self.fetch_u8(bus) as i8;
                 if self.condition(opcode) {
-                    self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    4
+                    let target = self.regs.ip.wrapping_add(rel as u16);
+                    self.regs.ip = target;
+                    5 + u32::from(target & 1 != 0)
                 } else {
                     1
                 }
@@ -350,7 +351,7 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 && !self.flags.zero {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    6
+                    7
                 } else {
                     3
                 }
@@ -361,7 +362,7 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 && self.flags.zero {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    6
+                    7
                 } else {
                     3
                 }
@@ -372,7 +373,7 @@ impl Cpu {
                 self.regs.cx = self.regs.cx.wrapping_sub(1);
                 if self.regs.cx != 0 {
                     self.regs.ip = self.regs.ip.wrapping_add(rel as u16);
-                    5
+                    6
                 } else {
                     2
                 }
@@ -663,7 +664,7 @@ impl Cpu {
             }
 
             // Misc / flag instructions
-            0x90 => 3,
+            0x90 => 1,
             0xF4 => {
                 self.halted = true;
                 9
@@ -1193,7 +1194,7 @@ impl Cpu {
                 let port = self.fetch_u8(bus);
                 let v = bus.read_io(port);
                 self.regs.set_reg8(0, v);
-                6
+                7
             }
             0xE5 => {
                 // IN AX, imm8
@@ -1201,14 +1202,14 @@ impl Cpu {
                 let lo = bus.read_io(port) as u16;
                 let hi = bus.read_io(port.wrapping_add(1)) as u16;
                 self.regs.ax = lo | (hi << 8);
-                6
+                7
             }
             0xE6 => {
                 // OUT imm8, AL
                 let port = self.fetch_u8(bus);
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                6
+                7
             }
             0xE7 => {
                 // OUT imm8, AX
@@ -1216,14 +1217,14 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                6
+                7
             }
             0xEC => {
                 // IN AL, DX
                 let port = self.regs.dx as u8;
                 let v = bus.read_io(port);
                 self.regs.set_reg8(0, v);
-                6
+                5
             }
             0xED => {
                 // IN AX, DX
@@ -1231,14 +1232,14 @@ impl Cpu {
                 let lo = bus.read_io(port) as u16;
                 let hi = bus.read_io(port.wrapping_add(1)) as u16;
                 self.regs.ax = lo | (hi << 8);
-                6
+                5
             }
             0xEE => {
                 // OUT DX, AL
                 let port = self.regs.dx as u8;
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                6
+                5
             }
             0xEF => {
                 // OUT DX, AX
@@ -1246,7 +1247,7 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                6
+                5
             }
 
             // ── 80186 / V30 instruction-set additions ────────────────────────

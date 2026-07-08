@@ -100,6 +100,13 @@ fn color_bus() -> Bus {
     Bus::from_rom(rom_with_color_flag(true))
 }
 
+fn color_video_bus(rom: Vec<u8>) -> Bus {
+    let mut bus = Bus::new(rom);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0x60, 0x80);
+    bus
+}
+
 #[test]
 fn hw_flags_port_a0_reports_color_hardware() {
     // Color/Crystal read 0x87 (bit0 = colour), mono reads 0x86. Games poll this
@@ -150,13 +157,14 @@ fn internal_eeprom_write_then_read_round_trips() {
 
 #[test]
 fn color_retains_hypervoice_register_writes() {
-    // On Color the HyperVoice registers (0x69 data, 0x6A control, 0x6B routing)
-    // are writable; 0x6B is masked to 0x6F like Mednafen's `HVoiceChanCtrl`.
+    // On Color the HyperVoice control/routing registers are writable; 0x6B is
+    // masked to 0x6F like Mednafen's `HVoiceChanCtrl`. The PCM data latch feeds
+    // the audio path but reads back as 0.
     let mut bus = color_bus();
     bus.write_io(0x69, 0x40);
     bus.write_io(0x6A, 0x8A);
     bus.write_io(0x6B, 0xFF);
-    assert_eq!(bus.read_io(0x69), 0x40);
+    assert_eq!(bus.read_io(0x69), 0x00);
     assert_eq!(bus.read_io(0x6A), 0x8A);
     assert_eq!(bus.read_io(0x6B), 0x6F);
 }
@@ -167,8 +175,8 @@ fn color_hypervoice_direct_register_writes_clear_8_bit_latch() {
     bus.write_io(0x69, 0x40);
     bus.write_io(0x64, 0x34);
     bus.write_io(0x65, 0x12);
-    assert_eq!(bus.read_io(0x64), 0x34);
-    assert_eq!(bus.read_io(0x65), 0x12);
+    assert_eq!(bus.read_io(0x64), 0x00);
+    assert_eq!(bus.read_io(0x65), 0x00);
     assert_eq!(bus.read_io(0x69), 0x00);
 }
 
@@ -180,7 +188,7 @@ fn color_hypervoice_8_bit_latch_writes_clear_direct_registers() {
     bus.write_io(0x69, 0x40);
     assert_eq!(bus.read_io(0x64), 0x00);
     assert_eq!(bus.read_io(0x65), 0x00);
-    assert_eq!(bus.read_io(0x69), 0x40);
+    assert_eq!(bus.read_io(0x69), 0x00);
 }
 
 #[test]
@@ -329,21 +337,24 @@ fn writes_to_rom_are_silently_ignored() {
 #[test]
 fn io_port_raw_write_reads_back() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Port 0x00 (DISP_CTRL) – no special handling, raw R/W
+    // Port 0x00 (DISP_CTRL) exposes only the low layer/window bits.
     bus.write_io(0x00, 0x42);
-    assert_eq!(bus.read_io(0x00), 0x42);
+    assert_eq!(bus.read_io(0x00), 0x02);
 }
 
 #[test]
-fn int_enable_vblank_bit_is_always_set() {
+fn int_enable_preserves_written_bits() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Writing with bit 6 clear should still return bit 6 set on read
     bus.write_io(0xB2, 0b0000_0001);
-    assert_eq!(bus.read_io(0xB2) & (1 << 6), 1 << 6);
+    assert_eq!(bus.read_io(0xB2), 0b0000_0001);
 }
 
 fn bus_with_vblank_and_hblank_requested_then_vblank_cleared() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(
+        0xB2,
+        (1 << IrqSource::VBlank as u8) | (1 << IrqSource::HBlankTimer as u8),
+    );
     bus.request_irq(IrqSource::VBlank);
     bus.request_irq(IrqSource::HBlankTimer);
     bus.write_io(0xB6, 1 << IrqSource::VBlank as u8);
@@ -365,7 +376,7 @@ fn int_cause_clear_leaves_other_bits_intact() {
 }
 
 fn setup_gdma_ctrl_read() -> (u8, Bus) {
-    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    let mut bus = color_video_bus(vec![0u8; 0x10000]);
     // 0xC0 = start (bit 7) + decrement direction (bit 6). With length 0 the
     // burst auto-completes instantly, so the busy bit (7) is already clear by
     // the time the CPU reads the register back; only the direction bit remains.
@@ -397,12 +408,12 @@ fn pending_irq_is_none_at_startup() {
 #[test]
 fn vblank_irq_not_pending_before_on_vblank() {
     let bus = Bus::new(vec![0u8; 0x10000]);
-    // VBlank is enabled but not yet pending
     assert!(bus.pending_irq().is_none());
 }
 
 fn bus_after_vblank() -> Bus {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
     bus.on_vblank();
     bus
 }
@@ -446,6 +457,7 @@ fn int_base_offsets_vector_number() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     // Set INT_BASE to 8 via raw port write (port 0xB0)
     bus.write_io(0xB0, 8);
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
     bus.on_vblank();
     // VBlank is bit 6 → vector = 8 + 6 = 14
     let vector = bus.pending_irq().unwrap();
@@ -515,6 +527,32 @@ fn hblank_timer_is_not_pending_after_second_hblank() {
 fn hblank_timer_fires_after_period_hblanks() {
     let bus = bus_after_hblank_3_of_period_3();
     assert!(bus.pending_irq().is_some());
+}
+
+#[test]
+fn hblank_timer_counter_one_latches_even_when_timer_disabled() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 1 << IrqSource::HBlankTimer as u8);
+    bus.write_io(0xA2, 0x00);
+    bus.write_io(0xA4, 1);
+    bus.write_io(0xA5, 0);
+    bus.on_hblank();
+    assert_eq!(bus.pending_irq(), Some(IrqSource::HBlankTimer as u8));
+    assert_eq!(bus.read_io(0xA8), 0);
+    assert_eq!(bus.read_io(0xA9), 0);
+}
+
+#[test]
+fn hblank_timer_above_one_does_not_run_when_disabled() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 1 << IrqSource::HBlankTimer as u8);
+    bus.write_io(0xA2, 0x00);
+    bus.write_io(0xA4, 2);
+    bus.write_io(0xA5, 0);
+    bus.on_hblank();
+    assert!(bus.pending_irq().is_none());
+    assert_eq!(bus.read_io(0xA8), 2);
+    assert_eq!(bus.read_io(0xA9), 0);
 }
 
 #[test]
@@ -605,7 +643,7 @@ fn setup_gdma_rom_to_wram() -> Bus {
     rom[0xFFF1] = 0xBB;
     rom[0xFFF2] = 0xCC;
     rom[0xFFF3] = 0xDD;
-    let mut bus = Bus::new(rom);
+    let mut bus = color_video_bus(rom);
     bus.write_io(0xB2, 0xFF);
     bus.write_io(0x40, 0xF0); // src offset low (bit 0 forced 0 → 0xF0)
     bus.write_io(0x41, 0xFF); // src offset high
@@ -670,7 +708,7 @@ fn gdma_leaves_destination_unchanged_without_enable_bit() {
 // ── SDMA ─────────────────────────────────────────────────────────────────────
 
 fn color_bus_with_sdma_voice() -> Bus {
-    let mut bus = color_bus();
+    let mut bus = color_video_bus(rom_with_color_flag(true));
     bus.write_io(0x91, 0x80); // headphone path: keep voice tests independent of speaker volume
     bus.write_io(0x90, 0x20); // channel 2 voice mode
     bus.write_io(0x94, 0x05); // full left + full right voice routing
@@ -716,7 +754,7 @@ fn sdma_ignored_on_mono_hardware() {
     arm_sdma(&mut bus, 0x0010, 1, 0x83);
     bus.tick_apu(128);
     assert_eq!(bus.read_io(0x89), 0x00);
-    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
 }
 
 #[test]
@@ -763,7 +801,7 @@ fn sdma_repeat_reloads_source_and_counter_without_clearing_enable() {
     bus.write_u8(0x0010, 0xC8);
     arm_sdma(&mut bus, 0x0010, 1, 0x8B);
     bus.tick_apu(128);
-    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
     assert_eq!(bus.read_io(0x4A), 0x10);
     assert_eq!(bus.read_io(0x4E), 0x01);
 }
@@ -776,13 +814,13 @@ fn sdma_hold_outputs_zero_without_advancing_counter() {
     bus.tick_apu(128);
     assert_eq!(bus.read_io(0x89), 0x00);
     assert_eq!(bus.read_io(0x4E), 0x01);
-    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
 }
 
 #[test]
 fn gdma_clears_enable_bit_after_transfer() {
     let rom = vec![0xFFu8; 0x10000];
-    let mut bus = Bus::new(rom);
+    let mut bus = color_video_bus(rom);
     bus.write_io(0x44, 0x00);
     bus.write_io(0x45, 0x00);
     bus.write_io(0x46, 2);
@@ -803,7 +841,7 @@ fn back_to_back_gdma_arms_both_complete() {
     let mut rom = vec![0u8; 0x10000];
     rom[0xFFF0] = 0x11;
     rom[0xFFF1] = 0x22;
-    let mut bus = Bus::new(rom);
+    let mut bus = color_video_bus(rom);
     bus.write_io(0x42, 0x0F); // src segment 0xF (→ ROM at 0xFxxxx)
 
     // First transfer: 2 bytes from 0xFFFF0 → WRAM 0x0010, armed with no
@@ -976,19 +1014,19 @@ fn into_does_not_trigger_when_overflow_clear() {
 #[test]
 fn in_out_imm_port_reads_and_writes_io() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
-    // Port 0xA1 is a plain read/write shadow (0xA0 is the computed HW_FLAGS port).
-    // Code: OUT 0xA1, AL  (0xE6 0xA1); IN AL, 0xA1  (0xE4 0xA1)
+    // Port 0x10 is a plain read/write display window coordinate.
+    // Code: OUT 0x10, AL  (0xE6 0x10); IN AL, 0x10  (0xE4 0x10)
     bus.wram[0x0100] = 0xE6;
-    bus.wram[0x0101] = 0xA1;
+    bus.wram[0x0101] = 0x10;
     bus.wram[0x0102] = 0xE4;
-    bus.wram[0x0103] = 0xA1;
+    bus.wram[0x0103] = 0x10;
 
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0100);
     cpu.regs.set_reg8(0, 0x55); // AL = 0x55
-    cpu.step(&mut bus); // OUT 0xA1, AL
+    cpu.step(&mut bus); // OUT 0x10, AL
     cpu.regs.set_reg8(0, 0x00); // clear AL
-    cpu.step(&mut bus); // IN AL, 0xA1
+    cpu.step(&mut bus); // IN AL, 0x10
     assert_eq!(cpu.regs.get_reg8(0), 0x55);
 }
 
@@ -1001,7 +1039,7 @@ fn in_out_dx_uses_dx_as_port_number() {
 
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0100);
-    cpu.regs.dx = 0x00A1; // port 0xA1
+    cpu.regs.dx = 0x0010; // port 0x10
     cpu.regs.set_reg8(0, 0x77); // AL = 0x77
     cpu.step(&mut bus); // OUT DX, AL
     cpu.regs.set_reg8(0, 0x00);
@@ -1019,6 +1057,7 @@ fn setup_handle_irq() -> (Cpu, Bus) {
     let mut cpu = Cpu::new();
     cpu.reset(0x0000, 0x0200);
     cpu.flags.interrupt = true;
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
     bus.on_vblank();
     let vector = bus.pending_irq().unwrap();
     cpu.handle_irq(&mut bus, vector);

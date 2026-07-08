@@ -66,12 +66,22 @@ after each instruction. The remaining gap is per-clock bus/PPU/APU interaction:
 instruction costs are not decomposed into fetch, memory access, I/O, and prefetch
 events.
 
+Milestone 13 added two public precision oracles. FluBBaOfWard/WSTimingTest page 0
+is decoded from the background tile map's Pass column and passes locally. That
+evidence corrected baseline `NOP`, port I/O, taken branch, odd-branch-target,
+and `LOOP` timing. FluBBaOfWard/WSHWTest `Test All` also passes locally, pinning
+interrupt latch semantics, the HBlank timer counter-1 latch behavior, color-mode
+DMA visibility, and many I/O register masks. The rest of WSTimingTest is still
+staged work, because later pages cover many opcode groups and REP/string cases
+that should be enabled page by page with source-confirmed row counts and
+tolerance notes.
+
 Expected scope:
 
 - Decompose timing only where software-visible behavior requires it, rather than
   rewriting the CPU for theoretical purity.
-- Audit taken branches, REP/string I/O, interrupt acknowledge, and DMA stalls
-  against the V30MZ timing notes.
+- Continue enabling WSTimingTest pages, then audit REP/string I/O, interrupt
+  acknowledge, and DMA stalls against the V30MZ timing notes.
 - Keep the frame-boundary `System::run_frame` API stable for RetroAchievements
   compatibility.
 
