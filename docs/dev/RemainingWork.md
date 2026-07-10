@@ -52,6 +52,14 @@ Instruction-total timing is now guarded by WSTimingTest pages 0-28. The
 remaining risk is lower-level timing decomposition: fetch, memory access, I/O,
 prefetch, DMA stall, and exact interaction with PPU/APU clocks.
 
+New source-confirmed ws-test-suite candidates expose remaining CPU/interrupt
+work and should be investigated before being promoted to passing oracles:
+
+- `mono/cpu/prefixes.ws`: final `REP:ESx8:MOVSB(IRQ)` marker fails locally.
+- `mono/cpu/interrupt_timing.ws`: IRQ/BRK delay cases fail locally after the
+  initial divide-by-zero checks.
+- `mono/soc/interrupts.ws`: serial IRQ/status-vector marker checks fail locally.
+
 Scope:
 
 - Keep `docs/dev/V30MZ-Timing.md` as the timing ledger for instruction-level

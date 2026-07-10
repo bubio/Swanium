@@ -31,6 +31,22 @@ const WSC_CPU_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WSC_CPU_TEST_IS_TESTING_ADDR: u32 = 0x0136;
 const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strlen.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strchr.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_MEMSET_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/memset.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_MEMCMP_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/memcmp.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_MEMCPY_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/memcpy.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_MEMCCPY_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/memccpy.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_SETJMP_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/setjmp.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_INITFINI_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/initfini.ws";
 const WS_TEST_SUITE_MAX_FRAMES: usize = 120;
 const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
 const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
@@ -86,6 +102,110 @@ const WS_TIMING_TEST_PAGE_ROWS: &[(usize, &[usize])] = &[
     (26, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
     (27, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
     (28, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+];
+
+struct WsTestSuitePassFailCase {
+    name: &'static str,
+    env_var: &'static str,
+    default_path: &'static str,
+    model: HardwareModel,
+    marker_ranges: &'static [(usize, usize)],
+    source_protocol: &'static str,
+}
+
+const WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
+const WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES: &[(usize, usize)] = &[(0, 1)];
+const WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES: &[(usize, usize)] = &[(0, 4)];
+const WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES: &[(usize, usize)] = &[(0, 6), (1, 6)];
+const WS_TEST_SUITE_LIBC_MEMCMP_MARKER_RANGES: &[(usize, usize)] = &[(0, 4), (1, 4)];
+const WS_TEST_SUITE_LIBC_MEMCPY_MARKER_RANGES: &[(usize, usize)] =
+    &[(0, 5), (1, 5), (2, 5), (3, 5)];
+const WS_TEST_SUITE_LIBC_MEMCCPY_MARKER_RANGES: &[(usize, usize)] = &[(0, 7)];
+const WS_TEST_SUITE_LIBC_SETJMP_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
+const WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES: &[(usize, usize)] = &[(0, 0)];
+
+const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
+    WsTestSuitePassFailCase {
+        name: "mono/cpu/80186_quirks.ws",
+        env_var: "WS_TEST_SUITE_80186_QUIRKS_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES,
+        source_protocol: "`src/mono/cpu/80186_quirks/main.c` calls `draw_pass_fail` \
+            three times at rows 0-2 with offset 0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/strlen.ws",
+        env_var: "WS_TEST_SUITE_LIBC_STRLEN_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/strlen/main.c` uses \
+            `draw_pass_fail` on row 0 with offsets 1-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/strchr.ws",
+        env_var: "WS_TEST_SUITE_LIBC_STRCHR_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/strchr/main.c` uses \
+            `draw_pass_fail` on row 0 with offsets 4-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/memset.ws",
+        env_var: "WS_TEST_SUITE_LIBC_MEMSET_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMSET_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/memset/main.c` uses \
+            `draw_pass_fail` on rows 0-1 with offsets 6-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/memcmp.ws",
+        env_var: "WS_TEST_SUITE_LIBC_MEMCMP_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCMP_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_MEMCMP_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/memcmp/main.c` uses \
+            `draw_pass_fail` on rows 0-1 with offsets 4-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/memcpy.ws",
+        env_var: "WS_TEST_SUITE_LIBC_MEMCPY_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCPY_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_MEMCPY_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/memcpy/main.c` uses \
+            `draw_pass_fail` on rows 0-3 with offsets 5-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/memccpy.ws",
+        env_var: "WS_TEST_SUITE_LIBC_MEMCCPY_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCCPY_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_MEMCCPY_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/memccpy/main.c` uses \
+            `draw_pass_fail` on row 0 with offsets 7-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/setjmp.ws",
+        env_var: "WS_TEST_SUITE_LIBC_SETJMP_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_SETJMP_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_SETJMP_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/setjmp/main.c` writes pass \
+            markers for setjmp return values 0, 1, and 2 on rows 0-2.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/initfini.ws",
+        env_var: "WS_TEST_SUITE_LIBC_INITFINI_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_INITFINI_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/initfini/main.c` uses \
+            `draw_pass_fail` on row 0 with offset 0.",
+    },
 ];
 
 fn rom_path_from_env_or_default(env_var: &str, default_path: &str) -> PathBuf {
@@ -251,6 +371,71 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
     (system, latest_text)
 }
 
+fn read_ws_test_suite_markers(system: &System, marker_ranges: &[(usize, usize)]) -> Vec<u8> {
+    marker_ranges
+        .iter()
+        .flat_map(|&(row, max_offset)| {
+            (0..=max_offset).rev().map(move |offset| {
+                let x = 27 - offset;
+                let addr = WS_TEST_SUITE_SCREEN_1
+                    + row as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES
+                    + x as u32 * 2;
+                system.read_memory_at(addr)
+            })
+        })
+        .collect()
+}
+
+fn run_ws_test_suite_pass_fail_case(case: &WsTestSuitePassFailCase) {
+    let path = rom_path_from_env_or_default(case.env_var, case.default_path);
+    let rom = read_rom(&path, case.env_var);
+    let mut system = System::from_rom(rom);
+    system.set_model(case.model);
+
+    let marker_count = case
+        .marker_ranges
+        .iter()
+        .map(|&(_, max_offset)| max_offset + 1)
+        .sum();
+    let mut markers = vec![0u8; marker_count];
+    for _ in 0..WS_TEST_SUITE_MAX_FRAMES {
+        system.run_frame(KeyState::NONE);
+        markers = read_ws_test_suite_markers(&system, case.marker_ranges);
+        if markers
+            .iter()
+            .all(|&tile| tile == WS_TEST_SUITE_PASS_TILE || tile == WS_TEST_SUITE_FAIL_TILE)
+        {
+            break;
+        }
+    }
+
+    let rows = case
+        .marker_ranges
+        .iter()
+        .map(|&(row, _)| row + 1)
+        .max()
+        .unwrap_or(1);
+    let visible_text = tilemap_text(&system, WS_TEST_SUITE_SCREEN_1, rows);
+    assert!(
+        !markers.contains(&WS_TEST_SUITE_FAIL_TILE),
+        "ws-test-suite {} reported failure markers {:?}; source protocol: {}; visible text:\n{}",
+        case.name,
+        markers,
+        case.source_protocol,
+        visible_text
+    );
+    assert!(
+        markers.iter().all(|&tile| tile == WS_TEST_SUITE_PASS_TILE),
+        "ws-test-suite {} did not produce all pass markers within {} frames; \
+         markers={:?}; source protocol: {}; visible text:\n{}",
+        case.name,
+        WS_TEST_SUITE_MAX_FRAMES,
+        markers,
+        case.source_protocol,
+        visible_text
+    );
+}
+
 // ── WSCPUTest (FluBBaOfWard) ─────────────────────────────────────────────────
 
 /// Runs the WSCpuTest ROM (FluBBaOfWard/WSCpuTest) and checks for a passing
@@ -294,69 +479,22 @@ fn wscputest_all_tests_pass() {
 
 // ── ws-test-suite (asiekierka) ────────────────────────────────────────────────
 
-/// Runs a single ROM from the ws-test-suite (asiekierka/ws-test-suite).
+/// Runs source-confirmed pass/fail marker ROMs from ws-test-suite
+/// (asiekierka/ws-test-suite).
 ///
-/// The first decoded oracle is `mono/cpu/80186_quirks.ws`, built from
-/// asiekierka/ws-test-suite `src/mono/cpu/80186_quirks`. That source defines
-/// `screen_1` in WRAM section `.iramcx_1800`; `draw_pass_fail(y, offset, result)`
-/// writes tile 5 for pass and tile 6 for fail at `(x=27-offset, y)`. The test
-/// has three checks, all at offset 0, so rows 0–2 at tile-map x=27 must be tile
-/// 5 and must not be tile 6.
+/// # ROM output format
 ///
-/// Place it at
-/// `/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws`
-/// or set `WS_TEST_SUITE_ROM` to that ROM path.
-///
-/// Run with: `WS_TEST_SUITE_ROM=/path/to/test.ws cargo test -p swanium-core
-///   --test public_roms -- --include-ignored ws_test_suite`
+/// All cases here use the upstream `common/test/pass_fail.h` protocol. Their
+/// source defines `screen_1` at WRAM `0x1800`; `draw_pass_fail(y, offset,
+/// result)` writes tile 5 for pass and tile 6 for fail at `(x=27-offset, y)`.
+/// Unknown ws-test-suite ROM protocols are intentionally not decoded by this
+/// test.
 #[test]
-#[ignore = "requires ws-test-suite mono/cpu/80186_quirks.ws; default path is /Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws"]
-fn ws_test_suite_rom_passes() {
-    let path =
-        rom_path_from_env_or_default("WS_TEST_SUITE_ROM", DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM);
-    let path_text = path.to_string_lossy();
-    assert!(
-        path_text.ends_with("80186_quirks.ws"),
-        "only ws-test-suite mono/cpu/80186_quirks.ws has a decoded oracle; got {}",
-        path.display()
-    );
-    let rom = std::fs::read(&path).unwrap_or_else(|e| {
-        panic!(
-            "cannot read {}: {e}; set WS_TEST_SUITE_ROM=<rom path> or place the ROM at {}",
-            path.display(),
-            DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM
-        )
-    });
-
-    let mut system = System::from_rom(rom);
-    system.set_model(HardwareModel::Mono);
-
-    let mut markers = [0u8; 3];
-    for _ in 0..WS_TEST_SUITE_MAX_FRAMES {
-        system.run_frame(KeyState::NONE);
-        for (row, marker) in markers.iter_mut().enumerate() {
-            let addr =
-                WS_TEST_SUITE_SCREEN_1 + row as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES + 27 * 2;
-            *marker = system.read_memory_at(addr);
-        }
-        if markers
-            .iter()
-            .all(|&tile| tile == WS_TEST_SUITE_PASS_TILE || tile == WS_TEST_SUITE_FAIL_TILE)
-        {
-            break;
-        }
+#[ignore = "requires ws-test-suite ROMs under /Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite"]
+fn ws_test_suite_pass_fail_roms_pass() {
+    for case in WS_TEST_SUITE_PASS_FAIL_CASES {
+        run_ws_test_suite_pass_fail_case(case);
     }
-
-    let visible_text = tilemap_text(&system, WS_TEST_SUITE_SCREEN_1, 4);
-    assert!(
-        !markers.contains(&WS_TEST_SUITE_FAIL_TILE),
-        "ws-test-suite 80186_quirks reported failure markers {markers:?}; visible text:\n{visible_text}"
-    );
-    assert_eq!(
-        markers, [WS_TEST_SUITE_PASS_TILE; 3],
-        "ws-test-suite 80186_quirks did not produce all pass markers within \
-         {WS_TEST_SUITE_MAX_FRAMES} frames; markers={markers:?}; visible text:\n{visible_text}"
-    );
 }
 
 // ── WSTimingTest (FluBBaOfWard) ──────────────────────────────────────────────

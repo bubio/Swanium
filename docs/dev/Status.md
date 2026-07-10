@@ -20,7 +20,8 @@ start with `docs/dev/README.md`.
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
 boot-state fix that makes real WSC ROMs render in colour). The workspace has 631 passing
-tests (+4 opt-in, env-gated public-ROM tests marked `ignored`).
+tests (+4 opt-in, env-gated public-ROM tests marked `ignored`; one ws-test-suite
+ignored test covers multiple source-confirmed ROMs).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
 
@@ -65,13 +66,15 @@ WRAM trampoline can expose the cartridge reset vector before jumping to `FFFF:00
 ### CPU test ROMs — Phase 3 (`tests/cpu_test_roms.rs`)
 Self-built machine-code integration harness (`run_code`) covering arithmetic, control flow,
 stack, string instructions, HLT. Public WSCPUTest / ws-test-suite ROMs are opt-in and
-env-gated in `tests/public_roms.rs` (3 `ignored`). The WSCPUTest path is verified against
+env-gated in `tests/public_roms.rs`. The WSCPUTest path is verified against
 FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::run_frame`,
 injects A to start the default `Test All` menu item, and decodes the background tile map for
-`Ok!` / `Failed!` output. The ws-test-suite path now has one source-confirmed decoded oracle:
-`mono/cpu/80186_quirks.ws` from asiekierka/ws-test-suite, whose pass/fail markers are tile
-5/6 in `screen_1` at WRAM `0x1800`. Unknown ws-test-suite ROMs are rejected instead of using
-the former placeholder HLT + `WRAM[0x0000] == 0` convention.
+`Ok!` / `Failed!` output. The ws-test-suite path now has source-confirmed decoded oracles for
+`mono/cpu/80186_quirks.ws` plus `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini}.ws`.
+These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
+`screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Unknown
+ws-test-suite ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0`
+convention.
 
 Milestone 13 added FluBBaOfWard/WSTimingTest v0.4.0 as a public CPU timing oracle
 covering pages 0-28. The source-confirmed decoder reads the background tile map at
