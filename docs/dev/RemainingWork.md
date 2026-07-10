@@ -47,6 +47,22 @@ Definition of done:
 - The focused ignored test passes locally with `--include-ignored`.
 - `Status.md` and `CompatibilityMatrix.md` record the new evidence.
 
+Triage notes:
+
+- 2026-07-10: Remaining local asiekierka/ws-test-suite ROMs with
+  source-confirmed `pass_fail.h` marker protocols are not yet passing oracles:
+  `mono/sound/quirks.ws` exposes APU output-port/counter/noise failures, and
+  `color/dma/gdma_timing.wsc` exposes GDMA timing/cycle-count failures. These
+  should be promoted only together with the corresponding emulation fixes and
+  focused validation.
+- 2026-07-10: `mono/eeprom/internal.ws` was promoted after fixing console
+  IEEPROM command-width, protected-range, and DONE-bit behavior; the evidence is
+  recorded in `CompatibilityMatrix.md`.
+- 2026-07-10: `wonderful/libc/sbrk.ws`,
+  `wonderful/benchmark/dma.ws`, and the `tools/*` ROMs inspected locally do not
+  expose a pass/fail protocol suitable for deterministic automation under the
+  current oracle rules.
+
 ## P1 - CPU and bus timing only where visible
 
 Instruction-total timing is now guarded by WSTimingTest pages 0-28. The

@@ -74,7 +74,7 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
 `mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
 `mono/display/sprite_scanline_limit.ws`,
-`mono/eeprom/{cartridge_1kbit,cartridge_16kbit}.ws`,
+`mono/eeprom/{cartridge_1kbit,cartridge_16kbit,internal}.ws`,
 `color/display/tile_screen_extended_range.wsc`,
 `color/dma/alignment_access.wsc`, `color/dma/sound_dma.wsc`,
 and
@@ -203,7 +203,11 @@ status, absent SRAM open bus, and Bandai 2001 control-port DONE-bit behavior.
 Console internal EEPROM (`IEEPROM`, ports `0xBA`–`0xBE`) is a different device from cartridge
 EEPROM. It is used by the BIOS for console profile/configuration data and is not game save media.
 Swanium initializes it as zero-filled deterministic state at startup, matching NewOswan's
-newly-created `*_ieeprom.bin` behavior.
+newly-created `*_ieeprom.bin` behavior. The ws-test-suite `mono/eeprom/internal.ws`
+oracle pins shared mono/Color command compatibility (6-bit mono-compatible and
+10-bit Color command widths), erase-via-write, write lock/unlock, invalid
+commands, the protected byte range starting at `0x60`, and `0xBE` DONE-bit
+readback delay.
 
 ### System / keypad — Phase 7 core (`system.rs`, `keypad.rs`)
 `System { cpu, bus }` owns the machine and exposes frame-boundary `run_frame(keys)`

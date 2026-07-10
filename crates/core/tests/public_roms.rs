@@ -50,6 +50,8 @@ const DEFAULT_WS_TEST_SUITE_EEPROM_CARTRIDGE_1KBIT_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/eeprom/cartridge_1kbit.ws";
 const DEFAULT_WS_TEST_SUITE_EEPROM_CARTRIDGE_16KBIT_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/eeprom/cartridge_16kbit.ws";
+const DEFAULT_WS_TEST_SUITE_EEPROM_INTERNAL_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/eeprom/internal.ws";
 const DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/alignment_access.wsc";
 const DEFAULT_WS_TEST_SUITE_SOUND_DMA_ROM: &str =
@@ -245,6 +247,35 @@ const WS_TEST_SUITE_EEPROM_CARTRIDGE_MARKER_POSITIONS: &[(usize, usize)] = &[
     (10, 3),
     (10, 4),
 ];
+const WS_TEST_SUITE_EEPROM_INTERNAL_MARKER_POSITIONS: &[(usize, usize)] = &[
+    (1, 1),
+    (1, 0),
+    (2, 1),
+    (2, 0),
+    (2, 3),
+    (3, 1),
+    (3, 0),
+    (3, 3),
+    (4, 0),
+    (5, 1),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (8, 1),
+    (8, 2),
+    (8, 3),
+    (9, 1),
+    (9, 0),
+    (10, 1),
+    (10, 0),
+    (11, 0),
+    (12, 0),
+    (13, 0),
+    (13, 1),
+    (13, 2),
+    (13, 3),
+];
 const WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES: &[(usize, usize)] =
     &[(0, 2), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)];
 const WS_TEST_SUITE_SOUND_DMA_MARKER_RANGES: &[(usize, usize)] = &[
@@ -353,6 +384,18 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
             `src/mono/eeprom/internal/main.c` with a 10-bit cartridge EEPROM \
             handle. Rows 1-8 and 10 use `draw_pass_fail`; row 9 prints SRAM \
             open-bus text without a pass/fail marker.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/eeprom/internal.ws",
+        env_var: "WS_TEST_SUITE_EEPROM_INTERNAL_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_EEPROM_INTERNAL_ROM,
+        model: HardwareModel::Mono,
+        markers: WsTestSuiteMarkers::Positions(WS_TEST_SUITE_EEPROM_INTERNAL_MARKER_POSITIONS),
+        source_protocol: "`src/mono/eeprom/internal/main.c` uses the internal \
+            EEPROM handle. Rows 1-8 exercise erase/write/read/lock/invalid-command \
+            behavior, row 9 checks write protect, rows 10-12 check Color-active \
+            mono-mode compatibility when reached, and row 13 checks internal \
+            EEPROM DONE-bit behavior.",
     },
     WsTestSuitePassFailCase {
         name: "color/dma/alignment_access.wsc",

@@ -133,6 +133,7 @@ fn internal_eeprom_read_reports_ready_and_returns_default_word() {
     bus.write_io(0xBC, 0x00);
     bus.write_io(0xBD, 0x18); // READ word 0 for 10-bit internal EEPROM.
     bus.write_io(0xBE, 0x10);
+    assert_eq!(bus.read_io(0xBE) & 0x01, 0x00);
     assert_eq!(bus.read_io(0xBE) & 0x01, 0x01);
     assert_eq!(bus.read_io(0xBA), 0x00);
     assert_eq!(bus.read_io(0xBB), 0x00);
@@ -151,8 +152,47 @@ fn internal_eeprom_write_then_read_round_trips() {
     bus.write_io(0xBC, 0x00);
     bus.write_io(0xBD, 0x18); // READ word 0.
     bus.write_io(0xBE, 0x10);
+    assert_eq!(bus.read_io(0xBE) & 0x01, 0x00);
+    assert_eq!(bus.read_io(0xBE) & 0x01, 0x01);
     assert_eq!(bus.read_io(0xBA), 0xEF);
     assert_eq!(bus.read_io(0xBB), 0xBE);
+}
+
+#[test]
+fn internal_eeprom_accepts_mono_width_commands_for_low_addresses() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xBA, 0x55);
+    bus.write_io(0xBB, 0xAA);
+    bus.write_io(0xBC, 0x40);
+    bus.write_io(0xBD, 0x01); // WRITE word 0 using the 6-bit mono-compatible command width.
+    bus.write_io(0xBE, 0x20);
+
+    bus.write_io(0xBC, 0x00);
+    bus.write_io(0xBD, 0x18); // READ word 0 using the 10-bit Color command width.
+    bus.write_io(0xBE, 0x10);
+    bus.read_io(0xBE);
+    bus.read_io(0xBE);
+    assert_eq!(bus.read_io(0xBA), 0x55);
+    assert_eq!(bus.read_io(0xBB), 0xAA);
+}
+
+#[test]
+fn internal_eeprom_protected_byte_range_rejects_writes() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xBA, 0x34);
+    bus.write_io(0xBB, 0x12);
+    bus.write_io(0xBC, 0x30);
+    bus.write_io(0xBD, 0x14); // WRITE byte address 0x60 / word address 0x30.
+    bus.write_io(0xBE, 0x20);
+
+    assert_eq!(bus.read_io(0xBE) & 0x80, 0x80);
+    bus.write_io(0xBC, 0x30);
+    bus.write_io(0xBD, 0x18); // READ byte address 0x60 / word address 0x30.
+    bus.write_io(0xBE, 0x10);
+    bus.read_io(0xBE);
+    bus.read_io(0xBE);
+    assert_eq!(bus.read_io(0xBA), 0x00);
+    assert_eq!(bus.read_io(0xBB), 0x00);
 }
 
 #[test]

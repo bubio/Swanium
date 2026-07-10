@@ -52,7 +52,7 @@ impl Eeprom {
         Self {
             contents,
             input: 0,
-            output: 0,
+            output: 0xFFFF,
             address_bits,
             write_enabled: true,
         }
@@ -132,6 +132,18 @@ impl Eeprom {
             return;
         }
         self.execute_addressed(byte_addr, opcode);
+    }
+
+    /// Execute a command using a temporary address width.
+    ///
+    /// Internal console EEPROM commands use the mono-width protocol when the
+    /// system is in mono-compatible mode and the wider Color protocol in Color
+    /// mode, while the backing storage remains shared.
+    pub fn execute_with_address_bits(&mut self, comm: u16, address_bits: u8) {
+        let saved = self.address_bits;
+        self.address_bits = address_bits;
+        self.execute(comm);
+        self.address_bits = saved;
     }
 
     /// Execute a word-addressed command (WRITE / READ / ERASE).

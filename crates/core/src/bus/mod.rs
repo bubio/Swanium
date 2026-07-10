@@ -81,6 +81,10 @@ pub struct Bus {
     /// Console internal EEPROM (IEEPROM), used by the real BIOS for owner
     /// settings and startup/configuration data through ports 0xBA–0xBE.
     ieeprom: Eeprom,
+    /// Internal EEPROM status timing/protect state. The IEEPROM control port is
+    /// not quite the same as cartridge EEPROM: READ clears DONE briefly before
+    /// it becomes observable as complete.
+    ieeprom_status: IeepromStatus,
     /// Shadow of all 256 I/O port registers.
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
@@ -123,6 +127,7 @@ impl Bus {
             cart: Cartridge::new(rom, Vec::new()),
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
+            ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -141,6 +146,7 @@ impl Bus {
             cart: Cartridge::new(rom, sram),
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
+            ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -164,6 +170,7 @@ impl Bus {
             cart,
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
+            ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -748,6 +755,55 @@ impl Bus {
         self.write_sdma_source(self.sdma.source);
         self.write_sdma_counter(self.sdma.counter);
     }
+
+    fn read_ieeprom_status(&mut self) -> u8 {
+        let status = self.ieeprom_status.value();
+        self.ieeprom_status.poll();
+        status
+    }
+
+    fn execute_ieeprom(&mut self, command: u16) {
+        let address_bits = ieeprom_command_address_bits(command);
+        self.ieeprom
+            .execute_with_address_bits(command, address_bits);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct IeepromStatus {
+    done: bool,
+    read_done_delay: u8,
+    protect_fault: bool,
+}
+
+impl IeepromStatus {
+    fn ready(&mut self) {
+        self.done = false;
+        self.read_done_delay = 0;
+    }
+
+    fn ready_done(&mut self) {
+        self.done = true;
+        self.read_done_delay = 0;
+    }
+
+    fn start_read(&mut self) {
+        self.done = false;
+        self.read_done_delay = 1;
+    }
+
+    fn value(&self) -> u8 {
+        0x02 | u8::from(self.done) | if self.protect_fault { 0x80 } else { 0x00 }
+    }
+
+    fn poll(&mut self) {
+        if self.read_done_delay > 0 {
+            self.read_done_delay -= 1;
+            if self.read_done_delay == 0 {
+                self.done = true;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -758,6 +814,19 @@ struct SdmaState {
     counter_shadow: u32,
     clock: u16,
     running: bool,
+}
+
+fn ieeprom_command_address_bits(command: u16) -> u8 {
+    if command & (1 << 12) != 0 {
+        10
+    } else {
+        6
+    }
+}
+
+fn command_byte_addr(command: u16) -> u16 {
+    let mask = (1 << ieeprom_command_address_bits(command)) - 1;
+    (command & mask) * 2
 }
 
 impl MemoryBus for Bus {
@@ -893,7 +962,11 @@ impl MemoryBus for Bus {
                 v
             }
             // Internal EEPROM data/command/status ports.
-            0xBA..=0xBE => self.ports[port as usize],
+            0xBA => self.ieeprom.read_data().to_le_bytes()[0],
+            0xBB => self.ieeprom.read_data().to_le_bytes()[1],
+            0xBC..=0xBD => self.ports[port as usize],
+            0xBE => self.read_ieeprom_status(),
+            0xBF => self.ports[0xBF] & 0x01,
             // Cartridge bank registers (low byte; both mappers)
             0xC0 => self.cart.linear_off,
             0xC1 => self.cart.ram_bank,
@@ -1053,31 +1126,36 @@ impl MemoryBus for Bus {
                 self.ports[0xB4] &= !value;
             }
             // Internal EEPROM: 0xBA/0xBB data latch, 0xBC/0xBD command latch,
-            // 0xBE control/status. The real BIOS polls bit0 after READ and bit1
-            // after WRITE; this synchronous model completes immediately.
+            // 0xBE control/status. Port 0xBF is retained as a low-bit shadow;
+            // the protected byte range itself is hardware-enforced.
             0xBA..=0xBD => self.ports[port as usize] = value,
             0xBE => {
-                self.ports[0xBE] = 0;
                 let command = u16::from_le_bytes([self.ports[0xBC], self.ports[0xBD]]);
                 match value {
                     0x10 => {
-                        self.ieeprom.execute(command);
-                        [self.ports[0xBA], self.ports[0xBB]] =
-                            self.ieeprom.read_data().to_le_bytes();
-                        self.ports[0xBE] = 0x01;
+                        self.execute_ieeprom(command);
+                        self.ieeprom_status.start_read();
                     }
                     0x20 => {
                         let data = u16::from_le_bytes([self.ports[0xBA], self.ports[0xBB]]);
                         self.ieeprom.write_data(data);
-                        self.ieeprom.execute(command);
-                        self.ports[0xBE] = 0x02;
+                        if command_byte_addr(command) >= 0x60 {
+                            self.ieeprom_status.protect_fault = true;
+                            self.ieeprom_status.ready_done();
+                            return;
+                        }
+                        self.execute_ieeprom(command);
+                        self.ieeprom_status.ready();
                     }
                     0x40 => {
-                        self.ieeprom.execute(command);
-                        self.ports[0xBE] = 0x03;
+                        self.execute_ieeprom(command);
+                        self.ieeprom_status.ready_done();
                     }
-                    _ => {}
+                    _ => self.ieeprom_status.ready(),
                 }
+            }
+            0xBF => {
+                self.ports[0xBF] = value & 0x01;
             }
             // Cartridge bank registers (write also updates the cart struct)
             0xC0 => {
