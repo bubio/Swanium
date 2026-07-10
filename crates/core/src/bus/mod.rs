@@ -830,7 +830,7 @@ impl MemoryBus for Bus {
             // SDMA counter segment: bits 4-7 undefined
             0x50 => self.ports[0x50] & 0x0F,
             0x51 => 0,
-            0x52 => self.ports[0x52] & 0x5F,
+            0x52 => self.ports[0x52] & 0xDF,
             0x53..=0x5F => 0,
             // Unused system-control holes.
             0x61 | 0x63 => 0,

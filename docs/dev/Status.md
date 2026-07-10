@@ -73,7 +73,7 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
 `mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
-`color/dma/alignment_access.wsc`,
+`color/dma/alignment_access.wsc`, `color/dma/sound_dma.wsc`,
 and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
 These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
@@ -109,6 +109,10 @@ The ws-test-suite display/DMA additions pin mono palette register write masks
 and GDMA source gating: SRAM sources abort, and source `0x80000` in the
 slow-ROM window aborts while port `0xA0` bit 3 (`SYSTEM_CTRL1_ROM_WAIT`) is
 set; upper linear ROM, fast-ROM, and IRAM sources still complete when allowed.
+The SDMA oracle pins 20-bit source/length masks, ROM/IRAM/SRAM source access,
+hold/repeat behavior, terminal-count zeroing, address overflow wrapping, final
+voice-latch contents, and port `0x52` readback preserving the enable bit while
+masking unused bit 5.
 The ws-test-suite RTC mapper oracle pins the generated RTC footer flag
 (`0x0C` bit 2 / flags value `0x04`), status-port ready/busy bits, command
 payload lengths for `0x10`-`0x1B`, unsupported-command timeout for `0x1C`, and

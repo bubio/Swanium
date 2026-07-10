@@ -935,7 +935,7 @@ fn sdma_repeat_reloads_source_and_counter_without_clearing_enable() {
     bus.write_u8(0x0010, 0xC8);
     arm_sdma(&mut bus, 0x0010, 1, 0x8B);
     bus.tick_apu(128);
-    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
     assert_eq!(bus.read_io(0x4A), 0x10);
     assert_eq!(bus.read_io(0x4E), 0x01);
 }
@@ -948,7 +948,7 @@ fn sdma_hold_outputs_zero_without_advancing_counter() {
     bus.tick_apu(128);
     assert_eq!(bus.read_io(0x89), 0x00);
     assert_eq!(bus.read_io(0x4E), 0x01);
-    assert_eq!(bus.read_io(0x52) & 0x80, 0x00);
+    assert_eq!(bus.read_io(0x52) & 0x80, 0x80);
 }
 
 #[test]

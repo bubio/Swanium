@@ -43,6 +43,8 @@ const DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/mono_palettes_writemask.ws";
 const DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/alignment_access.wsc";
+const DEFAULT_WS_TEST_SUITE_SOUND_DMA_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/sound_dma.wsc";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strlen.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM: &str =
@@ -203,6 +205,19 @@ const WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES: &[(usize, usize)] = &
 ];
 const WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES: &[(usize, usize)] =
     &[(0, 2), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)];
+const WS_TEST_SUITE_SOUND_DMA_MARKER_RANGES: &[(usize, usize)] = &[
+    (0, 1),
+    (1, 1),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 4),
+    (8, 4),
+    (9, 1),
+    (10, 0),
+];
 const WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES: &[(usize, usize)] = &[(0, 1)];
 const WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES: &[(usize, usize)] = &[(0, 4)];
 const WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES: &[(usize, usize)] = &[(0, 6), (1, 6)];
@@ -284,6 +299,18 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         source_protocol: "`src/color/dma/alignment_access/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 2-0, then rows 1-5 with \
             offset 0 for GDMA register masks and source-access cases.",
+    },
+    WsTestSuitePassFailCase {
+        name: "color/dma/sound_dma.wsc",
+        env_var: "WS_TEST_SUITE_SOUND_DMA_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_SOUND_DMA_ROM,
+        model: HardwareModel::Color,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_SOUND_DMA_MARKER_RANGES),
+        source_protocol: "`src/color/dma/sound_dma/main.c` uses \
+            `draw_pass_fail` for SDMA source/length high-nibble masks, ROM/IRAM/SRAM \
+            source access, hold behavior, terminal-count zeroing, address overflow, \
+            and final voice latch contents. The generated ROM has SRAM_8KB, so \
+            rows 5-6 are present.",
     },
     WsTestSuitePassFailCase {
         name: "wonderful/libc/strlen.ws",
