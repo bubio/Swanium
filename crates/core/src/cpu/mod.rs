@@ -26,6 +26,8 @@ use bit_ops::shift_op_from_reg_field;
 use bus::linear_address;
 use decode::{decode_modrm, RegMem};
 
+const LONG_REP_INTERRUPT_RETURN_CYCLE_THRESHOLD: u32 = 256;
+
 /// CPU core state. Cycle costs returned by `step` are per-instruction clock
 /// counts for the NEC V30MZ, sourced from the WonderSwan hardware reference
 /// "Sacred Tech Scroll" (perfectkiosk.net/stsws) and cross-checked against the
@@ -53,6 +55,12 @@ pub struct Cpu {
     /// Trap delivery is inhibited for this many upcoming instruction
     /// boundaries after POPF/IRET enabling TF.
     pub trap_inhibit: u8,
+    /// IP of the first prefix/opcode byte for the instruction currently being
+    /// executed. This is needed for REP-string IRQ restart semantics.
+    instruction_start_ip: u16,
+    /// Saved-IP override for the next hardware IRQ after a long REP string
+    /// instruction crosses a scanline boundary in the scanline-framed driver.
+    interrupt_return_override_ip: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,10 +167,18 @@ impl Cpu {
     /// `INT`/`INTO`/exception the wrapping opcode already reports the full cost,
     /// so it ignores this return value.
     pub fn handle_irq<B: MemoryBus>(&mut self, bus: &mut B, vector: u8) -> u32 {
+        self.handle_irq_with_saved_ip(bus, vector, self.regs.ip)
+    }
+
+    /// Dispatch an interrupt while saving `ip` as the interrupted IP.
+    pub fn handle_irq_at_ip<B: MemoryBus>(&mut self, bus: &mut B, vector: u8, ip: u16) -> u32 {
+        self.handle_irq_with_saved_ip(bus, vector, ip)
+    }
+
+    fn handle_irq_with_saved_ip<B: MemoryBus>(&mut self, bus: &mut B, vector: u8, ip: u16) -> u32 {
         let flags = self.flags.to_u16();
         self.push16(bus, flags);
         let cs = self.regs.cs;
-        let ip = self.regs.ip;
         self.push16(bus, cs);
         self.push16(bus, ip);
         self.flags.interrupt = false;
@@ -174,6 +190,17 @@ impl Cpu {
         timing::IRQ_ACK
     }
 
+    /// Consume the pending saved-IP override produced by a long REP string
+    /// instruction, if any.
+    pub fn take_interrupt_return_override_ip(&mut self) -> Option<u16> {
+        self.interrupt_return_override_ip.take()
+    }
+
+    /// Return the pending saved-IP override without consuming it.
+    pub fn interrupt_return_override_ip(&self) -> Option<u16> {
+        self.interrupt_return_override_ip
+    }
+
     /// Executes a single instruction and returns the number of clock cycles
     /// it consumed. Phase 1 models cycle cost per *instruction*; a future
     /// phase may decompose this into a true per-clock `step_cycle()` once
@@ -182,6 +209,8 @@ impl Cpu {
         if self.halted {
             return 1;
         }
+        self.interrupt_return_override_ip = None;
+        self.instruction_start_ip = self.regs.ip;
         let opcode = self.fetch_u8(bus);
         let cycles = self.execute(opcode, bus);
         // Prefix fields are consumed within the instruction; clear any residual
@@ -1514,6 +1543,9 @@ impl Cpu {
                     break;
                 }
             }
+        }
+        if total >= LONG_REP_INTERRUPT_RETURN_CYCLE_THRESHOLD {
+            self.interrupt_return_override_ip = Some(self.instruction_start_ip);
         }
         total
     }

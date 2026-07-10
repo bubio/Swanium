@@ -185,9 +185,11 @@ impl System {
                 self.bus.set_current_scanline(line as u8);
                 self.bus.on_hblank();
             }
+            self.service_pending_rep_irq_after_scanline_event();
 
             if line == VISIBLE_SCANLINES {
                 self.bus.on_vblank();
+                self.service_pending_rep_irq_after_scanline_event();
             }
         }
 
@@ -209,7 +211,11 @@ impl System {
             }
             if let Some(vector) = self.bus.pending_irq() {
                 if self.cpu.flags.interrupt && !maskable_inhibited {
-                    let cycles = self.cpu.handle_irq(&mut self.bus, vector);
+                    let cycles = if let Some(ip) = self.cpu.take_interrupt_return_override_ip() {
+                        self.cpu.handle_irq_at_ip(&mut self.bus, vector, ip)
+                    } else {
+                        self.cpu.handle_irq(&mut self.bus, vector)
+                    };
                     spent += cycles;
                     time_into!(self, apu_ns, {
                         self.bus.tick_apu(cycles);
@@ -241,6 +247,24 @@ impl System {
             }
         }
         spent
+    }
+
+    fn service_pending_rep_irq_after_scanline_event(&mut self) {
+        if !self.cpu.flags.interrupt {
+            return;
+        }
+        let Some(ip) = self.cpu.interrupt_return_override_ip() else {
+            return;
+        };
+        let Some(vector) = self.bus.pending_irq() else {
+            return;
+        };
+        self.cpu.take_interrupt_return_override_ip();
+        let cycles = self.cpu.handle_irq_at_ip(&mut self.bus, vector, ip);
+        self.cycle_carry = self.cycle_carry.saturating_add(cycles);
+        time_into!(self, apu_ns, {
+            self.bus.tick_apu(cycles);
+        });
     }
 
     // ── Output accessors ──────────────────────────────────────────────────

@@ -301,11 +301,12 @@ impl Bus {
         if counter == 0 {
             return;
         }
-        if self.ports[0xA2] & 1 == 0 && counter != 1 {
-            return; // HBlank timer disabled, except the counter=1 latch quirk.
+        let irq_bit = 1 << IrqSource::HBlankTimer as u8;
+        if self.ports[0xA2] & 1 == 0 && (counter != 1 || self.ports[0xB2] & irq_bit == 0) {
+            return; // HBlank timer disabled, except the enabled counter=1 latch quirk.
         }
         if counter == 1 {
-            self.ports[0xB4] |= (1 << IrqSource::HBlankTimer as u8) & self.ports[0xB2];
+            self.ports[0xB4] |= irq_bit & self.ports[0xB2];
             if self.ports[0xA2] & 2 != 0 {
                 // auto-reload
                 self.ports[0xA8] = self.ports[0xA4];

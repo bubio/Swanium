@@ -617,6 +617,19 @@ fn hblank_timer_counter_one_latches_even_when_timer_disabled() {
 }
 
 #[test]
+fn hblank_timer_counter_one_waits_when_timer_and_irq_are_disabled() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB2, 0);
+    bus.write_io(0xA2, 0x00);
+    bus.write_io(0xA4, 1);
+    bus.write_io(0xA5, 0);
+    bus.on_hblank();
+    assert!(bus.pending_irq().is_none());
+    assert_eq!(bus.read_io(0xA8), 1);
+    assert_eq!(bus.read_io(0xA9), 0);
+}
+
+#[test]
 fn hblank_timer_above_one_does_not_run_when_disabled() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0xB2, 1 << IrqSource::HBlankTimer as u8);
