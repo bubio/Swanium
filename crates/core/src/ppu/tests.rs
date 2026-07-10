@@ -577,6 +577,32 @@ fn sprite_not_drawn_on_scanline_above_it() {
 }
 
 #[test]
+fn sprite_y_wraps_from_bottom_to_top_edge() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x04; // SPR enable only
+    ports[0x04] = 0x01;
+    ports[0x05] = 0;
+    ports[0x06] = 1;
+    set_identity_sprite_palette(&mut ports);
+    write_sprite(&mut wram, 0x200, 0, 1, 0xFC, 0);
+    write_tile_row(&mut wram, 1, 4, 0b1000_0000, 0b0000_0000);
+
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+
+    assert_eq!(ppu.framebuffer()[0], grey(1));
+}
+
+#[test]
+fn sprite_x_wraps_from_right_to_left_edge() {
+    let (wram, ports) = setup_single_sprite(1, 0, 0xFC, (0b0000_1000, 0b0000_0000));
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
+}
+
+#[test]
 fn sprite_horizontal_flip_mirrors_within_cell() {
     // pixel only at tile x=0; with hflip it lands at screen x=7
     let (wram, ports) = setup_single_sprite(1 | (1 << 14), 0, 0, (0b1000_0000, 0b0000_0000));

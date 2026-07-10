@@ -37,6 +37,10 @@ const DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/soc/interrupts.ws";
 const DEFAULT_WS_TEST_SUITE_INTERRUPT_TIMING_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/interrupt_timing.ws";
+const DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/mono_palettes_writemask.ws";
+const DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/alignment_access.wsc";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strlen.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM: &str =
@@ -53,6 +57,8 @@ const DEFAULT_WS_TEST_SUITE_LIBC_SETJMP_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/setjmp.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_INITFINI_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/initfini.ws";
+const DEFAULT_WS_TEST_SUITE_LIBC_MALLOC_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/malloc.ws";
 const WS_TEST_SUITE_MAX_FRAMES: usize = 120;
 const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
 const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
@@ -140,6 +146,26 @@ const WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES: &[(usize, usize)] = &[
     (13, 0),
     (14, 0),
 ];
+const WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES: &[(usize, usize)] = &[
+    (0, 1),
+    (1, 1),
+    (2, 1),
+    (3, 1),
+    (4, 1),
+    (5, 1),
+    (6, 1),
+    (7, 1),
+    (8, 1),
+    (9, 1),
+    (10, 1),
+    (11, 1),
+    (12, 1),
+    (13, 1),
+    (14, 1),
+    (15, 1),
+];
+const WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES: &[(usize, usize)] =
+    &[(0, 2), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)];
 const WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES: &[(usize, usize)] = &[(0, 1)];
 const WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES: &[(usize, usize)] = &[(0, 4)];
 const WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES: &[(usize, usize)] = &[(0, 6), (1, 6)];
@@ -149,6 +175,8 @@ const WS_TEST_SUITE_LIBC_MEMCPY_MARKER_RANGES: &[(usize, usize)] =
 const WS_TEST_SUITE_LIBC_MEMCCPY_MARKER_RANGES: &[(usize, usize)] = &[(0, 7)];
 const WS_TEST_SUITE_LIBC_SETJMP_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
 const WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES: &[(usize, usize)] = &[(0, 0)];
+const WS_TEST_SUITE_LIBC_MALLOC_MARKER_RANGES: &[(usize, usize)] =
+    &[(0, 1), (1, 1), (2, 1), (3, 0)];
 
 const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
     WsTestSuitePassFailCase {
@@ -188,6 +216,26 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         source_protocol: "`src/mono/cpu/interrupt_timing/main.c` expands \
             `IP_STORE_TEST_CALL` fifteen times; each call uses \
             `draw_pass_fail(i++, 0, ...)`.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/display/mono_palettes_writemask.ws",
+        env_var: "WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES,
+        source_protocol: "`src/mono/display/mono_palettes_writemask/main.c` \
+            loops over rows 0-15 and calls `draw_pass_fail` with offsets 1 \
+            and 0 for each mono palette register.",
+    },
+    WsTestSuitePassFailCase {
+        name: "color/dma/alignment_access.wsc",
+        env_var: "WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM,
+        model: HardwareModel::Color,
+        marker_ranges: WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES,
+        source_protocol: "`src/color/dma/alignment_access/main.c` uses \
+            `draw_pass_fail` on row 0 with offsets 2-0, then rows 1-5 with \
+            offset 0 for GDMA register masks and source-access cases.",
     },
     WsTestSuitePassFailCase {
         name: "wonderful/libc/strlen.ws",
@@ -260,6 +308,16 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         marker_ranges: WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES,
         source_protocol: "`src/wonderful/libc/initfini/main.c` uses \
             `draw_pass_fail` on row 0 with offset 0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "wonderful/libc/malloc.ws",
+        env_var: "WS_TEST_SUITE_LIBC_MALLOC_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_LIBC_MALLOC_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_LIBC_MALLOC_MARKER_RANGES,
+        source_protocol: "`src/wonderful/libc/malloc/main.c` uses \
+            `draw_pass_fail` on rows 0-2 with offsets 1-0 and row 3 with \
+            offset 0 after the oversized allocation check.",
     },
 ];
 
@@ -473,10 +531,18 @@ fn run_ws_test_suite_pass_fail_case(case: &WsTestSuitePassFailCase) {
     let visible_text = tilemap_text(&system, WS_TEST_SUITE_SCREEN_1, rows);
     assert!(
         !markers.contains(&WS_TEST_SUITE_FAIL_TILE),
-        "ws-test-suite {} reported failure markers {:?}; source protocol: {}; visible text:\n{}",
+        "ws-test-suite {} reported failure markers {:?}; source protocol: {}; \
+         dma/system ports: 40={:02X} 42={:02X} 46={:02X} 47={:02X} 48={:02X} A0={:02X}; \
+         visible text:\n{}",
         case.name,
         markers,
         case.source_protocol,
+        system.bus().peek_io(0x40),
+        system.bus().peek_io(0x42),
+        system.bus().peek_io(0x46),
+        system.bus().peek_io(0x47),
+        system.bus().peek_io(0x48),
+        system.bus().peek_io(0xA0),
         visible_text
     );
     assert!(

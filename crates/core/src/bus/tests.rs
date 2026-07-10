@@ -792,6 +792,53 @@ fn gdma_leaves_destination_unchanged_without_enable_bit() {
     assert_eq!(bus.wram[0x10], 0xAB);
 }
 
+#[test]
+fn gdma_from_slow_rom_aborts_without_consuming_length() {
+    let mut rom = vec![0u8; 0x10000];
+    rom[0] = 0x5A;
+    let mut bus = color_video_bus(rom);
+    bus.write_io(0xA0, 0x08); // SYSTEM_CTRL1_ROM_WAIT
+    bus.write_io(0x42, 0x08); // ROM source at 0x80000
+    bus.write_io(0x44, 0x00);
+    bus.write_io(0x46, 2);
+
+    bus.write_io(0x48, 0x80);
+
+    assert_eq!(bus.read_io(0x46), 2);
+    assert_eq!(bus.read_u8(0x0000), 0x00);
+}
+
+#[test]
+fn gdma_from_upper_linear_rom_transfers_even_when_rom_wait_is_set() {
+    let mut rom = vec![0u8; 0x10000];
+    rom[0] = 0x5A;
+    let mut bus = color_video_bus(rom);
+    bus.write_io(0xA0, 0x08); // SYSTEM_CTRL1_ROM_WAIT
+    bus.write_io(0x42, 0x0F); // upper linear ROM source at 0xF0000
+    bus.write_io(0x44, 0x00);
+    bus.write_io(0x46, 2);
+
+    bus.write_io(0x48, 0x80);
+
+    assert_eq!(bus.read_io(0x46), 0);
+    assert_eq!(bus.read_u8(0x0000), 0x5A);
+}
+
+#[test]
+fn gdma_from_fast_rom_still_transfers_when_rom_wait_is_clear() {
+    let mut rom = vec![0u8; 0x10000];
+    rom[0] = 0x5A;
+    let mut bus = color_video_bus(rom);
+    bus.write_io(0x42, 0x08); // ROM source at 0x80000
+    bus.write_io(0x44, 0x00);
+    bus.write_io(0x46, 2);
+
+    bus.write_io(0x48, 0x80);
+
+    assert_eq!(bus.read_io(0x46), 0);
+    assert_eq!(bus.read_u8(0x0000), 0x5A);
+}
+
 // ── SDMA ─────────────────────────────────────────────────────────────────────
 
 fn color_bus_with_sdma_voice() -> Bus {

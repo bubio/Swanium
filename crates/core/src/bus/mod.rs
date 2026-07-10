@@ -28,6 +28,7 @@ const SDMA_DECREMENT: u8 = 0x40;
 const SDMA_REPEAT: u8 = 0x08;
 const SDMA_HOLD: u8 = 0x04;
 const SDMA_CYCLES_PER_SAMPLE: u16 = 128;
+const SYSTEM_CTRL1_ROM_WAIT: u8 = 0x08;
 const SERIAL_ENABLE: u8 = 0x80;
 const SERIAL_TX_READY_IRQ: u8 = 1 << IrqSource::SerialReceive as u8;
 
@@ -404,8 +405,8 @@ impl Bus {
         let mut cycles = 0u32;
 
         while len > 0 {
-            if (0x10000..=0x1FFFF).contains(&src) {
-                break; // SRAM source: abort
+            if self.gdma_source_blocked(src) {
+                break;
             }
             let byte = self.read_u8_phys(src);
             self.write_wram(dst & 0xFFFF, byte);
@@ -436,6 +437,17 @@ impl Bus {
 
         self.ports[0xB4] |= (1 << IrqSource::GdmaComplete as u8) & self.ports[0xB2];
         cycles
+    }
+
+    fn gdma_source_blocked(&self, src: u32) -> bool {
+        // SRAM sources abort the burst. The color DMA alignment ROM also
+        // confirms that the 0x80000 slow-ROM window is unavailable while the
+        // ROM wait bit is set in SYSTEM_CTRL1. Keep the rest of the linear ROM
+        // range available; commercial titles such as FF4 use upper-ROM GDMA
+        // while this flag is set.
+        (0x10000..=0x1FFFF).contains(&src)
+            || ((0x80000..=0x8FFFF).contains(&src)
+                && (self.ports[0xA0] & SYSTEM_CTRL1_ROM_WAIT != 0))
     }
 
     // ── PPU ──────────────────────────────────────────────────────────────

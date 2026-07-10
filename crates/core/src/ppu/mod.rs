@@ -677,14 +677,12 @@ fn collect_line_sprites(
     let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
     let first = ports[SPR_FIRST] as usize;
     let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
-    let ly = line as usize;
 
     let mut n = 0;
     for i in 0..count {
         let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
         let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
-        let sy = sprite.y as usize;
-        if ly >= sy && ly < sy + SPRITE_SIZE {
+        if sprite_axis_delta(line, sprite.y) < SPRITE_SIZE {
             out[n] = sprite;
             n += 1;
             if n == SPRITES_PER_SCANLINE {
@@ -693,6 +691,10 @@ fn collect_line_sprites(
         }
     }
     n
+}
+
+fn sprite_axis_delta(screen: u8, origin: u8) -> usize {
+    screen.wrapping_sub(origin) as usize
 }
 
 /// Sample the sprite layer at `(screen_x, line)` for sprites whose priority
@@ -736,13 +738,13 @@ fn sample_sprite<R: PaletteResolver>(
         {
             continue;
         }
-        let sx = sprite.x as usize;
-        if screen_x < sx || screen_x >= sx + SPRITE_SIZE {
+        let tx = sprite_axis_delta(screen_x as u8, sprite.x);
+        if tx >= SPRITE_SIZE {
             continue;
         }
         // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
-        let mut tx = screen_x - sx;
-        let mut ty = line as usize - sprite.y as usize;
+        let mut tx = tx;
+        let mut ty = sprite_axis_delta(line, sprite.y);
         if sprite.hflip {
             tx = SPRITE_SIZE - 1 - tx;
         }

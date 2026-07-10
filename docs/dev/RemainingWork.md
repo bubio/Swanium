@@ -15,8 +15,8 @@ Milestone 13 is no longer blocked by known timing/register failures:
 - FluBBaOfWard/WSHWTest `Test All` passes as an opt-in public hardware-register
   oracle.
 - WSCpuTest v0.7.1 `Test All` and the source-confirmed `ws-test-suite`
-  CPU/interrupt/libc ROMs listed in `CompatibilityMatrix.md` already have
-  decoded opt-in oracles.
+  CPU/interrupt/display/DMA/libc ROMs listed in `CompatibilityMatrix.md`
+  already have decoded opt-in oracles.
 
 The remaining work should therefore be evidence-driven. Do not start broad
 cycle, dot, or analog rewrites without a public test ROM, hardware capture,
@@ -53,9 +53,11 @@ Instruction-total timing is now guarded by WSTimingTest pages 0-28. The
 remaining risk is lower-level timing decomposition: fetch, memory access, I/O,
 prefetch, DMA stall, and exact interaction with PPU/APU clocks.
 
-The currently source-confirmed ws-test-suite CPU/interrupt candidates have been
-promoted to passing opt-in oracles. Continue selecting new candidates from the
-upstream source tree before changing CPU or interrupt timing behavior.
+The currently source-confirmed ws-test-suite CPU/interrupt candidates, plus the
+new mono palette writemask, GDMA alignment/access, and libc malloc candidates,
+have been promoted to passing opt-in oracles. Continue selecting new candidates
+from the upstream source tree before changing CPU, interrupt, or DMA timing
+behavior.
 
 Scope:
 

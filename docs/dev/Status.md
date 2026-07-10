@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 637 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 643 passing
 tests (+4 opt-in, env-gated public-ROM tests marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -72,7 +72,9 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `Ok!` / `Failed!` output. The ws-test-suite path now has source-confirmed decoded oracles for
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`, and
-`wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini}.ws`.
+`mono/display/mono_palettes_writemask.ws`, `color/dma/alignment_access.wsc`,
+and
+`wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
 These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
 `screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Unknown
 ws-test-suite ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0`
@@ -102,6 +104,10 @@ The ws-test-suite `mono/soc/interrupts.ws` oracle also pins mono UART TX ready a
 a level-style IRQ source, mono `INT_VECTOR` low-bit status readback, and HALT
 wake from a pending VBlank cause while IF is clear. The mono-specific readback is
 kept gated from Color mode to preserve FluBBaOfWard/WSHWTest behavior.
+The ws-test-suite display/DMA additions pin mono palette register write masks
+and GDMA source gating: SRAM sources abort, and source `0x80000` in the
+slow-ROM window aborts while port `0xA0` bit 3 (`SYSTEM_CTRL1_ROM_WAIT`) is
+set; upper linear ROM, fast-ROM, and IRAM sources still complete when allowed.
 
 ### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
@@ -117,7 +123,9 @@ The scanline renderer now enforces the hardware's 32-sprites-per-scanline limit 
 the first 32 sprites whose 8-pixel-tall box covers the line are considered, and later sprites on
 that line are ignored even if the earlier entries are transparent at the sampled pixel. Regression
 tests cover overflow ordering and a 33rd priority-1 sprite that would otherwise draw in front of
-SCR2.
+SCR2. Sprite X/Y coordinates wrap in 8-bit screen space, so sprites starting at
+`0xF8`-`0xFF` can appear clipped at the left/top visible edge; tests cover both
+axes.
 
 Milestone 10's raster audit keeps the PPU at scanline granularity for now. `System::run_frame_traced`
 is covered for one trace row per visible line and CPU-written scroll state before line rendering;
