@@ -300,6 +300,7 @@ fn from_rom_allocates_eeprom_for_eeprom_save_type() {
 #[test]
 fn cartridge_eeprom_control_write_then_read() {
     let mut cart = eeprom_cart();
+    cart.eeprom_control(0b0100, 0x0000, cmd(0, 0b11 << 4)); // EWEN
     cart.eeprom_control(0b0010, 0xBEEF, cmd(1, 0)); // WRITE word 0 = 0xBEEF
     let read = cart.eeprom_control(0b0001, 0x0000, cmd(2, 0)); // READ word 0
     assert_eq!(read, 0xBEEF);

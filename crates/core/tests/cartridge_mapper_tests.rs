@@ -136,6 +136,7 @@ fn eeprom_status_port_reports_ready_when_present() {
 #[test]
 fn eeprom_write_then_read_through_ports() {
     let mut bus = eeprom_bus();
+    eeprom_op(&mut bus, 0b0100, 0x0000, cmd(0, 0b11 << 4)); // EWEN
     eeprom_op(&mut bus, 0b0010, 0xBEEF, cmd(1, 0)); // WRITE word 0 = 0xBEEF
     eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 0)); // READ word 0 → data latch
     assert_eq!(bus.read_io(0xC4), 0xEF);
@@ -144,6 +145,7 @@ fn eeprom_write_then_read_through_ports() {
 #[test]
 fn eeprom_read_latches_high_byte() {
     let mut bus = eeprom_bus();
+    eeprom_op(&mut bus, 0b0100, 0x0000, cmd(0, 0b11 << 4)); // EWEN
     eeprom_op(&mut bus, 0b0010, 0xBEEF, cmd(1, 0));
     eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 0));
     assert_eq!(bus.read_io(0xC5), 0xBE);
@@ -176,6 +178,7 @@ fn eeprom_save_data_round_trips_through_bus() {
 #[test]
 fn eeprom_write_all_initialization_fills_selected_word() {
     let mut bus = eeprom_bus();
+    eeprom_op(&mut bus, 0b0100, 0x0000, cmd(0, 0b11 << 4)); // EWEN
     eeprom_op(&mut bus, 0b0010, 0x1234, cmd(0, 0b01 << 4)); // WRAL
     eeprom_op(&mut bus, 0b0001, 0x0000, cmd(2, 17)); // READ word 17
     assert_eq!(bus.read_io(0xC4), 0x34);

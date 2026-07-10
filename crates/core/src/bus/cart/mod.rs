@@ -104,8 +104,8 @@ impl Cartridge {
         let (sram, eeprom) = match save_type {
             SaveType::Sram(n) => (vec![0u8; n], None),
             SaveType::Eeprom(n) => {
-                let eeprom =
-                    Eeprom::address_bits_for(n).map(|bits| Eeprom::new(vec![0xFFu8; n], bits));
+                let eeprom = Eeprom::address_bits_for(n)
+                    .map(|bits| Eeprom::new_locked(vec![0xFFu8; n], bits));
                 (Vec::new(), eeprom)
             }
             SaveType::None => (Vec::new(), None),

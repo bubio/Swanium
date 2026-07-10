@@ -73,6 +73,7 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
 `mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
+`mono/eeprom/{cartridge_1kbit,cartridge_16kbit}.ws`,
 `color/dma/alignment_access.wsc`, `color/dma/sound_dma.wsc`,
 and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
@@ -192,6 +193,10 @@ initialization flows (`WRAL`, `EWDS`) and absent-device open-bus reads; and abse
 ports (`0xCA`/`0xCB`) now read open bus instead of a raw zero shadow. RTC-bearing cartridges keep
 RTC state outside the raw cartridge save byte slice; `save_data()` remains exactly SRAM-or-EEPROM
 bytes, while `Rtc::state` / `load_state` exposes the clock registers separately.
+
+The cartridge EEPROM public oracles pin 128-byte and 2 KiB address widths,
+power-on write lock, EWEN/EWDS behavior, erase/write/read flow, invalid-command
+status, absent SRAM open bus, and Bandai 2001 control-port DONE-bit behavior.
 
 Console internal EEPROM (`IEEPROM`, ports `0xBA`–`0xBE`) is a different device from cartridge
 EEPROM. It is used by the BIOS for console profile/configuration data and is not game save media.

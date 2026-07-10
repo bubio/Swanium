@@ -901,8 +901,8 @@ impl MemoryBus for Bus {
             0xC3 => self.cart.rom_bank1,
             // Cartridge serial-EEPROM data/command latches
             0xC4..=0xC7 if self.cart.has_eeprom() => self.ports[port as usize],
-            // EEPROM status: bit 1 set (device ready) when present
-            0xC8 if self.cart.has_eeprom() => 0x02,
+            // EEPROM status: bit 1 is ready; bit 0 is the latched DONE status.
+            0xC8 if self.cart.has_eeprom() => 0x02 | (self.ports[0xC8] & 0x01),
             0xC4..=0xC9 => OPEN_BUS,
             // Bandai 2003 high-byte bank registers (open bus on 2001)
             0xD0..=0xD5 if self.cart.mapper() == Mapper::Bandai2003 => match port {
@@ -1101,12 +1101,17 @@ impl MemoryBus for Bus {
             // EEPROM control: high nibble selects the operation; the data latch
             // (0xC4/0xC5) is refreshed with the result of a READ.
             0xC8 if self.cart.has_eeprom() => {
-                self.ports[0xC8] = value & 0xF0;
                 let operation = value >> 4;
                 let data = u16::from_le_bytes([self.ports[0xC4], self.ports[0xC5]]);
                 let comm = u16::from_le_bytes([self.ports[0xC6], self.ports[0xC7]]);
                 let new_data = self.cart.eeprom_control(operation, data, comm);
                 [self.ports[0xC4], self.ports[0xC5]] = new_data.to_le_bytes();
+                let done = match operation {
+                    0x04 => 0x00,        // Short command: DONE remains clear.
+                    0x01 | 0x08 => 0x01, // Bandai 2001 DONE-bit errata.
+                    _ => 0x00,
+                };
+                self.ports[0xC8] = (value & 0xF0) | 0x02 | done;
             }
             0xC4..=0xC9 => {} // EEPROM absent: ignore
             // Bandai 2003 high-byte bank registers (ignored on 2001)

@@ -46,8 +46,8 @@ const ERASED_BYTE: u8 = 0xFF;
 impl Eeprom {
     /// Create an EEPROM with the given contents and command address width.
     ///
-    /// Writes are enabled at power-on, matching the reference hardware behaviour
-    /// (a game issues `EWDS` to lock the device).
+    /// Writes are enabled for internal EEPROM use and direct device tests;
+    /// cartridge EEPROMs should use [`Eeprom::new_locked`].
     pub fn new(contents: Vec<u8>, address_bits: u8) -> Self {
         Self {
             contents,
@@ -55,6 +55,17 @@ impl Eeprom {
             output: 0,
             address_bits,
             write_enabled: true,
+        }
+    }
+
+    /// Create an EEPROM whose write/erase commands are locked at power-on.
+    ///
+    /// Cartridge EEPROMs power up write-disabled; games must issue EWEN before
+    /// writes or erases take effect.
+    pub fn new_locked(contents: Vec<u8>, address_bits: u8) -> Self {
+        Self {
+            write_enabled: false,
+            ..Self::new(contents, address_bits)
         }
     }
 
