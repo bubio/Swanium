@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-10. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-11. Update this file (not AGENTS.md) when implementation progress changes.
 
 This is the source of truth for current progress. For the broader document map,
 start with `docs/dev/README.md`.
@@ -19,8 +19,8 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 646 passing
-tests (+4 opt-in, env-gated public-ROM tests marked `ignored`; one ws-test-suite
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 651 passing
+tests (+5 opt-in, env-gated public-ROM test functions marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
 ## Core (`crates/core`, package `swanium-core`) — platform-independent
@@ -76,7 +76,8 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/display/sprite_scanline_limit.ws`,
 `mono/eeprom/{cartridge_1kbit,cartridge_16kbit,internal}.ws`,
 `color/display/tile_screen_extended_range.wsc`,
-`color/dma/alignment_access.wsc`, `color/dma/sound_dma.wsc`,
+`color/dma/alignment_access.wsc`, `color/dma/gdma_timing.wsc`,
+`color/dma/sound_dma.wsc`,
 and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
 Most of these ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
@@ -109,9 +110,13 @@ a level-style IRQ source, mono `INT_VECTOR` low-bit status readback, and HALT
 wake from a pending VBlank cause while IF is clear. The mono-specific readback is
 kept gated from Color mode to preserve FluBBaOfWard/WSHWTest behavior.
 The ws-test-suite display/DMA additions pin mono palette register write masks
-and GDMA source gating: SRAM sources abort, and source `0x80000` in the
+and GDMA source gating/timing: SRAM sources abort, and source `0x80000` in the
 slow-ROM window aborts while port `0xA0` bit 3 (`SYSTEM_CTRL1_ROM_WAIT`) is
 set; upper linear ROM, fast-ROM, and IRAM sources still complete when allowed.
+The GDMA timing oracle also pins the APU fast-sweep test counter used by the
+ROM's cycle-count harness and the CPU-visible GDMA stall formula of
+`5 + transferred_bytes` for started transfers, with zero extra stall for
+zero-length and immediately-aborted SRAM-source cases.
 The SDMA oracle pins 20-bit source/length masks, ROM/IRAM/SRAM source access,
 hold/repeat behavior, terminal-count zeroing, address overflow wrapping, final
 voice-latch contents, and port `0x52` readback preserving the enable bit while

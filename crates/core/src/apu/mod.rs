@@ -50,6 +50,8 @@ const SND_WAVE_BASE: usize = 0x8F; // waveform base address >> 6
 const SND_OUTPUT_CTRL: usize = 0x91; // speaker/headphone output mode and speaker shift
 const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
+const SND_TEST: usize = 0x95; // sound test register
+const SND_TEST_FAST_SWEEP: u8 = 0x02; // accelerate channel-3 sweep to every tick
 
 // ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
 const HV_DIRECT_L_LO: usize = 0x64; // signed 16-bit direct left output
@@ -133,6 +135,8 @@ pub struct Apu {
     sweep_counter: u32,
     /// Remaining sweep ticks before the next frequency adjustment.
     sweep_step: u8,
+    /// Fast-sweep test mode starts counting one sound tick after it is armed.
+    fast_sweep_primed: bool,
     /// Sound-clock ticks accumulated toward the next output sample.
     sample_accum: u32,
     /// Analog-reconstruction low-pass for the (mono) voice PCM channel, fed one
@@ -171,6 +175,7 @@ impl Apu {
             noise_counter: 0,
             sweep_counter: 0,
             sweep_step: 0,
+            fast_sweep_primed: false,
             sample_accum: 0,
             voice_lp: VoiceLowPass::new(),
             voice_level: 0,
@@ -283,10 +288,21 @@ impl Apu {
     /// pitch back to the channel-3 period register (0x84/0x85).
     fn step_sweep(&mut self, ctrl: u8, ports: &mut [u8]) {
         if ctrl & CTRL_SWEEP == 0 || ctrl & CTRL_ENABLE[2] == 0 {
+            self.fast_sweep_primed = false;
             return;
         }
+        let fast = ports[SND_TEST] & SND_TEST_FAST_SWEEP != 0;
+        let interval = if fast { 0 } else { SWEEP_INTERVAL };
+        if fast {
+            if !self.fast_sweep_primed {
+                self.fast_sweep_primed = true;
+                return;
+            }
+        } else {
+            self.fast_sweep_primed = false;
+        }
         self.sweep_counter += 1;
-        if self.sweep_counter <= SWEEP_INTERVAL {
+        if self.sweep_counter <= interval {
             return;
         }
         self.sweep_counter = 0;

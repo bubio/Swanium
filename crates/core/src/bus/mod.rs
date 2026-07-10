@@ -89,6 +89,8 @@ pub struct Bus {
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
     ports: [u8; 0x100],
+    /// CPU-visible wait cycles accumulated by synchronous I/O side effects.
+    pending_wait_cycles: u32,
     /// Picture processing unit (renders from `wram` + display registers).
     ppu: Ppu,
     /// Audio processing unit (samples waveforms from `wram` + sound registers).
@@ -129,6 +131,7 @@ impl Bus {
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
+            pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
             sdma: SdmaState::default(),
@@ -148,6 +151,7 @@ impl Bus {
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
+            pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
             sdma: SdmaState::default(),
@@ -172,6 +176,7 @@ impl Bus {
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
             ports: [0u8; 0x100],
+            pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
             sdma: SdmaState::default(),
@@ -386,9 +391,9 @@ impl Bus {
     /// the transfer, mirroring the hardware's synchronous, CPU-stalling burst.
     /// Kept public for tests that arm and drive GDMA directly.
     ///
-    /// Returns the approximate number of CPU cycles consumed by the transfer
-    /// (0 if GDMA was not active). Fires [`IrqSource::GdmaComplete`] on
-    /// completion.
+    /// Returns the CPU wait cycles consumed by the transfer (0 if GDMA was not
+    /// active or the source immediately aborts). Fires [`IrqSource::GdmaComplete`]
+    /// on completion.
     ///
     /// The transfer is aborted if the source address enters the SRAM range
     /// (0x10000–0x1FFFF), matching WonderCrab behaviour.
@@ -409,7 +414,7 @@ impl Bus {
         }
 
         let decrement = self.ports[0x48] & 0x40 != 0;
-        let mut cycles = 0u32;
+        let mut transferred = 0u32;
 
         while len > 0 {
             if self.gdma_source_blocked(src) {
@@ -426,7 +431,7 @@ impl Bus {
                 dst = dst.wrapping_add(1);
             }
             len -= 1;
-            cycles += 2;
+            transferred += 1;
         }
 
         // Write back updated pointers and length
@@ -443,7 +448,11 @@ impl Bus {
         self.ports[0x48] &= 0x7F; // clear enable bit
 
         self.ports[0xB4] |= (1 << IrqSource::GdmaComplete as u8) & self.ports[0xB2];
-        cycles
+        if transferred == 0 {
+            0
+        } else {
+            5 + transferred
+        }
     }
 
     fn gdma_source_blocked(&self, src: u32) -> bool {
@@ -1032,7 +1041,7 @@ impl MemoryBus for Bus {
             // shared GDMA register file (0x40–0x48).
             0x48 => {
                 self.ports[0x48] = value;
-                self.tick_gdma();
+                self.pending_wait_cycles += self.tick_gdma();
             }
             0x49 => {}
             // SDMA source segment: bits 4-7 ignored
@@ -1217,5 +1226,11 @@ impl MemoryBus for Bus {
             // Default: raw write
             p => self.ports[p as usize] = value,
         }
+    }
+
+    fn take_wait_cycles(&mut self) -> u32 {
+        let cycles = self.pending_wait_cycles;
+        self.pending_wait_cycles = 0;
+        cycles
     }
 }

@@ -446,6 +446,19 @@ fn sweep_does_not_fire_before_threshold() {
 }
 
 #[test]
+fn fast_sweep_test_mode_ticks_every_cycle() {
+    let (mut ports, wram) = blank();
+    ports[0x90] = CTRL_SWEEP | CTRL_ENABLE[2];
+    ports[SND_TEST] = SND_TEST_FAST_SWEEP;
+    ports[SND_SWEEP_VALUE] = 1;
+    ports[SND_SWEEP_TIME] = 0;
+    set_pitch(&mut ports, 2, 0);
+    let mut apu = Apu::new();
+    apu.tick(6, &wram, &mut ports, false);
+    assert_eq!(pitch_of(&ports, 2), 5);
+}
+
+#[test]
 fn sweep_negative_delta_decreases_pitch() {
     let (mut ports, wram) = blank();
     ports[0x90] = CTRL_SWEEP | CTRL_ENABLE[2];

@@ -1,6 +1,6 @@
 # Remaining work
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-11.
 
 This is the source of truth for open emulator work after Milestone 13's public
 ROM precision pass. `Status.md` remains the source of truth for implemented
@@ -49,12 +49,14 @@ Definition of done:
 
 Triage notes:
 
-- 2026-07-10: Remaining local asiekierka/ws-test-suite ROMs with
-  source-confirmed `pass_fail.h` marker protocols are not yet passing oracles:
-  `mono/sound/quirks.ws` exposes APU output-port/counter/noise failures, and
-  `color/dma/gdma_timing.wsc` exposes GDMA timing/cycle-count failures. These
-  should be promoted only together with the corresponding emulation fixes and
-  focused validation.
+- 2026-07-11: `color/dma/gdma_timing.wsc` was promoted after adding CPU-visible
+  GDMA stall cycles and the APU fast-sweep test counter behavior used by the
+  ROM's cycle-count harness; the evidence is recorded in `CompatibilityMatrix.md`.
+- 2026-07-10: The remaining local asiekierka/ws-test-suite ROM with a
+  source-confirmed `pass_fail.h` marker protocol that is not yet a passing
+  oracle is `mono/sound/quirks.ws`, which exposes APU output-port/counter/noise
+  failures. It should be promoted only together with the corresponding
+  emulation fixes and focused validation.
 - 2026-07-10: `mono/eeprom/internal.ws` was promoted after fixing console
   IEEPROM command-width, protected-range, and DONE-bit behavior; the evidence is
   recorded in `CompatibilityMatrix.md`.

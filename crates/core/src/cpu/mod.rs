@@ -1268,7 +1268,7 @@ impl Cpu {
                 let port = self.fetch_u8(bus);
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                7
+                7 + bus.take_wait_cycles()
             }
             0xE7 => {
                 // OUT imm8, AX
@@ -1276,7 +1276,7 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                7
+                7 + bus.take_wait_cycles()
             }
             0xEC => {
                 // IN AL, DX
@@ -1298,7 +1298,7 @@ impl Cpu {
                 let port = self.regs.dx as u8;
                 let v = self.regs.get_reg8(0);
                 bus.write_io(port, v);
-                5
+                5 + bus.take_wait_cycles()
             }
             0xEF => {
                 // OUT DX, AX
@@ -1306,7 +1306,7 @@ impl Cpu {
                 let v = self.regs.ax;
                 bus.write_io(port, v as u8);
                 bus.write_io(port.wrapping_add(1), (v >> 8) as u8);
-                5
+                5 + bus.take_wait_cycles()
             }
 
             // ── 80186 / V30 instruction-set additions ────────────────────────

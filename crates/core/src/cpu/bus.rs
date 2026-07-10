@@ -31,6 +31,15 @@ pub trait MemoryBus {
     fn write_io(&mut self, port: u8, value: u8) {
         let _ = (port, value);
     }
+
+    /// Return and clear CPU-visible wait cycles caused by recent bus I/O.
+    ///
+    /// Most test buses have no wait state, so the default is zero. The hardware
+    /// bus uses this for synchronous DMA bursts that stall the CPU during an
+    /// otherwise ordinary OUT instruction.
+    fn take_wait_cycles(&mut self) -> u32 {
+        0
+    }
 }
 
 /// Resolves a real-mode segment:offset pair to a 20-bit physical address.

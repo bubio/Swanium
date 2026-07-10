@@ -54,6 +54,8 @@ const DEFAULT_WS_TEST_SUITE_EEPROM_INTERNAL_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/eeprom/internal.ws";
 const DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/alignment_access.wsc";
+const DEFAULT_WS_TEST_SUITE_GDMA_TIMING_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/gdma_timing.wsc";
 const DEFAULT_WS_TEST_SUITE_SOUND_DMA_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/dma/sound_dma.wsc";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
@@ -278,6 +280,21 @@ const WS_TEST_SUITE_EEPROM_INTERNAL_MARKER_POSITIONS: &[(usize, usize)] = &[
 ];
 const WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES: &[(usize, usize)] =
     &[(0, 2), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)];
+const WS_TEST_SUITE_GDMA_TIMING_MARKER_RANGES: &[(usize, usize)] = &[
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 0),
+    (11, 0),
+    (12, 0),
+];
 const WS_TEST_SUITE_SOUND_DMA_MARKER_RANGES: &[(usize, usize)] = &[
     (0, 1),
     (1, 1),
@@ -406,6 +423,18 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         source_protocol: "`src/color/dma/alignment_access/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 2-0, then rows 1-5 with \
             offset 0 for GDMA register masks and source-access cases.",
+    },
+    WsTestSuitePassFailCase {
+        name: "color/dma/gdma_timing.wsc",
+        env_var: "WS_TEST_SUITE_GDMA_TIMING_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_GDMA_TIMING_ROM,
+        model: HardwareModel::Color,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_GDMA_TIMING_MARKER_RANGES),
+        source_protocol: "`src/color/dma/gdma_timing/main.c` first checks \
+            the cycle-count harness with 0, 1, and 2 NOPs, then calls \
+            `draw_pass_fail` at rows 3-11 for GDMA-from-ROM lengths \
+            0, 2, 4, 6, 8, 16, 32, 64, and 128, and row 12 for SRAM-source \
+            abort timing. All markers use offset 0.",
     },
     WsTestSuitePassFailCase {
         name: "color/dma/sound_dma.wsc",
