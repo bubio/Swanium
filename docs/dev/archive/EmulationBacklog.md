@@ -1,6 +1,13 @@
-# Emulation backlog
+# Archived emulation backlog
 
 Last updated: 2026-07-07.
+
+Archived: 2026-07-10.
+
+This older priority backlog was superseded by
+[`../RemainingWork.md`](../RemainingWork.md), which is now the source of truth
+for open emulator work. This file is kept only as historical context for how the
+post-Milestone-9 backlog was organized.
 
 This backlog tracks emulator-core work that remains after the minimal playable
 application milestone. GUI polish, packaging, and frontend convenience features

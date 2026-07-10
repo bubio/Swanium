@@ -1,11 +1,12 @@
 # Emulation development plan
 
-Last updated: 2026-07-08.
+Last updated: 2026-07-10.
 
-This document turns `docs/dev/EmulationBacklog.md` into an execution plan. The
-goal is not to keep adding features blindly; it is to raise confidence that the
-emulated hardware is correct enough to run a broad WonderSwan / WonderSwan Color
-library and to keep regressions measurable.
+This document records emulator-focused milestone execution. Open work after the
+current milestones is tracked in `docs/dev/RemainingWork.md`. The goal is not to
+keep adding features blindly; it is to raise confidence that the emulated
+hardware is correct enough to run a broad WonderSwan / WonderSwan Color library
+and to keep regressions measurable.
 
 For the quickest progress check, see `docs/dev/Status.md`. For the full document
 map, see `docs/dev/README.md`.
@@ -56,7 +57,7 @@ Implementation notes:
 - Clock SDMA from the APU/frame-driving path only after confirming the expected
   cadence from WSdev / STS / WonderCrab / reference emulator behavior. If the
   cadence remains uncertain, implement the best-documented behavior and mark the
-  exact timing as a follow-up in `EmulationBacklog.md`.
+  exact timing as a follow-up in `RemainingWork.md`.
 
 Tests:
 
@@ -69,7 +70,7 @@ Definition of done:
 
 - `cargo test -p swanium-core sdma` passes.
 - Existing APU direct-voice tests remain unchanged in behavior.
-- `Status.md` and `EmulationBacklog.md` are updated to move SDMA out of P0.
+- `Status.md` and `RemainingWork.md` are updated to move SDMA out of P0.
 
 ### 9b. Public ROM result decoding
 
@@ -150,7 +151,7 @@ Scope:
 Definition of done:
 
 - A short "dot-level required/not yet required" decision is added to
-  `EmulationBacklog.md`.
+  `RemainingWork.md`.
 - Any discovered scanline-boundary bugs have regression tests.
 
 ### 10c. Color PPU assumption validation
@@ -195,7 +196,7 @@ Scope:
 Definition of done:
 
 - Focused unit tests cover the implemented register semantics.
-- `EmulationBacklog.md` no longer lists these as untriaged unknowns.
+- `RemainingWork.md` no longer lists these as untriaged unknowns.
 
 ### 11b. PCM quality measurement
 
@@ -308,8 +309,7 @@ Before calling the emulator side "v1-compatible enough", require:
 
 ## Recommended immediate sequence
 
-1. Milestone 13: audit timing-sensitive failures or suspected timing gaps before
-   decomposing CPU/bus timing.
+1. Use `RemainingWork.md` as the current open-work queue.
 2. Expand public-ROM coverage in `crates/core/tests/public_roms.rs` only after
    confirming each ROM's pass/fail protocol from source.
 3. Add compatibility-matrix rows whenever a new public ROM, synthetic hardware

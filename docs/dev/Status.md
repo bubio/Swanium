@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-08. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-10. Update this file (not AGENTS.md) when implementation progress changes.
 
 This is the source of truth for current progress. For the broader document map,
 start with `docs/dev/README.md`.
@@ -13,7 +13,7 @@ start with `docs/dev/README.md`.
 | Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
 | Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
 | Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest pages 0-28 and WSHWTest `Test All` public oracles pass; further precision work is evidence-driven follow-up. |
-| Remaining emulator risks | Tracked in `docs/dev/EmulationBacklog.md` | Main risks are broader public ROM coverage, dot-level PPU only if proven needed, exact audio/SDMA timing validation, and CPU/bus timing precision. |
+| Remaining emulator work | Tracked in `docs/dev/RemainingWork.md` | Next priority is broader public ROM oracle coverage; dot-level PPU, timing decomposition, and audio/SDMA validation stay evidence-driven. |
 | Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
 | Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
 
@@ -305,7 +305,7 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
 - **Milestone 10 Color PPU validation (done at synthetic-test level)**: implementation tests now pin
   color-zero transparency, backdrop palette indexing, 4bpp planar byte order, packed high/low nibble
   order, background tile-map bank selection, and sprite attribute bit 13 as priority rather than a
-  tile-bank selector. Hardware/public-ROM validation remains tracked in `EmulationBacklog.md`.
+  tile-bank selector. Hardware/public-ROM validation remains tracked in `RemainingWork.md`.
 
 ## Tooling — profiling & benchmarks
 

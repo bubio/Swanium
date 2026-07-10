@@ -187,7 +187,7 @@ video               audio                input
     WSCPUTest と `ws-test-suite` の一部は env-gated opt-in テストとして実装済み。
 -   最新の実装状況は [Status.md](./Status.md) の "CPU test ROMs" を参照。
 -   追加の公開 ROM カバレッジ拡充は、Phase 3 の未完了ではなく
-    [EmulationBacklog.md](./EmulationBacklog.md) の継続的な検証作業として扱う。
+    [RemainingWork.md](./RemainingWork.md) の継続的な検証作業として扱う。
 
 ---
 
@@ -961,5 +961,5 @@ WSCPUTest は画面出力の `Ok!` / `Failed!` をデコードし、`ws-test-sui
 
 残っている作業は「TODO(issue) の消化」ではなく、追加の public ROM ごとに
 ソース確認済みの結果プロトコルを増やすこと。これは
-[EmulationBacklog.md](./EmulationBacklog.md) の Public ROM verification harness として
+[RemainingWork.md](./RemainingWork.md) の Public ROM oracle expansion として
 継続管理する。
