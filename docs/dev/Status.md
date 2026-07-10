@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 643 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 646 passing
 tests (+4 opt-in, env-gated public-ROM tests marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -71,8 +71,9 @@ FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::ru
 injects A to start the default `Test All` menu item, and decodes the background tile map for
 `Ok!` / `Failed!` output. The ws-test-suite path now has source-confirmed decoded oracles for
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
-`mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`, and
-`mono/display/mono_palettes_writemask.ws`, `color/dma/alignment_access.wsc`,
+`mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
+`mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
+`color/dma/alignment_access.wsc`,
 and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
 These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
@@ -108,6 +109,10 @@ The ws-test-suite display/DMA additions pin mono palette register write masks
 and GDMA source gating: SRAM sources abort, and source `0x80000` in the
 slow-ROM window aborts while port `0xA0` bit 3 (`SYSTEM_CTRL1_ROM_WAIT`) is
 set; upper linear ROM, fast-ROM, and IRAM sources still complete when allowed.
+The ws-test-suite RTC mapper oracle pins the generated RTC footer flag
+(`0x0C` bit 2 / flags value `0x04`), status-port ready/busy bits, command
+payload lengths for `0x10`-`0x1B`, unsupported-command timeout for `0x1C`, and
+the rule that writing the ready bit to port `0xCA` does not force ready.
 
 ### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
@@ -287,7 +292,9 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   (default epoch 2000-01-01 if never injected), and the clock free-runs off the emulated master clock
   (`System::drive_frame` → `Bus::tick_rtc(CYCLES_PER_FRAME)`) with full BCD carry and leap-year handling.
   `Bus` routes 0xCA/0xCB to the RTC only when `cart.has_rtc()`; presence is decoded from footer flags byte
-  0x0C bit 1 (unverified). Command codes / byte order and the alarm-IRQ path are unverified/deferred —
+  0x0C bit 2, confirmed by ws-test-suite `mono/rtc/mapper.ws` (`rtc = true` generates flags `0x04`).
+  Port `0xCA` reads ready/busy status rather than echoing the command byte, and the mapper oracle pins
+  command payload lengths and ready-cleared-on-new behavior. Alarm-IRQ behavior is still unverified/deferred —
   see DevelopmentPlan 実装メモ（8e）.
 - **8 addendum — HW_FLAGS 0xA0 / real WSC colour boot (done)**: real WSC ROMs (Final Fantasy, etc.) run
   as Color hardware and render in colour. The missing piece was the power-on hardware-detect register:

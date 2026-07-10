@@ -1259,10 +1259,10 @@ fn mono_model_ignores_color_bit() {
 
 // ── Cartridge RTC (ports 0xCA/0xCB) ──────────────────────────────────────────
 
-/// 16-byte ROM whose footer flags byte (offset 0xC) sets bit 1 = RTC present.
+/// 16-byte ROM whose footer flags byte (offset 0xC) sets bit 2 = RTC present.
 fn rom_with_rtc() -> Vec<u8> {
     let mut rom = vec![0u8; 16];
-    rom[0xC] = 0x02;
+    rom[0xC] = 0x04;
     rom
 }
 
@@ -1291,9 +1291,10 @@ fn rtc_footer_bit_creates_clock() {
 fn rtc_datetime_read_over_ports_returns_injected_time() {
     let mut bus = Bus::from_rom(rom_with_rtc());
     bus.set_rtc_datetime(26, 7, 3, 5, 12, 34, 56);
-    // Command port: select "read date/time"; the ready bit reads back set.
+    // Command port: select "read date/time"; status reports ready and busy
+    // until the seven-byte payload has been consumed.
     bus.write_io(0xCA, 0x14);
-    assert_eq!(bus.read_io(0xCA), 0x94);
+    assert_eq!(bus.read_io(0xCA), 0x90);
     let got: Vec<u8> = (0..7).map(|_| bus.read_io(0xCB)).collect();
     assert_eq!(got, vec![0x26, 0x07, 0x03, 5, 0x12, 0x34, 0x56]);
 }

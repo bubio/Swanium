@@ -187,7 +187,7 @@ fn rtc_free_runs_one_second_across_frames() {
     let frames = MASTER_CLOCK_HZ.div_ceil(CYCLES_PER_FRAME);
     let mut rom = halting_rom();
     let len = rom.len();
-    rom[len - 16 + 0x0C] = 0x02; // footer flags bit 1 = on-cartridge RTC
+    rom[len - 16 + 0x0C] = 0x04; // footer flags bit 2 = on-cartridge RTC
 
     // `from_rom` parses the footer (and thus the RTC bit); `new` does not.
     let mut system = System::from_rom(rom);

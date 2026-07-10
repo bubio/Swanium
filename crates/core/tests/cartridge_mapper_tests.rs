@@ -194,14 +194,14 @@ fn eeprom_write_disable_initialization_blocks_later_write() {
 
 /// Build a bus whose cartridge footer marks an RTC device as present.
 fn rtc_bus() -> Bus {
-    Bus::from_rom(rom_with_footer(0x10000, &[(0xC, 0x02)]))
+    Bus::from_rom(rom_with_footer(0x10000, &[(0xC, 0x04)]))
 }
 
 #[test]
 fn rtc_footer_bit_exposes_ready_command_port() {
     let mut bus = rtc_bus();
     bus.write_io(0xCA, 0x14);
-    assert_eq!(bus.read_io(0xCA), 0x94);
+    assert_eq!(bus.read_io(0xCA), 0x90);
 }
 
 #[test]

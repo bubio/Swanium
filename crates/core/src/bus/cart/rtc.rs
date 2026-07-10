@@ -24,10 +24,10 @@
 //! The CPU talks to the RTC through two I/O ports:
 //!
 //! * **0xCA — command/status**: a write selects the active operation; a read
-//!   returns the command with the "ready" bit (bit 7) set.
+//!   returns the command protocol status bits: ready (bit 7) and busy (bit 4).
 //! * **0xCB — data**: sequential access to the payload of the active command.
-//!   Each read or write advances an internal byte pointer that wraps at the end
-//!   of the command's payload.
+//!   Each read or write advances an internal byte pointer. The ready/busy bits
+//!   track how many bytes remain in the active command's payload.
 //!
 //! The command byte values and payload ordering below follow the public WSdev /
 //! emulator documentation but are **unverified against hardware or a test ROM**
@@ -51,17 +51,23 @@ const CYCLES_PER_SECOND: u32 = crate::system::MASTER_CLOCK_HZ;
 
 /// "Command ready / active" bit returned when reading the command port (0xCA).
 const CMD_READY: u8 = 0x80;
+/// "Command busy / more bytes pending" bit returned on the command port (0xCA).
+const CMD_BUSY: u8 = 0x10;
 /// Mask selecting the operation from a command byte (low 5 bits).
 const CMD_MASK: u8 = 0x1F;
 
-// Command codes (low 5 bits of the 0xCA byte). Unverified; see the module docs.
+// Command codes (low 5 bits of the 0xCA byte).
 const CMD_RESET: u8 = 0x10;
-const CMD_STATUS_READ: u8 = 0x12;
-const CMD_STATUS_WRITE: u8 = 0x13;
-const CMD_DATETIME_READ: u8 = 0x14;
-const CMD_DATETIME_WRITE: u8 = 0x15;
-const CMD_ALARM_READ: u8 = 0x18;
-const CMD_ALARM_WRITE: u8 = 0x19;
+const CMD_STATUS_WRITE: u8 = 0x12;
+const CMD_STATUS_READ: u8 = 0x13;
+const CMD_DATETIME_WRITE: u8 = 0x14;
+const CMD_DATETIME_READ: u8 = 0x15;
+const CMD_UNKNOWN_3_WRITE: u8 = 0x16;
+const CMD_UNKNOWN_3_READ: u8 = 0x17;
+const CMD_ALARM_A_WRITE: u8 = 0x18;
+const CMD_ALARM_A_READ: u8 = 0x19;
+const CMD_ALARM_B_WRITE: u8 = 0x1A;
+const CMD_ALARM_B_READ: u8 = 0x1B;
 
 /// Value returned when reading the data port with no readable command active.
 const OPEN_BUS: u8 = 0x90;
@@ -88,6 +94,8 @@ pub struct Rtc {
     // Transient command-protocol state (not persisted).
     command: u8,
     index: u8,
+    remaining: u8,
+    unsupported_busy: bool,
 
     // Sub-second accumulator, in master-clock cycles (not persisted).
     cycle_accum: u32,
@@ -109,6 +117,8 @@ impl Default for Rtc {
             alarm_minute: 0x00,
             command: 0x00,
             index: 0,
+            remaining: 0,
+            unsupported_busy: false,
             cycle_accum: 0,
         }
     }
@@ -218,14 +228,27 @@ impl Rtc {
     pub fn write_command(&mut self, value: u8) {
         self.command = value;
         self.index = 0;
-        if value & CMD_MASK == CMD_RESET {
+
+        if value & CMD_READY != 0 {
+            self.remaining = 0;
+            self.unsupported_busy = false;
+            return;
+        }
+
+        let command = value & CMD_MASK;
+        self.remaining = command_transfer_len(command);
+        self.unsupported_busy = self.remaining == 0;
+
+        if command == CMD_RESET {
             self.reset_registers();
         }
     }
 
-    /// Read the command port (0xCA): the active command with the ready bit set.
+    /// Read the command port (0xCA): ready/busy status for the active command.
     pub fn read_command(&self) -> u8 {
-        self.command | CMD_READY
+        let ready = u8::from(self.remaining > 0) * CMD_READY;
+        let busy = u8::from(self.remaining > 1 || self.unsupported_busy) * CMD_BUSY;
+        ready | busy
     }
 
     /// Reset the battery-backed registers to the epoch, leaving the transient
@@ -240,19 +263,27 @@ impl Rtc {
     /// Handle a write to the data port (0xCB) for the active command.
     pub fn write_data(&mut self, value: u8) {
         match self.command & CMD_MASK {
-            CMD_DATETIME_WRITE => {
+            CMD_DATETIME_WRITE | CMD_DATETIME_READ => {
                 self.set_datetime_byte(self.index, value);
                 self.index = (self.index + 1) % 7;
+                self.consume_transfer_byte();
             }
-            CMD_ALARM_WRITE => {
+            CMD_ALARM_A_WRITE | CMD_ALARM_B_WRITE => {
                 if self.index == 0 {
                     self.alarm_hour = value;
                 } else {
                     self.alarm_minute = value;
                 }
                 self.index = (self.index + 1) % 2;
+                self.consume_transfer_byte();
             }
-            CMD_STATUS_WRITE => self.status = value,
+            CMD_STATUS_WRITE | CMD_STATUS_READ => {
+                self.status = value;
+                self.consume_transfer_byte();
+            }
+            CMD_UNKNOWN_3_WRITE | CMD_UNKNOWN_3_READ => {
+                self.consume_transfer_byte();
+            }
             _ => {}
         }
     }
@@ -260,23 +291,36 @@ impl Rtc {
     /// Read the data port (0xCB) for the active command, advancing the pointer.
     pub fn read_data(&mut self) -> u8 {
         match self.command & CMD_MASK {
-            CMD_DATETIME_READ => {
+            CMD_DATETIME_WRITE | CMD_DATETIME_READ => {
                 let v = self.datetime_byte(self.index);
                 self.index = (self.index + 1) % 7;
+                self.consume_transfer_byte();
                 v
             }
-            CMD_ALARM_READ => {
+            CMD_ALARM_A_READ | CMD_ALARM_B_READ => {
                 let v = if self.index == 0 {
                     self.alarm_hour
                 } else {
                     self.alarm_minute
                 };
                 self.index = (self.index + 1) % 2;
+                self.consume_transfer_byte();
                 v
             }
-            CMD_STATUS_READ => self.status,
+            CMD_STATUS_WRITE | CMD_STATUS_READ => {
+                self.consume_transfer_byte();
+                self.status
+            }
+            CMD_UNKNOWN_3_WRITE | CMD_UNKNOWN_3_READ => {
+                self.consume_transfer_byte();
+                0
+            }
             _ => OPEN_BUS,
         }
+    }
+
+    fn consume_transfer_byte(&mut self) {
+        self.remaining = self.remaining.saturating_sub(1);
     }
 
     fn datetime_byte(&self, index: u8) -> u8 {
@@ -371,6 +415,16 @@ fn days_in_month(month: u8, year: u8) -> u8 {
         2 if year.is_multiple_of(4) => 29,
         2 => 28,
         _ => 30, // out-of-range guard; should not occur with valid registers
+    }
+}
+
+fn command_transfer_len(command: u8) -> u8 {
+    match command {
+        0x10..=0x13 => 1,
+        0x14 | 0x15 => 7,
+        0x16 | 0x17 => 3,
+        0x18..=0x1B => 2,
+        _ => 0,
     }
 }
 
@@ -508,7 +562,7 @@ mod tests {
     fn command_read_sets_ready_bit() {
         let mut rtc = Rtc::new();
         rtc.write_command(CMD_DATETIME_READ);
-        assert_eq!(rtc.read_command(), CMD_READY | CMD_DATETIME_READ);
+        assert_eq!(rtc.read_command(), CMD_READY | CMD_BUSY);
     }
 
     #[test]
@@ -519,17 +573,48 @@ mod tests {
         assert_eq!(rtc.datetime_byte(0), 0x00);
         assert_eq!(rtc.datetime_byte(1), 0x01);
         assert_eq!(rtc.datetime_byte(2), 0x01);
-        // The RESET command itself remains the active command (with ready bit).
-        assert_eq!(rtc.read_command(), CMD_READY | CMD_RESET);
+        // The RESET command itself remains ready for its one-byte payload.
+        assert_eq!(rtc.read_command(), CMD_READY);
+    }
+
+    #[test]
+    fn status_bits_track_command_payload_length() {
+        let mut rtc = Rtc::new();
+        rtc.write_command(CMD_DATETIME_READ);
+        for _ in 0..6 {
+            assert_eq!(rtc.read_command(), CMD_READY | CMD_BUSY);
+            rtc.read_data();
+        }
+        assert_eq!(rtc.read_command(), CMD_READY);
+        rtc.read_data();
+        assert_eq!(rtc.read_command(), 0x00);
+    }
+
+    #[test]
+    fn unsupported_command_stays_busy_without_ready() {
+        let mut rtc = Rtc::new();
+        rtc.write_command(0x1C);
+        assert_eq!(rtc.read_command(), CMD_BUSY);
+        rtc.read_data();
+        assert_eq!(rtc.read_command(), CMD_BUSY);
+    }
+
+    #[test]
+    fn writing_ready_bit_does_not_force_ready_status() {
+        let mut rtc = Rtc::new();
+        rtc.write_command(CMD_RESET);
+        assert_eq!(rtc.read_command(), CMD_READY);
+        rtc.write_command(CMD_READY | CMD_STATUS_READ);
+        assert_eq!(rtc.read_command(), 0x00);
     }
 
     #[test]
     fn alarm_protocol_round_trips() {
         let mut rtc = Rtc::new();
-        rtc.write_command(CMD_ALARM_WRITE);
+        rtc.write_command(CMD_ALARM_A_WRITE);
         rtc.write_data(0x07);
         rtc.write_data(0x30);
-        rtc.write_command(CMD_ALARM_READ);
+        rtc.write_command(CMD_ALARM_A_READ);
         assert_eq!(rtc.read_data(), 0x07);
         assert_eq!(rtc.read_data(), 0x30);
     }
@@ -546,7 +631,7 @@ mod tests {
     #[test]
     fn data_read_without_readable_command_is_open_bus() {
         let mut rtc = Rtc::new();
-        rtc.write_command(CMD_STATUS_WRITE); // write-only command active
+        rtc.write_command(0x1C);
         assert_eq!(rtc.read_data(), OPEN_BUS);
     }
 

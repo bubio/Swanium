@@ -16,14 +16,14 @@
 //! | 0x9    | Game revision / version                              |
 //! | 0xA    | ROM size code                                        |
 //! | 0xB    | Save type code (SRAM / EEPROM size, or none)         |
-//! | 0xC    | Flags: bit 0 orientation, bit 2 bus width, bit 3 speed |
+//! | 0xC    | Flags: bit 0 orientation, bit 2 RTC, bit 3 speed |
 //! | 0xD    | Mapper chip (0 ⇒ Bandai 2001, 1 ⇒ Bandai 2003)       |
 //! | 0xE–F  | 16-bit checksum (little-endian)                      |
 //!
 //! The mapper byte at offset 0xD follows WonderCrab's verified interpretation.
-//! On-cartridge RTC presence is decoded from the flags byte (offset 0xC, bit 1);
-//! this bit position is **unverified** against hardware and documented as an
-//! assumption in the 実装メモ（8e） block of `docs/dev/DevelopmentPlan.md`.
+//! On-cartridge RTC presence is decoded from the flags byte (offset 0xC, bit 2),
+//! as observed in the ws-test-suite `mono/rtc/mapper` ROM generated with
+//! `rtc = true`.
 
 /// Length of the WonderSwan ROM footer in bytes.
 pub const FOOTER_LEN: usize = 16;
@@ -43,8 +43,8 @@ const OFF_CHECKSUM: usize = 0xE;
 const SYSTEM_COLOR: u8 = 0x01;
 /// Bit 0 of the flags byte: screen orientation (1 ⇒ vertical).
 const FLAG_VERTICAL: u8 = 0x01;
-/// Bit 1 of the flags byte: on-cartridge RTC present (unverified — see 実装メモ 8e).
-const FLAG_RTC: u8 = 0x02;
+/// Bit 2 of the flags byte: on-cartridge RTC present.
+const FLAG_RTC: u8 = 0x04;
 
 /// The mapper (bank-switch) chip a cartridge uses.
 ///
@@ -133,7 +133,7 @@ pub struct CartridgeHeader {
     pub save_type: SaveType,
     /// Screen orientation is vertical (otherwise horizontal).
     pub vertical: bool,
-    /// Cartridge carries a real-time clock (flags byte bit 1; unverified).
+    /// Cartridge carries a real-time clock (flags byte bit 2).
     pub rtc: bool,
     /// Bank-switch mapper chip.
     pub mapper: Mapper,

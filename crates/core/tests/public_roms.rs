@@ -37,6 +37,8 @@ const DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/soc/interrupts.ws";
 const DEFAULT_WS_TEST_SUITE_INTERRUPT_TIMING_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/interrupt_timing.ws";
+const DEFAULT_WS_TEST_SUITE_RTC_MAPPER_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/rtc/mapper.ws";
 const DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/mono_palettes_writemask.ws";
 const DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM: &str =
@@ -121,8 +123,14 @@ struct WsTestSuitePassFailCase {
     env_var: &'static str,
     default_path: &'static str,
     model: HardwareModel,
-    marker_ranges: &'static [(usize, usize)],
+    markers: WsTestSuiteMarkers,
     source_protocol: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum WsTestSuiteMarkers {
+    Ranges(&'static [(usize, usize)]),
+    Positions(&'static [(usize, usize)]),
 }
 
 const WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
@@ -145,6 +153,35 @@ const WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES: &[(usize, usize)] = &[
     (12, 0),
     (13, 0),
     (14, 0),
+];
+const WS_TEST_SUITE_RTC_MAPPER_MARKER_POSITIONS: &[(usize, usize)] = &[
+    (0, 1),
+    (0, 0),
+    (1, 1),
+    (1, 0),
+    (2, 1),
+    (2, 0),
+    (3, 1),
+    (3, 0),
+    (4, 1),
+    (4, 0),
+    (5, 1),
+    (5, 0),
+    (6, 1),
+    (6, 0),
+    (7, 1),
+    (7, 0),
+    (8, 1),
+    (8, 0),
+    (9, 1),
+    (9, 0),
+    (10, 1),
+    (10, 0),
+    (11, 1),
+    (11, 0),
+    (12, 1),
+    (13, 1),
+    (13, 0),
 ];
 const WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES: &[(usize, usize)] = &[
     (0, 1),
@@ -184,7 +221,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_80186_QUIRKS_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES),
         source_protocol: "`src/mono/cpu/80186_quirks/main.c` calls `draw_pass_fail` \
             three times at rows 0-2 with offset 0.",
     },
@@ -193,7 +230,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_PREFIXES_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_PREFIXES_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_PREFIXES_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_PREFIXES_MARKER_RANGES),
         source_protocol: "`src/mono/cpu/prefixes/main.c` writes six direct \
             prefix/string markers at rows 0-5 and calls `draw_pass_fail` for \
             `REP:ESx8:MOVSB(IRQ)` on row 6; all use offset 0.",
@@ -203,7 +240,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_SOC_INTERRUPTS_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES),
         source_protocol: "`src/mono/soc/interrupts/main.c` has two rows of \
             `draw_pass_fail`: row 0 uses offsets 7-0 and row 1 uses offsets 4-0.",
     },
@@ -212,17 +249,28 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_INTERRUPT_TIMING_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_INTERRUPT_TIMING_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES),
         source_protocol: "`src/mono/cpu/interrupt_timing/main.c` expands \
             `IP_STORE_TEST_CALL` fifteen times; each call uses \
             `draw_pass_fail(i++, 0, ...)`.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/rtc/mapper.ws",
+        env_var: "WS_TEST_SUITE_RTC_MAPPER_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_RTC_MAPPER_ROM,
+        model: HardwareModel::Mono,
+        markers: WsTestSuiteMarkers::Positions(WS_TEST_SUITE_RTC_MAPPER_MARKER_POSITIONS),
+        source_protocol: "`src/mono/rtc/mapper/main.c` loops over RTC commands \
+            0x10-0x1C: rows 0-11 use offsets 1 and 0 for timeout and payload \
+            length, row 12 uses only offset 1 for unsupported-command timeout, \
+            and row 13 uses offsets 1 and 0 for ready-cleared-on-new.",
     },
     WsTestSuitePassFailCase {
         name: "mono/display/mono_palettes_writemask.ws",
         env_var: "WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES),
         source_protocol: "`src/mono/display/mono_palettes_writemask/main.c` \
             loops over rows 0-15 and calls `draw_pass_fail` with offsets 1 \
             and 0 for each mono palette register.",
@@ -232,7 +280,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_ROM,
         model: HardwareModel::Color,
-        marker_ranges: WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_GDMA_ALIGNMENT_ACCESS_MARKER_RANGES),
         source_protocol: "`src/color/dma/alignment_access/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 2-0, then rows 1-5 with \
             offset 0 for GDMA register masks and source-access cases.",
@@ -242,7 +290,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_STRLEN_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/strlen/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 1-0.",
     },
@@ -251,7 +299,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_STRCHR_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/strchr/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 4-0.",
     },
@@ -260,7 +308,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_MEMSET_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMSET_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/memset/main.c` uses \
             `draw_pass_fail` on rows 0-1 with offsets 6-0.",
     },
@@ -269,7 +317,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_MEMCMP_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCMP_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_MEMCMP_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_MEMCMP_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/memcmp/main.c` uses \
             `draw_pass_fail` on rows 0-1 with offsets 4-0.",
     },
@@ -278,7 +326,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_MEMCPY_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCPY_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_MEMCPY_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_MEMCPY_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/memcpy/main.c` uses \
             `draw_pass_fail` on rows 0-3 with offsets 5-0.",
     },
@@ -287,7 +335,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_MEMCCPY_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_MEMCCPY_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_MEMCCPY_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_MEMCCPY_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/memccpy/main.c` uses \
             `draw_pass_fail` on row 0 with offsets 7-0.",
     },
@@ -296,7 +344,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_SETJMP_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_SETJMP_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_SETJMP_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_SETJMP_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/setjmp/main.c` writes pass \
             markers for setjmp return values 0, 1, and 2 on rows 0-2.",
     },
@@ -305,7 +353,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_INITFINI_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_INITFINI_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_INITFINI_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/initfini/main.c` uses \
             `draw_pass_fail` on row 0 with offset 0.",
     },
@@ -314,7 +362,7 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         env_var: "WS_TEST_SUITE_LIBC_MALLOC_ROM",
         default_path: DEFAULT_WS_TEST_SUITE_LIBC_MALLOC_ROM,
         model: HardwareModel::Mono,
-        marker_ranges: WS_TEST_SUITE_LIBC_MALLOC_MARKER_RANGES,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_LIBC_MALLOC_MARKER_RANGES),
         source_protocol: "`src/wonderful/libc/malloc/main.c` uses \
             `draw_pass_fail` on rows 0-2 with offsets 1-0 and row 3 with \
             offset 0 after the oversized allocation check.",
@@ -484,17 +532,25 @@ fn run_wscputest_until_result(rom: Vec<u8>) -> (System, String) {
     (system, latest_text)
 }
 
-fn read_ws_test_suite_markers(system: &System, marker_ranges: &[(usize, usize)]) -> Vec<u8> {
-    marker_ranges
+fn ws_test_suite_marker_positions(markers: WsTestSuiteMarkers) -> Vec<(usize, usize)> {
+    match markers {
+        WsTestSuiteMarkers::Ranges(marker_ranges) => marker_ranges
+            .iter()
+            .flat_map(|&(row, max_offset)| (0..=max_offset).rev().map(move |offset| (row, offset)))
+            .collect(),
+        WsTestSuiteMarkers::Positions(marker_positions) => marker_positions.to_vec(),
+    }
+}
+
+fn read_ws_test_suite_markers(system: &System, marker_positions: &[(usize, usize)]) -> Vec<u8> {
+    marker_positions
         .iter()
-        .flat_map(|&(row, max_offset)| {
-            (0..=max_offset).rev().map(move |offset| {
-                let x = 27 - offset;
-                let addr = WS_TEST_SUITE_SCREEN_1
-                    + row as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES
-                    + x as u32 * 2;
-                system.read_memory_at(addr)
-            })
+        .map(|&(row, offset)| {
+            let x = 27 - offset;
+            let addr = WS_TEST_SUITE_SCREEN_1
+                + row as u32 * WS_TEST_SUITE_TILEMAP_STRIDE_BYTES
+                + x as u32 * 2;
+            system.read_memory_at(addr)
         })
         .collect()
 }
@@ -505,15 +561,11 @@ fn run_ws_test_suite_pass_fail_case(case: &WsTestSuitePassFailCase) {
     let mut system = System::from_rom(rom);
     system.set_model(case.model);
 
-    let marker_count = case
-        .marker_ranges
-        .iter()
-        .map(|&(_, max_offset)| max_offset + 1)
-        .sum();
-    let mut markers = vec![0u8; marker_count];
+    let marker_positions = ws_test_suite_marker_positions(case.markers);
+    let mut markers = vec![0u8; marker_positions.len()];
     for _ in 0..WS_TEST_SUITE_MAX_FRAMES {
         system.run_frame(KeyState::NONE);
-        markers = read_ws_test_suite_markers(&system, case.marker_ranges);
+        markers = read_ws_test_suite_markers(&system, &marker_positions);
         if markers
             .iter()
             .all(|&tile| tile == WS_TEST_SUITE_PASS_TILE || tile == WS_TEST_SUITE_FAIL_TILE)
@@ -522,8 +574,7 @@ fn run_ws_test_suite_pass_fail_case(case: &WsTestSuitePassFailCase) {
         }
     }
 
-    let rows = case
-        .marker_ranges
+    let rows = marker_positions
         .iter()
         .map(|&(row, _)| row + 1)
         .max()
