@@ -47,6 +47,12 @@ pub struct Cpu {
     /// Set by a REP/REPE/REPNE prefix (0xF3/0xF2); consumed by the
     /// immediately following string instruction, then cleared by `step`.
     pub rep_prefix: Option<u8>,
+    /// Maskable IRQ delivery is inhibited for this many upcoming instruction
+    /// boundaries after STI/POPF/IRET enabling IF and after POP/MOV SS.
+    pub interrupt_inhibit: u8,
+    /// Trap delivery is inhibited for this many upcoming instruction
+    /// boundaries after POPF/IRET enabling TF.
+    pub trap_inhibit: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,7 +476,15 @@ impl Cpu {
             0x9D => {
                 // POPF
                 let v = self.pop16(bus);
+                let old_interrupt = self.flags.interrupt;
+                let old_trap = self.flags.trap;
                 self.flags = Flags::from_u16(v);
+                if !old_interrupt && self.flags.interrupt {
+                    self.interrupt_inhibit = 1;
+                }
+                if !old_trap && self.flags.trap {
+                    self.trap_inhibit = 1;
+                }
                 3
             }
             0x9E => {
@@ -686,7 +700,11 @@ impl Cpu {
                 4
             }
             0xFB => {
+                let was_enabled = self.flags.interrupt;
                 self.flags.interrupt = true;
+                if !was_enabled {
+                    self.interrupt_inhibit = 1;
+                }
                 4
             }
             0xFC => {
@@ -752,6 +770,7 @@ impl Cpu {
             }
             0x17 => {
                 self.regs.ss = self.pop16(bus);
+                self.interrupt_inhibit = 1;
                 3
             }
             0x1E => {
@@ -919,6 +938,9 @@ impl Cpu {
                 let m = decode_modrm(self, bus);
                 let v = self.read_rm16(bus, &m.rm);
                 self.regs.set_sreg(m.reg, v);
+                if m.reg == 2 {
+                    self.interrupt_inhibit = 1;
+                }
                 Self::cycles_for(&m.rm, 1, 3)
             }
 
@@ -1184,7 +1206,15 @@ impl Cpu {
                 self.regs.ip = self.pop16(bus);
                 self.regs.cs = self.pop16(bus);
                 let flags = self.pop16(bus);
+                let old_interrupt = self.flags.interrupt;
+                let old_trap = self.flags.trap;
                 self.flags = Flags::from_u16(flags);
+                if !old_interrupt && self.flags.interrupt {
+                    self.interrupt_inhibit = 1;
+                }
+                if !old_trap && self.flags.trap {
+                    self.trap_inhibit = 1;
+                }
                 10
             }
 

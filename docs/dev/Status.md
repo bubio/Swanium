@@ -70,12 +70,15 @@ env-gated in `tests/public_roms.rs`. The WSCPUTest path is verified against
 FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::run_frame`,
 injects A to start the default `Test All` menu item, and decodes the background tile map for
 `Ok!` / `Failed!` output. The ws-test-suite path now has source-confirmed decoded oracles for
-`mono/cpu/80186_quirks.ws`, `mono/soc/interrupts.ws`, and
+`mono/cpu/80186_quirks.ws`, `mono/cpu/interrupt_timing.ws`,
+`mono/soc/interrupts.ws`, and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini}.ws`.
 These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
 `screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Unknown
 ws-test-suite ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0`
 convention.
+The interrupt-timing oracle pins STI/POPF/IRET IF-enable delay, POP/MOV SS IRQ
+delay, and TF/BRK delivery after POPF.
 
 Milestone 13 added FluBBaOfWard/WSTimingTest v0.4.0 as a public CPU timing oracle
 covering pages 0-28. The source-confirmed decoder reads the background tile map at

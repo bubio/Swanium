@@ -203,8 +203,12 @@ impl System {
     fn run_cpu_cycles(&mut self, budget: u32) -> u32 {
         let mut spent = 0;
         while spent < budget {
+            let maskable_inhibited = self.cpu.interrupt_inhibit > 0;
+            if maskable_inhibited {
+                self.cpu.interrupt_inhibit -= 1;
+            }
             if let Some(vector) = self.bus.pending_irq() {
-                if self.cpu.flags.interrupt {
+                if self.cpu.flags.interrupt && !maskable_inhibited {
                     let cycles = self.cpu.handle_irq(&mut self.bus, vector);
                     spent += cycles;
                     time_into!(self, apu_ns, {
@@ -221,6 +225,16 @@ impl System {
             time_into!(self, apu_ns, {
                 self.bus.tick_apu(cycles);
             });
+            let trap_inhibited = self.cpu.trap_inhibit > 0;
+            if trap_inhibited {
+                self.cpu.trap_inhibit -= 1;
+            } else if self.cpu.flags.trap {
+                let cycles = self.cpu.handle_irq(&mut self.bus, 1);
+                spent += cycles;
+                time_into!(self, apu_ns, {
+                    self.bus.tick_apu(cycles);
+                });
+            }
             #[cfg(feature = "profiling")]
             {
                 self.profile.instructions += 1;

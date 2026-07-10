@@ -33,6 +33,8 @@ const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws";
 const DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/soc/interrupts.ws";
+const DEFAULT_WS_TEST_SUITE_INTERRUPT_TIMING_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/interrupt_timing.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strlen.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM: &str =
@@ -117,6 +119,23 @@ struct WsTestSuitePassFailCase {
 
 const WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
 const WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES: &[(usize, usize)] = &[(0, 7), (1, 4)];
+const WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES: &[(usize, usize)] = &[
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 0),
+    (11, 0),
+    (12, 0),
+    (13, 0),
+    (14, 0),
+];
 const WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES: &[(usize, usize)] = &[(0, 1)];
 const WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES: &[(usize, usize)] = &[(0, 4)];
 const WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES: &[(usize, usize)] = &[(0, 6), (1, 6)];
@@ -145,6 +164,16 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         marker_ranges: WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES,
         source_protocol: "`src/mono/soc/interrupts/main.c` has two rows of \
             `draw_pass_fail`: row 0 uses offsets 7-0 and row 1 uses offsets 4-0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/cpu/interrupt_timing.ws",
+        env_var: "WS_TEST_SUITE_INTERRUPT_TIMING_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_INTERRUPT_TIMING_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_INTERRUPT_TIMING_MARKER_RANGES,
+        source_protocol: "`src/mono/cpu/interrupt_timing/main.c` expands \
+            `IP_STORE_TEST_CALL` fifteen times; each call uses \
+            `draw_pass_fail(i++, 0, ...)`.",
     },
     WsTestSuitePassFailCase {
         name: "wonderful/libc/strlen.ws",

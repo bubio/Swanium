@@ -56,8 +56,6 @@ New source-confirmed ws-test-suite candidates expose remaining CPU/interrupt
 work and should be investigated before being promoted to passing oracles:
 
 - `mono/cpu/prefixes.ws`: final `REP:ESx8:MOVSB(IRQ)` marker fails locally.
-- `mono/cpu/interrupt_timing.ws`: IRQ/BRK delay cases fail locally after the
-  initial divide-by-zero checks.
 
 Scope:
 
