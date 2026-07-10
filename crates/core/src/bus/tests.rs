@@ -375,6 +375,80 @@ fn int_cause_clear_leaves_other_bits_intact() {
     assert_eq!(cause & (1 << IrqSource::HBlankTimer as u8), 1 << 7);
 }
 
+#[test]
+fn serial_tx_irq_latches_when_enabled_uart_is_interrupt_enabled() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB3, 0x84);
+    assert_eq!(bus.read_io(0xB4) & 0x01, 0);
+
+    bus.write_io(0xB2, 0x01);
+    assert_eq!(bus.read_io(0xB4) & 0x01, 0x01);
+}
+
+#[test]
+fn serial_tx_irq_ack_reasserts_only_while_enabled() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB3, 0x84);
+    bus.write_io(0xB2, 0x01);
+
+    bus.write_io(0xB6, 0x01);
+    assert_eq!(
+        bus.read_io(0xB4) & 0x01,
+        0x01,
+        "enabled UART TX is a level IRQ while INT_ENABLE bit 0 is set"
+    );
+
+    bus.write_io(0xB2, 0x00);
+    bus.write_io(0xB6, 0x01);
+    assert_eq!(
+        bus.read_io(0xB4) & 0x01,
+        0,
+        "ACK can clear UART TX once its INT_ENABLE bit is cleared"
+    );
+}
+
+#[test]
+fn serial_tx_irq_level_readback_is_mono_only() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0xB3, 0x84);
+    bus.write_io(0xB2, 0x01);
+
+    assert_eq!(bus.read_io(0xB4) & 0x01, 0);
+}
+
+#[test]
+fn int_vector_read_includes_highest_cause_bit() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0xB0, 0x87);
+    assert_eq!(bus.read_io(0xB0), 0x80);
+
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
+    bus.request_irq(IrqSource::VBlank);
+    assert_eq!(bus.read_io(0xB0), 0x86);
+
+    bus.write_io(0xB2, 0);
+    assert_eq!(
+        bus.read_io(0xB0),
+        0x86,
+        "changing INT_ENABLE does not clear an already-latched cause"
+    );
+
+    bus.write_io(0xB6, 0xFF);
+    assert_eq!(bus.read_io(0xB0), 0x80);
+}
+
+#[test]
+fn int_vector_status_low_bits_are_mono_only() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.set_model(HardwareModel::Color);
+    bus.write_io(0xB0, 0x87);
+    bus.write_io(0xB2, 1 << IrqSource::VBlank as u8);
+    bus.request_irq(IrqSource::VBlank);
+
+    assert_eq!(bus.read_io(0xB0), 0x80);
+}
+
 fn setup_gdma_ctrl_read() -> (u8, Bus) {
     let mut bus = color_video_bus(vec![0u8; 0x10000]);
     // 0xC0 = start (bit 7) + decrement direction (bit 6). With length 0 the

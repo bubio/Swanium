@@ -28,6 +28,8 @@ const SDMA_DECREMENT: u8 = 0x40;
 const SDMA_REPEAT: u8 = 0x08;
 const SDMA_HOLD: u8 = 0x04;
 const SDMA_CYCLES_PER_SAMPLE: u16 = 128;
+const SERIAL_ENABLE: u8 = 0x80;
+const SERIAL_TX_READY_IRQ: u8 = 1 << IrqSource::SerialReceive as u8;
 
 /// Hardware interrupt request sources (bit positions in INT_CAUSE / INT_ENABLE).
 ///
@@ -248,6 +250,24 @@ impl Bus {
     /// Assert a hardware interrupt request source.
     pub fn request_irq(&mut self, src: IrqSource) {
         self.ports[0xB4] |= (1 << src as u8) & self.ports[0xB2];
+    }
+
+    fn highest_int_cause_bit(&self) -> u8 {
+        for priority in (0..8u8).rev() {
+            if self.ports[0xB4] & (1 << priority) != 0 {
+                return priority;
+            }
+        }
+        0
+    }
+
+    fn refresh_serial_tx_irq(&mut self) {
+        if self.model == HardwareModel::Mono
+            && self.ports[0xB2] & SERIAL_TX_READY_IRQ != 0
+            && self.ports[0xB3] & SERIAL_ENABLE != 0
+        {
+            self.ports[0xB4] |= SERIAL_TX_READY_IRQ;
+        }
     }
 
     /// Returns the interrupt vector number for the highest-priority pending
@@ -834,6 +854,9 @@ impl MemoryBus for Bus {
             0xAA => self.ports[0xAA],
             0xAB => self.ports[0xAB],
             0xAD..=0xAF => 0,
+            0xB0 if self.model == HardwareModel::Mono => {
+                (self.ports[0xB0] & 0xF8) | self.highest_int_cause_bit()
+            }
             0xB0 => self.ports[0xB0] & 0xF8,
             0xB1 => self.ports[0xB1],
             0xB2 => self.ports[0xB2],
@@ -841,6 +864,7 @@ impl MemoryBus for Bus {
             0xB3 => self.ports[0xB3] & 0xC4,
             // INT_CAUSE: reading clears edge-triggered bits (1, 4, 5, 6, 7)
             0xB4 => {
+                self.refresh_serial_tx_irq();
                 let v = self.ports[0xB4];
                 self.ports[0xB4] &= !0b1111_0010;
                 v
@@ -998,8 +1022,14 @@ impl MemoryBus for Bus {
             0xAD..=0xAF => {}
             0xB0 => self.ports[0xB0] = value & 0xF8,
             0xB1 => {}
-            0xB2 => self.ports[0xB2] = value,
-            0xB3 => self.ports[0xB3] = value & 0xC4,
+            0xB2 => {
+                self.ports[0xB2] = value;
+                self.refresh_serial_tx_irq();
+            }
+            0xB3 => {
+                self.ports[0xB3] = value & 0xC4;
+                self.refresh_serial_tx_irq();
+            }
             // INT_CAUSE is read-only (clear via INT_CAUSE_CLEAR)
             0xB4 => {}
             // KEYPAD: only the group-selector nibble is writable

@@ -203,13 +203,17 @@ impl System {
     fn run_cpu_cycles(&mut self, budget: u32) -> u32 {
         let mut spent = 0;
         while spent < budget {
-            if self.cpu.flags.interrupt {
-                if let Some(vector) = self.bus.pending_irq() {
+            if let Some(vector) = self.bus.pending_irq() {
+                if self.cpu.flags.interrupt {
                     let cycles = self.cpu.handle_irq(&mut self.bus, vector);
                     spent += cycles;
                     time_into!(self, apu_ns, {
                         self.bus.tick_apu(cycles);
                     });
+                } else if self.cpu.halted
+                    && self.bus.peek_io(0xB4) & (1 << crate::bus::IrqSource::VBlank as u8) != 0
+                {
+                    self.cpu.halted = false;
                 }
             }
             let cycles = self.cpu.step(&mut self.bus);

@@ -164,6 +164,22 @@ fn vblank_irq_is_raised_after_visible_scanlines() {
 }
 
 #[test]
+fn pending_irq_wakes_halted_cpu_even_when_interrupt_flag_is_clear() {
+    let mut system = System::new(rom_with_reset_code(&[
+        0xFA, // CLI
+        0xB0, 0x40, // MOV AL, VBlank IRQ bit
+        0xE6, 0xB2, // OUT INT_ENABLE, AL
+        0xF4, // HLT
+        0xC6, 0x06, 0x00, 0x00, 0x5A, // MOV byte [0], 0x5A
+        0xEB, 0xFE, // JMP $
+    ]));
+
+    system.run_frame(KeyState::NONE);
+
+    assert_eq!(system.read_memory_at(0), 0x5A);
+}
+
+#[test]
 fn rtc_free_runs_one_second_across_frames() {
     // The RTC advances from `System::run_frame` alone (no CPU involvement): each
     // frame ticks `CYCLES_PER_FRAME` master-clock cycles, carrying a second every

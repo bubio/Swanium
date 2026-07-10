@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 631 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 636 passing
 tests (+4 opt-in, env-gated public-ROM tests marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -70,7 +70,8 @@ env-gated in `tests/public_roms.rs`. The WSCPUTest path is verified against
 FluBBaOfWard/WSCpuTest v0.7.1: the ignored test runs the ROM through `System::run_frame`,
 injects A to start the default `Test All` menu item, and decodes the background tile map for
 `Ok!` / `Failed!` output. The ws-test-suite path now has source-confirmed decoded oracles for
-`mono/cpu/80186_quirks.ws` plus `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini}.ws`.
+`mono/cpu/80186_quirks.ws`, `mono/soc/interrupts.ws`, and
+`wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini}.ws`.
 These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
 `screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Unknown
 ws-test-suite ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0`
@@ -92,6 +93,10 @@ HBlank timer counter-1 latch behavior, color-mode-dependent DMA visibility, and 
 register read/write masks across display, palette, DMA, audio, serial, timer, and interrupt
 ports. Further timing work remains evidence-driven rather than a broad per-clock
 scheduler rewrite.
+The ws-test-suite `mono/soc/interrupts.ws` oracle also pins mono UART TX ready as
+a level-style IRQ source, mono `INT_VECTOR` low-bit status readback, and HALT
+wake from a pending VBlank cause while IF is clear. The mono-specific readback is
+kept gated from Color mode to preserve FluBBaOfWard/WSHWTest behavior.
 
 ### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),

@@ -31,6 +31,8 @@ const WSC_CPU_TEST_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WSC_CPU_TEST_IS_TESTING_ADDR: u32 = 0x0136;
 const DEFAULT_WS_TEST_SUITE_80186_QUIRKS_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/cpu/80186_quirks.ws";
+const DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/soc/interrupts.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRLEN_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/wonderful/libc/strlen.ws";
 const DEFAULT_WS_TEST_SUITE_LIBC_STRCHR_ROM: &str =
@@ -114,6 +116,7 @@ struct WsTestSuitePassFailCase {
 }
 
 const WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES: &[(usize, usize)] = &[(0, 0), (1, 0), (2, 0)];
+const WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES: &[(usize, usize)] = &[(0, 7), (1, 4)];
 const WS_TEST_SUITE_LIBC_STRLEN_MARKER_RANGES: &[(usize, usize)] = &[(0, 1)];
 const WS_TEST_SUITE_LIBC_STRCHR_MARKER_RANGES: &[(usize, usize)] = &[(0, 4)];
 const WS_TEST_SUITE_LIBC_MEMSET_MARKER_RANGES: &[(usize, usize)] = &[(0, 6), (1, 6)];
@@ -133,6 +136,15 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         marker_ranges: WS_TEST_SUITE_80186_QUIRKS_MARKER_RANGES,
         source_protocol: "`src/mono/cpu/80186_quirks/main.c` calls `draw_pass_fail` \
             three times at rows 0-2 with offset 0.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/soc/interrupts.ws",
+        env_var: "WS_TEST_SUITE_SOC_INTERRUPTS_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_SOC_INTERRUPTS_ROM,
+        model: HardwareModel::Mono,
+        marker_ranges: WS_TEST_SUITE_SOC_INTERRUPTS_MARKER_RANGES,
+        source_protocol: "`src/mono/soc/interrupts/main.c` has two rows of \
+            `draw_pass_fail`: row 0 uses offsets 7-0 and row 1 uses offsets 4-0.",
     },
     WsTestSuitePassFailCase {
         name: "wonderful/libc/strlen.ws",
