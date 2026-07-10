@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use swanium_core::keypad::KeyState;
 use swanium_core::model::HardwareModel;
+use swanium_core::ppu::SCREEN_WIDTH;
 use swanium_core::system::System;
 
 // ── Harness ──────────────────────────────────────────────────────────────────
@@ -41,6 +42,10 @@ const DEFAULT_WS_TEST_SUITE_RTC_MAPPER_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/rtc/mapper.ws";
 const DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/mono_palettes_writemask.ws";
+const DEFAULT_WS_TEST_SUITE_SPRITE_SCANLINE_LIMIT_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/sprite_scanline_limit.ws";
+const DEFAULT_WS_TEST_SUITE_TILE_SCREEN_EXTENDED_RANGE_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/color/display/tile_screen_extended_range.wsc";
 const DEFAULT_WS_TEST_SUITE_EEPROM_CARTRIDGE_1KBIT_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/eeprom/cartridge_1kbit.ws";
 const DEFAULT_WS_TEST_SUITE_EEPROM_CARTRIDGE_16KBIT_ROM: &str =
@@ -72,6 +77,7 @@ const WS_TEST_SUITE_SCREEN_1: u32 = 0x1800;
 const WS_TEST_SUITE_TILEMAP_STRIDE_BYTES: u32 = 64;
 const WS_TEST_SUITE_PASS_TILE: u8 = 5;
 const WS_TEST_SUITE_FAIL_TILE: u8 = 6;
+const WS_TEST_SUITE_FRAMEBUFFER_WHITE: u16 = 0x0FFF;
 const DEFAULT_WS_TIMING_TEST_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/WSTimingTest/timingtest.ws";
 const WS_TIMING_TEST_BACKGROUND_MAP: u32 = 0x1800;
@@ -508,6 +514,39 @@ fn tilemap_text(system: &System, base: u32, rows: usize) -> String {
     text
 }
 
+fn framebuffer_ascii_rows(
+    system: &System,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> Vec<String> {
+    let framebuffer = system.framebuffer();
+    (y..y + height)
+        .map(|yy| {
+            (x..x + width)
+                .map(|xx| {
+                    if framebuffer[yy * SCREEN_WIDTH + xx] == WS_TEST_SUITE_FRAMEBUFFER_WHITE {
+                        ' '
+                    } else {
+                        '#'
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn assert_framebuffer_ascii(system: &System, x: usize, y: usize, expected: &[&str]) {
+    let width = expected.iter().map(|row| row.len()).max().unwrap_or(0);
+    let actual = framebuffer_ascii_rows(system, x, y, width, expected.len());
+    let expected: Vec<String> = expected
+        .iter()
+        .map(|row| format!("{row:<width$}"))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
 fn timing_test_pass_marker(system: &System, row: usize) -> u8 {
     let addr = WS_TIMING_TEST_BACKGROUND_MAP
         + row as u32 * WS_TIMING_TEST_TILEMAP_STRIDE_BYTES
@@ -693,6 +732,16 @@ fn run_ws_test_suite_pass_fail_case(case: &WsTestSuitePassFailCase) {
     );
 }
 
+fn run_ws_test_suite_display_rom(path: &Path, env_var: &str, model: HardwareModel) -> System {
+    let rom = read_rom(path, env_var);
+    let mut system = System::from_rom(rom);
+    system.set_model(model);
+    for _ in 0..WS_TEST_SUITE_MAX_FRAMES {
+        system.run_frame(KeyState::NONE);
+    }
+    system
+}
+
 // ── WSCPUTest (FluBBaOfWard) ─────────────────────────────────────────────────
 
 /// Runs the WSCpuTest ROM (FluBBaOfWard/WSCpuTest) and checks for a passing
@@ -752,6 +801,67 @@ fn ws_test_suite_pass_fail_roms_pass() {
     for case in WS_TEST_SUITE_PASS_FAIL_CASES {
         run_ws_test_suite_pass_fail_case(case);
     }
+}
+
+/// Runs display ROMs whose result is encoded as rendered text rather than
+/// `pass_fail.h` marker tiles.
+///
+/// Source-confirmed output protocols:
+///
+/// - `src/mono/display/sprite_scanline_limit/main.c` renders `PASS....` on the
+///   sprite layer when the first 32 line-overlapping sprites are selected with
+///   correct priority.
+/// - `src/color/display/tile_screen_extended_range/main.c` renders three PASS
+///   strings when Color mode can use upper-WRAM screen maps, upper-WRAM sprite
+///   tables, and the second 2bpp background tile bank.
+#[test]
+#[ignore = "requires display ws-test-suite ROMs under /Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite"]
+fn ws_test_suite_display_framebuffer_roms_pass() {
+    let sprite_path = rom_path_from_env_or_default(
+        "WS_TEST_SUITE_SPRITE_SCANLINE_LIMIT_ROM",
+        DEFAULT_WS_TEST_SUITE_SPRITE_SCANLINE_LIMIT_ROM,
+    );
+    let sprite_system = run_ws_test_suite_display_rom(
+        &sprite_path,
+        "WS_TEST_SUITE_SPRITE_SCANLINE_LIMIT_ROM",
+        HardwareModel::Mono,
+    );
+    assert_framebuffer_ascii(
+        &sprite_system,
+        88,
+        64,
+        &[
+            "##     ##     ####    ####",
+            " ##   ####   ##  ##  ##  ##",
+            " ##  ##  ##  ##      ##",
+            "##   ##  ##   ####    ####",
+            "     ######      ##      ##",
+            "     ##  ##  ##  ##  ##  ##",
+            "     ##  ##   ####    ####",
+        ],
+    );
+
+    let extended_path = rom_path_from_env_or_default(
+        "WS_TEST_SUITE_TILE_SCREEN_EXTENDED_RANGE_ROM",
+        DEFAULT_WS_TEST_SUITE_TILE_SCREEN_EXTENDED_RANGE_ROM,
+    );
+    let extended_system = run_ws_test_suite_display_rom(
+        &extended_path,
+        "WS_TEST_SUITE_TILE_SCREEN_EXTENDED_RANGE_ROM",
+        HardwareModel::Color,
+    );
+    let pass_rows = &[
+        "     #####     ##     ####    ####",
+        "     ##  ##   ####   ##  ##  ##  ##",
+        "     ##  ##  ##  ##  ##      ##",
+        "     #####   ##  ##   ####    ####",
+        "     ##      ######      ##      ##",
+        "     ##      ##  ##  ##  ##  ##  ##",
+        "     ##      ##  ##   ####    ####",
+    ];
+    assert_framebuffer_ascii(&extended_system, 124, 56, pass_rows);
+    assert_framebuffer_ascii(&extended_system, 124, 64, pass_rows);
+    assert_framebuffer_ascii(&extended_system, 124, 72, pass_rows);
 }
 
 // ── WSTimingTest (FluBBaOfWard) ──────────────────────────────────────────────

@@ -73,14 +73,16 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
 `mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
+`mono/display/sprite_scanline_limit.ws`,
 `mono/eeprom/{cartridge_1kbit,cartridge_16kbit}.ws`,
+`color/display/tile_screen_extended_range.wsc`,
 `color/dma/alignment_access.wsc`, `color/dma/sound_dma.wsc`,
 and
 `wonderful/libc/{strlen,strchr,memset,memcmp,memcpy,memccpy,setjmp,initfini,malloc}.ws`.
-These ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
-`screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Unknown
-ws-test-suite ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0`
-convention.
+Most of these ROMs use upstream `common/test/pass_fail.h`: pass/fail markers are tile 5/6 in
+`screen_1` at WRAM `0x1800`, with marker positions mirrored from each ROM's source. Display ROMs
+that encode results as rendered text are checked from the framebuffer instead. Unknown ws-test-suite
+ROMs are rejected instead of using the former placeholder HLT + `WRAM[0x0000] == 0` convention.
 The interrupt-timing oracle pins STI/POPF/IRET IF-enable delay, POP/MOV SS IRQ
 delay, and TF/BRK delivery after POPF. The prefixes oracle pins segment-override
 precedence across repeated prefixes and the REP MOVSB hardware-IRQ restart IP
@@ -288,7 +290,9 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
 - **8c (done)**: color tile formats via `TileMode` (derived from port 0x60): 2bpp planar (mono /
   color) at WRAM 0x2000, 4bpp planar and packed at 0x4000, and the color second tile bank
   (tile-map bit 13). `sample_background`/`sample_sprite` decode per the active mode; mono is
-  unchanged. Byte-order/base-address details are documented assumptions (DevelopmentPlan 実装メモ 8c).
+  unchanged. `color/display/tile_screen_extended_range.wsc` confirms the second 2bpp tile bank plus
+  upper-WRAM screen-map and sprite-table ranges in Color mode. Byte-order details remain documented
+  assumptions (DevelopmentPlan 実装メモ 8c).
 - **8d (done)**: the Color 64 KiB internal-RAM window. `Bus::read_wram`/`write_wram` gate the upper
   48 KiB (0x04000–0x0FFFF) — which holds the palette RAM at 0xFE00 and the 4bpp tile banks at 0x4000
   — behind `model.is_color()`; on mono it stays open bus and writes are dropped (verified, not just

@@ -54,8 +54,9 @@ remaining risk is lower-level timing decomposition: fetch, memory access, I/O,
 prefetch, DMA stall, and exact interaction with PPU/APU clocks.
 
 The currently source-confirmed ws-test-suite CPU/interrupt candidates, plus the
-RTC mapper, mono palette writemask, cartridge EEPROM 1kbit/16kbit,
-GDMA alignment/access, SDMA sound DMA, and libc malloc candidates have been promoted to passing opt-in oracles. Continue selecting new candidates
+RTC mapper, mono palette writemask, sprite scanline limit, cartridge EEPROM
+1kbit/16kbit, Color tile/screen extended range, GDMA alignment/access, SDMA
+sound DMA, and libc malloc candidates have been promoted to passing opt-in oracles. Continue selecting new candidates
 from the upstream source tree before changing CPU, interrupt, or DMA timing
 behavior.
 

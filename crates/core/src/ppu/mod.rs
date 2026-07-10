@@ -487,15 +487,22 @@ fn tilemap_entry(wram: &[u8], base: usize, col: usize, row: usize) -> TileMapEnt
     TileMapEntry::decode(word)
 }
 
-/// Tile-map base offset in WRAM for a background layer (monochrome: the
-/// register nibble's low 3 bits shifted left by 11, masking to the 16 KiB
-/// WRAM window).
+/// Tile-map base offset in WRAM for a background layer.
+///
+/// Monochrome hardware uses the low 3 bits of each nibble, limiting maps to the
+/// 16 KiB mono WRAM window. Color mode keeps the full nibble so screen maps can
+/// live in the upper Color WRAM range.
 fn map_base(ports: &[u8], layer: BgLayer) -> usize {
     let nibble = match layer {
         BgLayer::Scr1 => ports[MAP_BASE] & 0x0F,
         BgLayer::Scr2 => (ports[MAP_BASE] >> 4) & 0x0F,
     };
-    ((nibble & 0x07) as usize) << 11
+    let mask = if ports[VIDEO_MODE] & VIDEO_MODE_COLOR != 0 {
+        0x0F
+    } else {
+        0x07
+    };
+    ((nibble & mask) as usize) << 11
 }
 
 /// Sample a background layer at visible screen coordinate `(screen_x, line)`,

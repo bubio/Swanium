@@ -929,6 +929,38 @@ fn color_resolver_renders_scr1_pixel_from_palette_ram() {
     assert_eq!(ppu.framebuffer()[0], 0x0F0F);
 }
 
+#[test]
+fn color_mode_screen_map_base_uses_upper_wram_nibble() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x07] = 0x0B; // SCR1 map base 0x5800 in Color mode
+    ports[0x60] = 0x80; // color 2bpp
+    write_map_entry(&mut wram, 0x5800, 0, 0, 1);
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0);
+    write_palette_color(&mut wram, 0, 1, 0x0123);
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+    assert_eq!(ppu.framebuffer()[0], 0x0123);
+}
+
+#[test]
+fn mono_screen_map_base_masks_upper_nibble_bit() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x07] = 0x0B; // mono masks to base 0x1800
+    set_identity_palette(&mut ports);
+    write_map_entry(&mut wram, 0x1800, 0, 0, 1);
+    write_map_entry(&mut wram, 0x5800, 0, 0, 2);
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0);
+    write_tile_row(&mut wram, 2, 0, 0, 0b1000_0000);
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
+}
+
 // ── Color tile formats (8c) ───────────────────────────────────────────────────
 
 /// Write one planar 4bpp tile row (4 plane bytes) into WRAM tile data at 0x4000.
