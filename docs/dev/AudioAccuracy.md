@@ -1,6 +1,6 @@
 # Audio accuracy notes
 
-Last updated: 2026-07-07.
+Last updated: 2026-07-11.
 
 This document records manual PCM/audio fixtures and the current decision for the
 next audio-quality step. It intentionally stores only license-clean metadata:
@@ -33,6 +33,9 @@ Do not commit commercial ROMs, recordings, or extracted assets.
 - HyperVoice sample-rate divisor/update cadence is not hardware-validated. The
   current implementation updates output at the core audio sample cadence using
   the current latch/direct values.
+- SDMA sample cadence is source-confirmed against ares and Mednafen as 24 kHz
+  APU sample ticks divided by 6/4/2/1 for rate bits 0/1/2/3. CPU bus-stall
+  behavior remains unvalidated.
 - Port `0x9E` is implemented as the built-in speaker main-volume register. It
   keeps the documented low two bits for readback, but the value is not applied
   to the audio mix yet. The exact analog curve remains unverified, and treating
@@ -47,9 +50,12 @@ filter change. Priority order:
 1. Add a small public/self-built PCM ROM that writes deterministic `0x89`, SDMA,
    and HyperVoice patterns and validates emitted sample sequences in
    `swanium-core`.
-2. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
+2. Validate port `0x9E` speaker main-volume zero-write and analog transfer from
+   hardware capture or, failing that, record the conservative behavior shared by
+   mature reference emulators before applying any attenuation to the mix.
+3. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
    SDMA/HyperVoice-heavy title, then decide whether the remaining difference is
    core reconstruction or host resampling.
-3. Only change `crates/audio` resampling if the core sample stream already
+4. Only change `crates/audio` resampling if the core sample stream already
    matches the reference closely and the audible issue appears after host-rate
    conversion.

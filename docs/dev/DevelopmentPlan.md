@@ -686,8 +686,10 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 -   **残る未検証項目**:
     -   **データポートの不確定性**: WSdev は 0x69（8bit 入力、Sound DMA ターゲット）、Mednafen は
         0x95（"Pick a port, any port?!" と自認する当て推量）。本実装は WSdev 準拠の 0x69 を採用。
-    -   **Sound DMA からの供給**: SDMA 転送エンジンは実装済みだが、実機の bus-stall / sample cadence は
-        public ROM または reference capture で未検証。
+    -   **Sound DMA からの供給**: SDMA 転送エンジンは実装済み。sample cadence は ares
+        `ares/ws/apu/dma.cpp` と Mednafen `src/wswan/memory.cpp` に一致することを確認済み
+        （rate 0/1/2/3 = 24 kHz APU cadence ÷ 6/4/2/1）。実機の bus-stall は public ROM または
+        reference capture で未検証。
     -   **サンプルレート分周**（WSdev 記載の 24k–2kHz 分周）は Mednafen 同様モデル化せず、出力サンプル毎に
         現ラッチ値を連続出力。相対音量（`MIX_SCALE` 共用）も実機/テストROM 未検証の想定。
 

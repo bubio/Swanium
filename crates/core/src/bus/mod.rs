@@ -27,6 +27,9 @@ const SDMA_ENABLE: u8 = 0x80;
 const SDMA_DECREMENT: u8 = 0x40;
 const SDMA_REPEAT: u8 = 0x08;
 const SDMA_HOLD: u8 = 0x04;
+/// SDMA is evaluated on the 24 kHz APU cadence, one tick per 128 CPU cycles.
+/// Rate bits divide that cadence by 6/4/2/1, matching ares
+/// `ares/ws/apu/dma.cpp` and Mednafen `src/wswan/memory.cpp`.
 const SDMA_CYCLES_PER_SAMPLE: u16 = 128;
 const SYSTEM_CTRL1_ROM_WAIT: u8 = 0x08;
 const SERIAL_ENABLE: u8 = 0x80;

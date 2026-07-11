@@ -959,6 +959,25 @@ fn sdma_copies_memory_byte_to_voice_latch() {
 }
 
 #[test]
+fn sdma_rate_bits_select_apu_sample_divider() {
+    for (rate, divider) in [(0u8, 6u32), (1, 4), (2, 2), (3, 1)] {
+        let mut bus = color_bus_with_sdma_voice();
+        bus.write_u8(0x0010, 0x80 | rate);
+        arm_sdma(&mut bus, 0x0010, 1, 0x80 | rate);
+
+        bus.tick_apu(128 * divider - 1);
+        assert_eq!(bus.read_io(0x89), 0x00, "rate {rate} transferred early");
+
+        bus.tick_apu(1);
+        assert_eq!(
+            bus.read_io(0x89),
+            0x80 | rate,
+            "rate {rate} did not transfer after {divider} APU sample ticks"
+        );
+    }
+}
+
+#[test]
 fn sdma_voice_transfer_produces_non_silent_samples() {
     let mut bus = color_bus_with_sdma_voice();
     bus.write_u8(0x0010, 0xC8);

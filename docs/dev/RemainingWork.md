@@ -180,12 +180,18 @@ Validation notes:
 
 HyperVoice 8-bit PCM, 16-bit direct output, and SDMA feeding are implemented.
 The remaining uncertainty is validation quality, not basic feature presence.
+SDMA sample cadence is now source-confirmed against ares and Mednafen and
+recorded in `CompatibilityMatrix.md`. Next concrete task: validate port `0x9E`
+speaker main-volume analog transfer and zero-write behavior before applying it
+to the mix. If no hardware capture is available, inspect whether ares/Mednafen
+agree on a conservative behavior and record the remaining risk instead of
+guessing an analog curve.
 
 Scope:
 
 - Confirm the sample-rate divisor/update cadence if software-visible.
-- Validate SDMA bus-stall behavior and sample cadence against public tests,
-  reference emulators, or hardware captures.
+- Validate SDMA bus-stall behavior against public tests, reference emulators,
+  or hardware captures.
 - Validate port `0x9E` speaker main-volume analog transfer and zero-write
   behavior before applying it to the mix.
 - Continue using `AudioAccuracy.md` for manual PCM comparison notes.
@@ -196,6 +202,16 @@ Definition of done:
   recorded comparison evidence.
 - Host-device resampling remains in `crates/audio`; deterministic core audio
   remains in `crates/core`.
+
+Validation notes:
+
+- 2026-07-11: SDMA sample cadence is source-confirmed against ares and
+  Mednafen. ares `ares/ws/apu/dma.cpp` evaluates SDMA once per 24 kHz APU sample
+  and maps rate bits 0/1/2/3 to 6/4/2/1 sample ticks. Mednafen
+  `src/wswan/memory.cpp` reloads `SoundDMATimer` to 5/3/1/0 after each transfer,
+  producing the same 6/4/2/1 call cadence. Swanium has the focused regression
+  `sdma_rate_bits_select_apu_sample_divider`. CPU bus-stall behavior remains
+  unvalidated.
 
 ## P2 - Compatibility matrix and local evidence
 
