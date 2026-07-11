@@ -55,11 +55,11 @@ jobs:
         include:
           - arch: x86_64
             target: x86_64-pc-windows-msvc
-            artifact: swanium-windows-x86_64-zip
+            artifact: swanium-windows-x86_64
             zip_name: swanium-windows-x86_64.zip
           - arch: arm64
             target: aarch64-pc-windows-msvc
-            artifact: swanium-windows-arm64-zip
+            artifact: swanium-windows-arm64
             zip_name: swanium-windows-arm64.zip
     steps:
       - uses: actions/checkout@v4

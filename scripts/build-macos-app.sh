@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="Swanium"
 BUNDLE_ID="dev.seiji.swanium"
-VERSION="0.1.0"
+VERSION="1.0.0"
 MIN_MACOS_VERSION="13.5"
 DESCRIPTION="A cross-platform WonderSwan / WonderSwan Color emulator written in Rust."
 COPYRIGHT="Copyright © 2026 Bubio"
