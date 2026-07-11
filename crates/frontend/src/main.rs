@@ -266,9 +266,13 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             return; // no ROM loaded yet — the placeholder overlay is shown
         };
 
-        let mut keys = input::keys_from(app.pressed.borrow().iter().copied());
+        let input_rotation = input_rotation_from_config(&app.config.borrow());
+        let mut keys = input::rotate_key_state(
+            input::keys_from(app.pressed.borrow().iter().copied()),
+            input_rotation,
+        );
         if let Some(gp) = app.gamepad.borrow_mut().as_mut() {
-            keys |= gp.poll();
+            keys |= input::rotate_key_state(gp.poll(), input_rotation);
         }
         let start_frames = app.bios_settings_start_frames.get();
         if start_frames > 0 {
@@ -618,6 +622,17 @@ fn open_settings(app: &App, main: &MainWindow) {
             }
         }
     });
+    settings.on_set_rotate_input_with_screen({
+        let app = app.clone();
+        let weak = settings.as_weak();
+        move |enabled| {
+            app.config.borrow_mut().rotate_input_with_screen = enabled;
+            save(&app);
+            if let Some(w) = weak.upgrade() {
+                w.set_rotate_input_with_screen(enabled);
+            }
+        }
+    });
     settings.on_open_rom_directory({
         let weak = settings.as_weak();
         move || match open_rom_directory() {
@@ -674,6 +689,7 @@ fn open_settings(app: &App, main: &MainWindow) {
     });
 
     settings.set_bios_rom_mode(bios_rom_index(app.config.borrow().bios_rom));
+    settings.set_rotate_input_with_screen(app.config.borrow().rotate_input_with_screen);
     settings.set_rows(binding_rows(&app.config.borrow(), &app.keymap.borrow()));
     settings.window().set_size(LogicalSize::new(760.0, 640.0));
     if let Err(e) = settings.show() {
@@ -735,6 +751,7 @@ fn sync_keyboard_config(app: &App) {
 fn refresh_settings_rows(app: &App, _main: &MainWindow) {
     if let Some(settings) = app.settings.borrow().as_ref() {
         settings.set_bios_rom_mode(bios_rom_index(app.config.borrow().bios_rom));
+        settings.set_rotate_input_with_screen(app.config.borrow().rotate_input_with_screen);
         settings.set_rows(binding_rows(&app.config.borrow(), &app.keymap.borrow()));
         settings.set_listening_hint(SharedString::new());
     }
@@ -879,6 +896,17 @@ fn from_slint_renderer(renderer: Renderer) -> RendererKind {
     match renderer {
         Renderer::Nearest => RendererKind::Nearest,
         Renderer::Linear => RendererKind::Linear,
+    }
+}
+
+fn input_rotation_from_config(config: &Config) -> input::ButtonRotation {
+    if !config.rotate_input_with_screen {
+        return input::ButtonRotation::None;
+    }
+    match config.rotation {
+        RotationKind::None => input::ButtonRotation::None,
+        RotationKind::Right => input::ButtonRotation::Left,
+        RotationKind::Left => input::ButtonRotation::Right,
     }
 }
 
@@ -1266,6 +1294,45 @@ mod tests {
         assert_eq!(
             save_file_name_for_rom(Path::new("bad name!.wsc")),
             "bad_name_.wsc.sav"
+        );
+    }
+
+    #[test]
+    fn rotation_left_uses_opposite_input_compensation() {
+        let config = Config {
+            rotation: RotationKind::Left,
+            rotate_input_with_screen: true,
+            ..Config::default()
+        };
+        assert_eq!(
+            input_rotation_from_config(&config),
+            input::ButtonRotation::Right
+        );
+    }
+
+    #[test]
+    fn rotation_right_uses_opposite_input_compensation() {
+        let config = Config {
+            rotation: RotationKind::Right,
+            rotate_input_with_screen: true,
+            ..Config::default()
+        };
+        assert_eq!(
+            input_rotation_from_config(&config),
+            input::ButtonRotation::Left
+        );
+    }
+
+    #[test]
+    fn input_rotation_setting_can_disable_compensation() {
+        let config = Config {
+            rotation: RotationKind::Left,
+            rotate_input_with_screen: false,
+            ..Config::default()
+        };
+        assert_eq!(
+            input_rotation_from_config(&config),
+            input::ButtonRotation::None
         );
     }
 }

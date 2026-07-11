@@ -43,6 +43,10 @@ fn default_volume() -> u8 {
     DEFAULT_VOLUME
 }
 
+fn default_rotate_input_with_screen() -> bool {
+    true
+}
+
 /// BIOS ROM startup mode selected by the frontend.
 ///
 /// The frontend stores the user's intent here. `Disabled` preserves the current
@@ -131,6 +135,9 @@ pub struct Config {
     pub bios_rom: BiosRomKind,
     /// Screen rotation for vertical-orientation games.
     pub rotation: RotationKind,
+    /// Whether directional inputs rotate with the screen orientation.
+    #[serde(default = "default_rotate_input_with_screen")]
+    pub rotate_input_with_screen: bool,
     /// Texture-sampling filter used when upscaling the framebuffer.
     pub renderer: RendererKind,
     /// Recently opened ROM paths, most-recent first (capped at [`RECENT_LIMIT`]).
@@ -154,6 +161,7 @@ impl Default for Config {
             fullscreen: false,
             bios_rom: BiosRomKind::default(),
             rotation: RotationKind::default(),
+            rotate_input_with_screen: default_rotate_input_with_screen(),
             renderer: RendererKind::default(),
             recent_files: Vec::new(),
             keyboard_bindings: BTreeMap::new(),
@@ -327,6 +335,7 @@ mod tests {
             fullscreen: true,
             bios_rom: BiosRomKind::WonderSwanCrystal,
             rotation: RotationKind::Left,
+            rotate_input_with_screen: false,
             renderer: RendererKind::Linear,
             ..Config::default()
         };
@@ -394,6 +403,7 @@ mod tests {
         assert_eq!(loaded.scale, 4);
         assert_eq!(loaded.volume, DEFAULT_VOLUME);
         assert!(!loaded.start_paused);
+        assert!(loaded.rotate_input_with_screen);
         std::fs::remove_dir_all(&dir).ok();
     }
 

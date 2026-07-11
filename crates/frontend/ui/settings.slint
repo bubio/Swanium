@@ -62,11 +62,13 @@ export component SettingsWindow inherits Window {
     in property <[BindingRow]> rows;
     // Non-empty while waiting for a key/button, e.g. "Press a key for A...".
     in property <string> listening-hint;
+    in property <bool> rotate-input-with-screen;
 
     out property <int> selected-section: 0;
     private property <length> button-column-width: 72px;
 
     callback set-bios-rom-mode(int);
+    callback set-rotate-input-with-screen(bool);
     callback open-rom-directory();
     callback rebind-key(int);
     callback rebind-pad(int);
@@ -202,6 +204,20 @@ export component SettingsWindow inherits Window {
                             font-size: 24px;
                             font-weight: 700;
                             color: Palette.foreground;
+                        }
+                        Rectangle {
+                            height: 34px;
+                            horizontal-stretch: 1;
+
+                            CheckBox {
+                                width: parent.width;
+                                height: parent.height;
+                                text: "Rotate directional input with screen";
+                                checked: root.rotate-input-with-screen;
+                                toggled => {
+                                    root.set-rotate-input-with-screen(self.checked);
+                                }
+                            }
                         }
                         HorizontalLayout {
                             alignment: stretch;

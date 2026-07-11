@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 662 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 670 passing
 tests (+5 opt-in, env-gated public-ROM test functions marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -245,15 +245,18 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   resampler (replacing the earlier zero-order hold, which made channel-2 PCM streams such as
   *Last Alive* sound harsh on 48 kHz devices); audio–video sync via buffer-level frame pacing.
 - `crates/input`: backend-agnostic `Button` enum (11 keys, stable `name`/`from_name`/`label`)
-  + `keys_from`; gilrs gamepad (`gamepad::Gamepad`, event-driven digital + dead-zoned analog)
-  with runtime-configurable bindings (`set_named_bindings`), a name↔button table for
-  persistence, and `poll_capture` for rebind capture.
+  + `keys_from`; directional X/Y-pad rotation helpers let the frontend rotate only
+  orientation-dependent inputs with the screen while preserving A/B/Start. gilrs gamepad
+  (`gamepad::Gamepad`, event-driven digital + dead-zoned analog) with runtime-configurable
+  bindings (`set_named_bindings`), a name↔button table for persistence, and `poll_capture`
+  for rebind capture.
 - `crates/common`: `tracing` logging (`logging::init`); typed `Config` with serde/TOML
   persistence at the platform config dir (`swanium/config.toml`), range-clamped on load.
   Persists window scale, fullscreen, BIOS-ROM startup mode (`BiosRomKind`: disabled /
   WonderSwan / WonderSwan Color / SwanCrystal), rotation (`RotationKind`: none/right/left),
-  renderer (`RendererKind`), recent-ROM history (`push_recent` / `clear_recent`, capped),
-  and keyboard/gamepad binding maps. BIOS files are loaded from the fixed-name
+  rotate-directional-input-with-screen toggle, renderer (`RendererKind`), recent-ROM history
+  (`push_recent` / `clear_recent`, capped), and keyboard/gamepad binding maps. BIOS files are
+  loaded from the fixed-name
   `bios/` directory under the same platform config directory: `ws_irom.bin`
   (WonderSwan), `wsc_irom.bin` (WonderSwan Color), and `wc_irom.bin` (SwanCrystal,
   matching NewOswan's stub file name). NewOswan's stub files are 4 bytes shorter
@@ -281,8 +284,9 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   Ctrl+Up for normal orientation, Ctrl+Left for rotate left, and Ctrl+Right for rotate right
   (reselecting the active rotation no longer toggles back to normal). Settings is available via
   Ctrl+Comma. Capture-based
-  settings window with BIOS-ROM startup mode selection plus input remapping (keyboard via
-  focus-scope key capture, controller via `poll_capture`) persisting to config. Changing the BIOS
+  settings window with BIOS-ROM startup mode selection, a rotate-directional-input-with-screen
+  toggle, plus input remapping (keyboard via focus-scope key capture, controller via
+  `poll_capture`) persisting to config. Changing the BIOS
   mode immediately resets/reloads the current emulation so the setting is visible without a manual
   reset. When a BIOS mode is selected, the frontend reads the corresponding fixed-name BIOS file and
   installs it into the core before reset; missing BIOS files fall back to direct boot with a status/log

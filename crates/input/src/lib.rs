@@ -13,6 +13,17 @@ use swanium_core::keypad::KeyState;
 
 pub mod gamepad;
 
+/// Rotation applied to directional WonderSwan buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonRotation {
+    /// Keep horizontal-orientation button meanings.
+    None,
+    /// Rotate the X/Y pads 90° clockwise.
+    Right,
+    /// Rotate the X/Y pads 90° counter-clockwise.
+    Left,
+}
+
 /// A logical WonderSwan key, independent of the host input device.
 ///
 /// The X-pad is the primary direction pad in horizontal orientation; the Y-pad
@@ -119,12 +130,54 @@ impl Button {
             Button::B => KeyState::B,
         }
     }
+
+    /// Rotate X/Y pad positions while leaving action buttons unchanged.
+    pub fn rotated(self, rotation: ButtonRotation) -> Button {
+        match rotation {
+            ButtonRotation::None => self,
+            ButtonRotation::Right => match self {
+                Button::X1 => Button::X2,
+                Button::X2 => Button::X3,
+                Button::X3 => Button::X4,
+                Button::X4 => Button::X1,
+                Button::Y1 => Button::Y2,
+                Button::Y2 => Button::Y3,
+                Button::Y3 => Button::Y4,
+                Button::Y4 => Button::Y1,
+                Button::Start | Button::A | Button::B => self,
+            },
+            ButtonRotation::Left => match self {
+                Button::X1 => Button::X4,
+                Button::X2 => Button::X1,
+                Button::X3 => Button::X2,
+                Button::X4 => Button::X3,
+                Button::Y1 => Button::Y4,
+                Button::Y2 => Button::Y1,
+                Button::Y3 => Button::Y2,
+                Button::Y4 => Button::Y3,
+                Button::Start | Button::A | Button::B => self,
+            },
+        }
+    }
 }
 
 /// Fold a collection of pressed [`Button`]s into a single [`KeyState`].
 pub fn keys_from(buttons: impl IntoIterator<Item = Button>) -> KeyState {
     buttons
         .into_iter()
+        .fold(KeyState::NONE, |acc, button| acc | button.key())
+}
+
+/// Rotate the directional portions of a held-key set.
+pub fn rotate_key_state(keys: KeyState, rotation: ButtonRotation) -> KeyState {
+    if rotation == ButtonRotation::None {
+        return keys;
+    }
+
+    Button::ALL
+        .into_iter()
+        .filter(|button| keys.contains(button.key()))
+        .map(|button| button.rotated(rotation))
         .fold(KeyState::NONE, |acc, button| acc | button.key())
 }
 
@@ -160,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn rotating_button_right_affects_only_direction_pads() {
+        assert_eq!(Button::X1.rotated(ButtonRotation::Right), Button::X2);
+        assert_eq!(Button::Y1.rotated(ButtonRotation::Right), Button::Y2);
+        assert_eq!(Button::A.rotated(ButtonRotation::Right), Button::A);
+        assert_eq!(Button::Start.rotated(ButtonRotation::Right), Button::Start);
+    }
+
+    #[test]
+    fn rotating_button_left_affects_only_direction_pads() {
+        assert_eq!(Button::X1.rotated(ButtonRotation::Left), Button::X4);
+        assert_eq!(Button::Y1.rotated(ButtonRotation::Left), Button::Y4);
+        assert_eq!(Button::B.rotated(ButtonRotation::Left), Button::B);
+    }
+
+    #[test]
     fn keys_from_empty_is_none() {
         assert_eq!(keys_from([]), KeyState::NONE);
     }
@@ -174,6 +242,25 @@ mod tests {
         assert_eq!(
             keys_from([Button::X1, Button::B]),
             KeyState::X1 | KeyState::B
+        );
+    }
+
+    #[test]
+    fn rotate_key_state_preserves_action_buttons() {
+        assert_eq!(
+            rotate_key_state(
+                KeyState::X1 | KeyState::A | KeyState::START,
+                ButtonRotation::Right
+            ),
+            KeyState::X2 | KeyState::A | KeyState::START
+        );
+    }
+
+    #[test]
+    fn rotate_key_state_rotates_wasd_style_y_pad() {
+        assert_eq!(
+            rotate_key_state(KeyState::Y1 | KeyState::Y3, ButtonRotation::Left),
+            KeyState::Y4 | KeyState::Y2
         );
     }
 
