@@ -153,10 +153,21 @@ impl System {
         self.bus.tick_rtc(CYCLES_PER_FRAME);
         for line in 0..SCANLINES_PER_FRAME {
             let budget = CYCLES_PER_SCANLINE.saturating_sub(self.cycle_carry);
-            time_into!(self, cpu_ns, {
-                let spent = self.run_cpu_cycles(budget);
-                self.cycle_carry = (self.cycle_carry + spent).saturating_sub(CYCLES_PER_SCANLINE);
-            });
+            // Keep CPU and APU buckets exclusive: APU ticking happens inside
+            // `run_cpu_cycles`, so measure the scanline span once and subtract
+            // the APU time already recorded by the nested `tick_apu` calls.
+            #[cfg(feature = "profiling")]
+            let cpu_start = std::time::Instant::now();
+            #[cfg(feature = "profiling")]
+            let apu_before = self.profile.apu_ns;
+            let spent = self.run_cpu_cycles(budget);
+            #[cfg(feature = "profiling")]
+            {
+                let elapsed = cpu_start.elapsed().as_nanos() as u64;
+                let apu_delta = self.profile.apu_ns.saturating_sub(apu_before);
+                self.profile.cpu_ns += elapsed.saturating_sub(apu_delta);
+            }
+            self.cycle_carry = (self.cycle_carry + spent).saturating_sub(CYCLES_PER_SCANLINE);
             // GDMA is not ticked here: it runs synchronously the instant a game
             // writes the enable bit to port 0x48 (see `Bus::write_io`), matching
             // the hardware's CPU-stalling burst. Its cost is therefore folded
@@ -260,7 +271,9 @@ impl System {
             return;
         };
         self.cpu.take_interrupt_return_override_ip();
-        let cycles = self.cpu.handle_irq_at_ip(&mut self.bus, vector, ip);
+        let cycles = time_into!(self, cpu_ns, {
+            self.cpu.handle_irq_at_ip(&mut self.bus, vector, ip)
+        });
         self.cycle_carry = self.cycle_carry.saturating_add(cycles);
         time_into!(self, apu_ns, {
             self.bus.tick_apu(cycles);

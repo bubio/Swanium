@@ -24,6 +24,8 @@ workspace `[profile.release]`/`[profile.bench]` use `lto = "thin"` and
 Gated behind the `profiling` feature so a normal build has **zero** overhead and
 stays fully deterministic (it reads wall-clock `Instant` only when the feature
 is on, and never influences emulated state — see `crates/core/src/profile.rs`).
+CPU/APU/PPU/DMA buckets are reported as exclusive wall-clock buckets; the small
+unattributed remainder is frame-driver overhead and measurement overhead.
 
 ```sh
 # Synthetic ROM:
@@ -35,12 +37,12 @@ cargo run -p swanium-core --features profiling --example profile --release -- pa
 Example output:
 
 ```
-600 frames, 0.161 ms/frame | CPU 18.8% PPU 29.6% APU 40.9% DMA 1.7% | 3052800 insns
-  CPU    0.030 ms/frame (18.8%)
-  PPU    0.048 ms/frame (29.6%)
-  APU    0.066 ms/frame (40.9%)
-  DMA    0.003 ms/frame ( 1.7%)
-  → 6214 frames/s headroom (target 75)
+600 frames, 0.472 ms/frame | CPU 45.8% PPU 9.8% APU 43.1% DMA 0.0% | 6105600 insns
+  CPU    0.217 ms/frame (45.8%)
+  PPU    0.046 ms/frame ( 9.8%)
+  APU    0.203 ms/frame (43.1%)
+  DMA    0.000 ms/frame ( 0.0%)
+  → 2117 frames/s headroom (target 75)
 ```
 
 To read the split programmatically, build with `--features profiling` and call

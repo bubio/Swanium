@@ -388,8 +388,8 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
 Performance measurement infrastructure (see `docs/dev/Profiling.md`):
 
 - **In-core frame profiler** — `swanium-core`'s `profiling` feature (off by default, zero overhead,
-  fully deterministic) accumulates per-subsystem wall-clock time (CPU / PPU / APU / DMA) inside
-  `System::drive_frame`; read it via `System::profile_snapshot()` (`crates/core/src/profile.rs`).
+  fully deterministic) accumulates exclusive per-subsystem wall-clock time (CPU / PPU / APU / DMA)
+  inside `System::drive_frame`; read it via `System::profile_snapshot()` (`crates/core/src/profile.rs`).
   The `profile` example (`cargo run -p swanium-core --features profiling --example profile --release`)
   prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM.
 - **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`

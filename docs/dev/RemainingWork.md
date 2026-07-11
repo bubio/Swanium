@@ -30,9 +30,14 @@ opt-in regressions.
 
 Current actionable state: the local public-ROM inventory is exhausted. Do not
 spend the next session re-reading the same ws-test-suite sources unless new ROMs
-or upstream changes have been added. The next concrete emulator work should move
-to **P1 - Color PPU hardware validation**, starting with one visible rule from
-that section and recording the evidence in `CompatibilityMatrix.md`.
+or upstream changes have been added. The Color PPU and audio follow-ups below
+have also been source-triaged and covered by focused synthetic tests where
+possible. The next concrete work should therefore be either:
+
+- add a newly discovered public ROM oracle with a source-confirmed result
+  protocol, or
+- move to the P2 maintenance items: keep the compatibility matrix current and
+  verify profiling/benchmark tooling before any future precision change.
 
 Scope:
 
@@ -254,7 +259,10 @@ Validation notes:
 ## P2 - Compatibility matrix and local evidence
 
 The compatibility matrix is useful only if it stays current and
-license-clean.
+license-clean. Current actionable state: no new compatibility row is needed
+until a public test, synthetic regression, manual smoke check, or source-triage
+result is actually performed. When continuing without new evidence, move to
+**P2 - Performance after precision work**.
 
 Scope:
 
@@ -274,7 +282,10 @@ Definition of done:
 
 Precision work can easily regress performance. The current scanline renderer and
 profiling tools should remain the default path unless exact timing evidence
-requires more.
+requires more. Current actionable state: the profiling feature and Criterion
+bench definitions already exist; periodically verify they still build after
+core changes, but do not add performance work without a measured regression or a
+planned precision rewrite.
 
 Scope:
 
@@ -288,6 +299,19 @@ Definition of done:
 
 - Large precision changes include before/after profiling notes in
   `Profiling.md` or the relevant change record.
+
+Validation notes:
+
+- 2026-07-11: P0/P1 precision, PPU, and audio follow-ups were reclassified as
+  evidence-driven. The next session should not re-triage the same local public
+  ROMs or reference-source rules unless new inputs appear; run the profiling
+  example/benches only as a tooling check or before/after record for a concrete
+  performance-sensitive change.
+- 2026-07-11: The profiling example was checked with the built-in synthetic ROM
+  (`cargo run -p swanium-core --features profiling --example profile --release`).
+  During that check, CPU/APU bucket overlap was fixed so the in-core profiler
+  reports exclusive CPU, PPU, APU, and DMA shares. Criterion benches remain the
+  tool for before/after statistical regression tracking.
 
 ## Deferred frontend polish
 
