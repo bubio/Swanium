@@ -209,6 +209,28 @@ fn enabled_channel_right_volume_is_independent() {
 }
 
 #[test]
+fn output_ports_track_current_digital_mix() {
+    let (mut ports, mut wram) = blank();
+    write_waveform(&mut wram, 0, {
+        let mut w = [0u8; 16];
+        w[0] = 0x50; // first tick outputs idx1 = 5
+        w
+    });
+    ports[0x90] = CTRL_ENABLE[0];
+    ports[SND_CH_VOL] = 0x11;
+    let mut apu = Apu::new();
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(
+        (
+            u16::from_le_bytes([ports[SND_CH_OUT_L], ports[SND_CH_OUT_L + 1]]),
+            u16::from_le_bytes([ports[SND_CH_OUT_R], ports[SND_CH_OUT_R + 1]]),
+            u16::from_le_bytes([ports[SND_CH_OUT_LR], ports[SND_CH_OUT_LR + 1]]),
+        ),
+        (5, 5, 10)
+    );
+}
+
+#[test]
 fn mix_sums_two_channels_on_left() {
     // ch1 sample 5 × vol 1 + ch2 sample 5 × vol 2 = raw 15, scaled = 480.
     let mut ports = [0u8; 0x100];
@@ -381,6 +403,23 @@ fn noise_reset_bit_self_clears() {
     let mut apu = Apu::new();
     apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_NOISE] & 0x08, 0);
+}
+
+#[test]
+fn noise_reset_holds_random_port_until_next_period() {
+    let (mut ports, wram) = blank();
+    ports[0x90] = CTRL_NOISE | CTRL_ENABLE[3];
+    ports[SND_NOISE] = NOISE_GATE;
+    set_pitch(&mut ports, 3, 1);
+    let mut apu = Apu::new();
+    apu.tick(1, &wram, &mut ports, false);
+    ports[SND_NOISE] = NOISE_GATE | NOISE_RESET;
+    apu.reset_noise_lfsr(&mut ports);
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(
+        u16::from_le_bytes([ports[SND_RANDOM], ports[SND_RANDOM + 1]]),
+        0
+    );
 }
 
 #[test]

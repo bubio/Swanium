@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 651 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 654 passing
 tests (+5 opt-in, env-gated public-ROM test functions marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -73,6 +73,7 @@ injects A to start the default `Test All` menu item, and decodes the background 
 `mono/cpu/80186_quirks.ws`, `mono/cpu/prefixes.ws`,
 `mono/cpu/interrupt_timing.ws`, `mono/soc/interrupts.ws`,
 `mono/rtc/mapper.ws`, `mono/display/mono_palettes_writemask.ws`,
+`mono/sound/quirks.ws`,
 `mono/display/sprite_scanline_limit.ws`,
 `mono/eeprom/{cartridge_1kbit,cartridge_16kbit,internal}.ws`,
 `color/display/tile_screen_extended_range.wsc`,
@@ -121,6 +122,10 @@ The SDMA oracle pins 20-bit source/length masks, ROM/IRAM/SRAM source access,
 hold/repeat behavior, terminal-count zeroing, address overflow wrapping, final
 voice-latch contents, and port `0x52` readback preserving the enable bit while
 masking unused bit 5.
+The mono sound quirks oracle pins CPU-visible APU output readback ports
+`0x96`/`0x98`/`0x9A`, LFSR readback through `0x92`/`0x93`, voice readback while
+the channel enable bit is clear, channel counter behavior across alternate
+voice/sweep/noise modes, and immediate `0x8E` noise-reset self-clear.
 The ws-test-suite RTC mapper oracle pins the generated RTC footer flag
 (`0x0C` bit 2 / flags value `0x04`), status-port ready/busy bits, command
 payload lengths for `0x10`-`0x1B`, unsupported-command timeout for `0x1C`, and

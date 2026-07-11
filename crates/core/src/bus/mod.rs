@@ -924,7 +924,7 @@ impl MemoryBus for Bus {
             0x8E => self.ports[0x8E] & 0x17,
             0x90 => self.ports[0x90] & 0xEF,
             0x91 => self.ports[0x91] & 0x8F,
-            0x92 | 0x93 => 0,
+            0x92 | 0x93 => self.ports[port as usize],
             0x94 => self.ports[0x94] & 0x0F,
             0x9E => self.ports[0x9E] & 0x03,
             0x9F => 0,
@@ -1078,7 +1078,12 @@ impl MemoryBus for Bus {
             0x64..=0x7F => {} // mono/unused HyperVoice-adjacent holes
             0x81 | 0x83 | 0x85 | 0x87 => self.ports[port as usize] = value & 0x07,
             0x8D => self.ports[0x8D] = value & 0x1F,
-            0x8E => self.ports[0x8E] = value & 0x17,
+            0x8E => {
+                self.ports[0x8E] = value & 0x1F;
+                if self.ports[0x8E] & 0x08 != 0 {
+                    self.apu.reset_noise_lfsr(&mut self.ports);
+                }
+            }
             0x90 => self.ports[0x90] = value & 0xEF,
             0x91 => self.ports[0x91] = value & 0x8F,
             0x92 | 0x93 => {}

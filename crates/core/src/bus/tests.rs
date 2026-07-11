@@ -268,6 +268,24 @@ fn speaker_volume_register_survives_model_switch() {
 }
 
 #[test]
+fn noise_reset_write_self_clears_and_resets_random_port() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.write_io(0x90, 0x88);
+    bus.write_io(0x8E, 0x10);
+    bus.tick_apu(1);
+    assert_eq!(bus.read_io(0x92), 1);
+    bus.write_io(0x8E, 0x18);
+    assert_eq!(
+        (
+            bus.read_io(0x8E) & 0x08,
+            bus.read_io(0x92),
+            bus.read_io(0x93)
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
 fn color_wram_write_reads_back_just_above_mono_window() {
     let mut bus = color_bus();
     bus.write_u8(0x04000, 0x5A);

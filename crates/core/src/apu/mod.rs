@@ -52,6 +52,9 @@ const SND_RANDOM: usize = 0x92; // noise LFSR readback (lo, hi)
 const SND_VOICE_VOL: usize = 0x94; // voice (channel 2) L/R volume
 const SND_TEST: usize = 0x95; // sound test register
 const SND_TEST_FAST_SWEEP: u8 = 0x02; // accelerate channel-3 sweep to every tick
+const SND_CH_OUT_R: usize = 0x96; // current right-channel digital output (lo, hi)
+const SND_CH_OUT_L: usize = 0x98; // current left-channel digital output (lo, hi)
+const SND_CH_OUT_LR: usize = 0x9A; // current mono/summed digital output (lo, hi)
 
 // ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
 const HV_DIRECT_L_LO: usize = 0x64; // signed 16-bit direct left output
@@ -193,6 +196,20 @@ impl Apu {
         self.voice_level = self.voice_lp.filter(sample as i32 - 0x80);
     }
 
+    /// Apply the channel-4 noise reset bit immediately.
+    ///
+    /// The public `mono/sound/quirks.ws` ROM reads the random port directly
+    /// after writing `SND_NOISE_RESET`; hardware exposes the reset state before
+    /// the next LFSR tick.
+    pub(crate) fn reset_noise_lfsr(&mut self, ports: &mut [u8]) {
+        self.lfsr = 0;
+        self.noise_output = 0;
+        self.noise_counter = 2048u16.wrapping_sub(pitch_of(ports, 3));
+        ports[SND_NOISE] &= !NOISE_RESET;
+        ports[SND_RANDOM] = 0;
+        ports[SND_RANDOM + 1] = 0;
+    }
+
     /// Reset all channel and feature state, and clear the sample buffer.
     pub fn reset(&mut self) {
         *self = Self::new();
@@ -248,6 +265,7 @@ impl Apu {
         if self.noise_active {
             samples[3] = self.noise_output;
         }
+        self.update_output_ports(&samples, ctrl, ports);
 
         self.sample_accum += 1;
         if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
@@ -282,6 +300,34 @@ impl Apu {
         }
         let (l, r) = voice_route(self.voice_level, ports[SND_VOICE_VOL]);
         (l * MIX_SCALE * VOICE_GAIN, r * MIX_SCALE * VOICE_GAIN)
+    }
+
+    /// Update the CPU-visible sound-output readback ports.
+    ///
+    /// These ports expose the current digital mixer level, not the host audio
+    /// sample stream. Keep them in the small hardware-domain values used by the
+    /// test ROMs: one 4-bit wave/noise sample times the 4-bit volume nibble, or
+    /// the raw channel-2 voice latch when voice mode is selected.
+    fn update_output_ports(&self, samples: &[u8; 4], ctrl: u8, ports: &mut [u8]) {
+        let mut left = 0u16;
+        let mut right = 0u16;
+        for (ch, &sample) in samples.iter().enumerate() {
+            if ch == VOICE_CHANNEL && ctrl & CTRL_VOICE != 0 {
+                continue;
+            }
+            let vol = ports[SND_CH_VOL + ch];
+            left += sample as u16 * (vol >> 4) as u16;
+            right += sample as u16 * (vol & 0x0F) as u16;
+        }
+        if ctrl & CTRL_VOICE != 0 {
+            let voice = ports[SND_CH_VOL + VOICE_CHANNEL] as u16;
+            left += voice;
+            right += voice;
+        }
+        let lr = left + right;
+        write_port_word(ports, SND_CH_OUT_R, right);
+        write_port_word(ports, SND_CH_OUT_L, left);
+        write_port_word(ports, SND_CH_OUT_LR, lr);
     }
 
     /// Tick the channel-3 frequency sweep (port 0x8C/0x8D), writing the adjusted
@@ -391,6 +437,12 @@ fn pitch_of(ports: &[u8], ch: usize) -> u16 {
     let lo = ports[SND_CH_PITCH + ch * 2];
     let hi = ports[SND_CH_PITCH + ch * 2 + 1];
     u16::from_le_bytes([lo, hi]) & PITCH_MASK
+}
+
+fn write_port_word(ports: &mut [u8], port: usize, value: u16) {
+    let [lo, hi] = value.to_le_bytes();
+    ports[port] = lo;
+    ports[port + 1] = hi;
 }
 
 /// Expand the 8-bit HyperVoice `data` latch to a signed ~11-bit sample per the

@@ -42,6 +42,8 @@ const DEFAULT_WS_TEST_SUITE_RTC_MAPPER_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/rtc/mapper.ws";
 const DEFAULT_WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/mono_palettes_writemask.ws";
+const DEFAULT_WS_TEST_SUITE_SOUND_QUIRKS_ROM: &str =
+    "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/sound/quirks.ws";
 const DEFAULT_WS_TEST_SUITE_SPRITE_SCANLINE_LIMIT_ROM: &str =
     "/Volumes/CrucialX6/roms/WonderSwan/Tests/ws-test-suite/mono/display/sprite_scanline_limit.ws";
 const DEFAULT_WS_TEST_SUITE_TILE_SCREEN_EXTENDED_RANGE_ROM: &str =
@@ -217,6 +219,17 @@ const WS_TEST_SUITE_MONO_PALETTES_WRITEMASK_MARKER_RANGES: &[(usize, usize)] = &
     (14, 1),
     (15, 1),
 ];
+const WS_TEST_SUITE_SOUND_QUIRKS_MARKER_RANGES: &[(usize, usize)] = &[
+    (0, 2),
+    (1, 0),
+    (2, 2),
+    (3, 0),
+    (4, 1),
+    (5, 2),
+    (6, 3),
+    (7, 1),
+    (8, 0),
+];
 const WS_TEST_SUITE_EEPROM_CARTRIDGE_MARKER_POSITIONS: &[(usize, usize)] = &[
     (1, 0),
     (2, 1),
@@ -379,6 +392,17 @@ const WS_TEST_SUITE_PASS_FAIL_CASES: &[WsTestSuitePassFailCase] = &[
         source_protocol: "`src/mono/display/mono_palettes_writemask/main.c` \
             loops over rows 0-15 and calls `draw_pass_fail` with offsets 1 \
             and 0 for each mono palette register.",
+    },
+    WsTestSuitePassFailCase {
+        name: "mono/sound/quirks.ws",
+        env_var: "WS_TEST_SUITE_SOUND_QUIRKS_ROM",
+        default_path: DEFAULT_WS_TEST_SUITE_SOUND_QUIRKS_ROM,
+        model: HardwareModel::Mono,
+        markers: WsTestSuiteMarkers::Ranges(WS_TEST_SUITE_SOUND_QUIRKS_MARKER_RANGES),
+        source_protocol: "`src/mono/sound/quirks/main.c` uses `pass_fail.h`: \
+            row 0 checks sound output readback ports, rows 1-3 channel/voice \
+            counter quirks, rows 4-7 noise output/LFSR quirks, and row 8 \
+            disabled-channel period-counter retention.",
     },
     WsTestSuitePassFailCase {
         name: "mono/eeprom/cartridge_1kbit.ws",

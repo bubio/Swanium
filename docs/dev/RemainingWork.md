@@ -49,14 +49,18 @@ Definition of done:
 
 Triage notes:
 
+- 2026-07-11: `mono/sound/quirks.ws` was promoted after adding APU
+  CPU-visible sound-output readback ports, LFSR readback, and immediate
+  noise-reset self-clear behavior; the evidence is recorded in
+  `CompatibilityMatrix.md`.
 - 2026-07-11: `color/dma/gdma_timing.wsc` was promoted after adding CPU-visible
   GDMA stall cycles and the APU fast-sweep test counter behavior used by the
   ROM's cycle-count harness; the evidence is recorded in `CompatibilityMatrix.md`.
 - 2026-07-10: The remaining local asiekierka/ws-test-suite ROM with a
-  source-confirmed `pass_fail.h` marker protocol that is not yet a passing
-  oracle is `mono/sound/quirks.ws`, which exposes APU output-port/counter/noise
-  failures. It should be promoted only together with the corresponding
-  emulation fixes and focused validation.
+  source-confirmed `pass_fail.h` marker protocol was `mono/sound/quirks.ws`;
+  it is now a passing oracle. Continue by inspecting additional upstream
+  sources for deterministic protocols rather than broadening with unknown
+  conventions.
 - 2026-07-10: `mono/eeprom/internal.ws` was promoted after fixing console
   IEEPROM command-width, protected-range, and DONE-bit behavior; the evidence is
   recorded in `CompatibilityMatrix.md`.
