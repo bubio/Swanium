@@ -535,13 +535,13 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     -   ✅ **音量適用（実装済み）**: ステータスバーの音量スライダー（0–100）で `Config::volume` を編集し、
         `crates/audio` の純粋関数 `scale_volume` をプロデューサ側（`AudioStream::push`）で適用。frontend は
         毎フレーム `AudioStream::set_volume(config.volume)` を呼び、値は `config.toml` に永続化。
-    -   基本設定画面（scale/renderer 等の値編集 UI 集約）は View メニュー＋ステータスバーで代替済み。
-        さらなる集約が要れば後続課題。
+    -   基本設定画面（scale/renderer 等の値編集 UI 集約）は View メニュー、ステータスバー、
+        BIOS/input の `SettingsWindow` で代替済み。さらなる集約は具体的な product/UI 要望が出た場合だけ扱う。
 -   ✅ **設定ファイル永続化（実装済み）**: `crates/common` の `Config` に serde/toml/directories を導入し、
     `Config::load`/`save`（プラットフォーム設定ディレクトリの `swanium/config.toml`）と path 指定の
     `load_from`/`save_to` を実装。serde `#[serde(default)]` で部分・旧フォーマットも欠損フィールドを
     既定値で補完、ロード時に範囲外値を `sanitised()` でクランプ。frontend は起動時に `Config::load`、
-    未存在時はファイルを生成。設定 UI（値の編集）は UI 拡充タスクで対応。
+    未存在時はファイルを生成。値の編集は View メニュー、ステータスバー、`SettingsWindow` に配線済み。
 -   **高品質スケーリング/シェーダ**: 必要に応じて Slint のレンダラを超える wgpu ポストプロセス段
     （LCD 風表現等）を Phase 9 のシェーダ対応で検討。
 -   **キー押下割り込みの精緻化**: 現状フレーム粒度の `KeyPress` 割り込みを、必要ならスキャン
