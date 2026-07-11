@@ -1,64 +1,63 @@
-# Swanium
+# Swanium - WonderSwan / WonderSwan Color Emulator
 
-> **Work in progress — mono and color ROMs boot, render, and play sound, but accuracy work remains.**
+<p align="center">
+  <img src="assets/icons/AppIcon.png" alt="Swanium" width="128" height="128">
+</p>
 
-A cycle-accurate WonderSwan / WonderSwan Color emulator written in Rust.
+Swanium is a modern, cross-platform **WonderSwan / WonderSwan Color** emulator written in Rust, with cycle-accuracy as a first-class goal.
 
-## Status
+<p align="center">
+  <a href="https://github.com/bubio/Swanium/releases/latest">
+    <img src="https://img.shields.io/github/v/release/bubio/Swanium" alt="Latest Release">
+  </a>
+  <a href="https://github.com/bubio/Swanium/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/bubio/Swanium" alt="License">
+  </a>
+  <a href="https://github.com/bubio/Swanium/releases/latest">
+    <img src="https://img.shields.io/github/downloads/bubio/Swanium/total.svg" alt="Downloads">
+  </a>
+  <a href="https://github.com/bubio/Swanium/actions/workflows/ci-linux.yml">
+    <img src="https://github.com/bubio/Swanium/actions/workflows/ci-linux.yml/badge.svg" alt="CI Linux">
+  </a>
+  <a href="https://github.com/bubio/Swanium/actions/workflows/ci-macos.yml">
+    <img src="https://github.com/bubio/Swanium/actions/workflows/ci-macos.yml/badge.svg" alt="CI macOS">
+  </a>
+  <a href="https://github.com/bubio/Swanium/actions/workflows/ci-windows.yml">
+    <img src="https://github.com/bubio/Swanium/actions/workflows/ci-windows.yml/badge.svg" alt="CI Windows">
+  </a>
+</p>
 
-The emulator core (CPU, memory, interrupts, timers, DMA, PPU, APU, cartridge,
-RTC, and WonderSwan Color extensions) is implemented. The Slint frontend can
-load `.ws` / `.wsc` ROMs, display the picture, play audio through cpal, and
-accept keyboard and gamepad input. **570 tests pass** across the workspace,
-with 2 public-ROM compatibility tests kept opt-in because ROM binaries are not
-committed.
+Swanium separates a platform-independent core (`swanium-core`) from desktop frontend integrations (Slint, cpal, gilrs), so emulation logic stays deterministic and reusable while still providing a native GUI app experience on major desktop platforms.
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Cargo workspace bootstrap | ✅ Complete |
-| 1 | V30MZ CPU core (full 8086/80186-class instruction set) | ✅ Complete |
-| 2 | Memory map, interrupts, timers, DMA (GDMA/SDMA), port I/O | ✅ Complete |
-| 3 | CPU test-ROM harness + public-ROM opt-in policy | ✅ Complete |
-| 4 | PPU (monochrome tile/sprite scanline renderer) | ✅ Complete |
-| 5 | APU (4 wave-table channels + voice/sweep/noise) | ✅ Complete |
-| 6 | Cartridge header, mapper banking, EEPROM, save data | ✅ Complete |
-| 7 | Frontend: Slint window, framebuffer, keyboard/gamepad, cpal audio | 🚧 In progress |
-| 8 | WonderSwan Color extensions (color palettes, RTC, HyperVoice) | ✅ Complete |
+<p align="center"><img src="docs/Screenshot1.png" alt="Final Fantasy 4 running on Swanium"></p>
+<p align="center"><img src="docs/Screenshot2.png" alt="Last Alive running on Swanium"></p>
 
-### Frontend status
+## Key Features
 
-- ✅ **Config persistence** — TOML load/save of `Config` (serde + toml); the
-  frontend loads `~/.config/swanium/config.toml` (platform-dependent) at startup.
-- ✅ **gilrs gamepad input** — `input::gamepad::Gamepad` polls gilrs and folds
-  the controller state into the key matrix each frame (D-pad/left stick → X-pad,
-  right stick → Y-pad, face buttons → A/B, menu → Start). OR-combined with the
-  keyboard; a missing controller is non-fatal.
-- ✅ **In-app ROM file picker** — the ROM path is now optional; with no
-  argument the window opens empty and the `O` key pops a native open dialog
-  (via `rfd`, XDG-portal backend on Linux so no GTK is needed). The picker
-  remembers the last directory and swapping ROMs flushes the audio buffer.
-- ✅ **Menu bar & status bar** — a Slint `MenuBar` (native macOS menu bar,
-  in-window elsewhere) with ROM history, settings, view controls, pause/reset,
-  plus a bottom status bar showing the current ROM name, FPS, and volume.
-- ✅ **Input settings** — keyboard and controller bindings can be remapped and
-  persisted.
-- ✅ **About** — macOS uses the OS-standard application menu About item;
-  Windows/Linux use the Slint Help ▸ About dialog.
-- High-quality scaling / shader post-processing remains deferred.
+- **Cycle-Accuracy Focus:** Timing- and register-precision work is guided by public ROM oracles and hardware references.
+- **Platform-Independent Core:** CPU, memory map, interrupts, timers, DMA, PPU, APU, cartridge, and RTC live in `crates/core` with no GUI/audio/input dependency.
+- **Cross-Platform Frontend:** Slint-based desktop UI with keyboard/gamepad input and cpal audio output.
+- **WonderSwan + WonderSwan Color:** Mono and color rendering paths, color palettes, RTC handling, and HyperVoice support.
+- **Configurable UX:** ROM history, menu/status UI, native file picker, and persistent settings.
+- **CI-Packaged Releases:** Platform workflows build/test/lint and produce macOS, Linux, and Windows release artifacts.
 
-### Known issues
+## Download
 
-- Accuracy hardening is ongoing. Current focus areas are validating CPU/PPU/APU
-  edge cases against public test ROMs and tightening cycle-level timing where
-  real games expose differences.
+Prebuilt binaries are available on the [**Releases**](https://github.com/bubio/Swanium/releases/latest) page.
 
-See [`docs/dev/DevelopmentPlan.md`](docs/dev/DevelopmentPlan.md) for the full roadmap.
+| Platform | Artifact format | Typical asset names |
+|----------|-----------------|---------------------|
+| macOS | `.zip` (unsigned universal app bundle) | `Swanium-macos-universal.zip` |
+| Linux | `.deb`, `.rpm` | package files generated from `cargo deb` / `cargo generate-rpm` |
+| Windows | `.zip` | `swanium-windows-x86_64.zip`, `swanium-windows-arm64.zip` |
+
+> Public ROM/test ROM binaries are never distributed in this repository. See [`tests/README.md`](tests/README.md).
 
 ## Building
 
-Requires Rust stable (see `rust-toolchain.toml`).
+Rust stable is required (see `rust-toolchain.toml`).
 
-```sh
+```bash
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -67,81 +66,76 @@ cargo fmt --all -- --check
 
 ### macOS App Bundle
 
-Build the unsigned universal App Bundle locally on macOS:
+Build an unsigned universal app bundle on macOS:
 
-```sh
+```bash
 scripts/build-macos-app.sh
 ```
 
-The script builds `frontend` for both `aarch64-apple-darwin` and
-`x86_64-apple-darwin`, combines them with `lipo`, generates the app icon from
-`assets/icons/AppIcon.png` into `Contents/Resources/Assets.car`, fills the
-bundle metadata used by macOS's standard About panel, and writes:
+Outputs:
 
 - `target/release/Swanium.app`
 - `target/release/Swanium-macos-universal.zip`
 
-The bundle targets macOS 13.5 or newer (`MACOSX_DEPLOYMENT_TARGET=13.5`) and is
-not code-signed.
+### Linux Packages
 
-## CI/CD
+Build `.deb` and `.rpm` packages on Linux (requires `cargo-deb` and `cargo-generate-rpm`):
 
-GitHub Actions are split by platform:
-
-- `.github/workflows/ci-linux.yml`
-- `.github/workflows/ci-macos.yml`
-- `.github/workflows/ci-windows.yml`
-
-Each workflow uses path filters so documentation-only changes do not trigger
-build/test jobs. The macOS workflow runs on `macos-26`, calls
-`scripts/build-macos-app.sh`, and uploads the `.app` directory as the normal
-workflow artifact to avoid zip-in-zip packaging. On GitHub Releases, the
-generated `Swanium-macos-universal.zip` is published as a release asset via
-`.github/workflows/publish-release-assets.yml`.
-
-## Running
-
-```sh
-cargo run -p frontend -- path/to/game.ws   # ROM path is optional
-cargo run -p frontend                       # opens empty; press O to pick a ROM
+```bash
+scripts/build-linux-app.sh --dist-dir dist
 ```
 
-Default keyboard controls: arrow keys = X-pad, `WASD` = Y-pad, `Z` = B, `X` = A,
-`Enter` = Start. Press `O` to open a ROM file picker and `P` to dump PPU display
-registers to stderr.
+Outputs:
 
-A connected gamepad works too (auto-detected via gilrs): D-pad / left stick =
-X-pad, right stick = Y-pad, bottom face button = B, right face button = A, menu
-button = Start.
+- `dist/deb/*.deb`
+- `dist/rpm/*.rpm`
 
-Public test ROMs are never committed to this repository (licensing); see
-[`tests/README.md`](tests/README.md).
+### Windows Package
+
+Build and package on Windows (PowerShell):
+
+```powershell
+./scripts/build-windows-app.ps1 --target x86_64-pc-windows-msvc --zip-path dist/swanium-windows-x86_64.zip
+```
+
+## Usage
+
+Run with an optional ROM path:
+
+```bash
+cargo run -p frontend -- path/to/game.ws
+cargo run -p frontend
+```
+
+Default controls:
+
+- Arrow keys = X-pad
+- `W A S D` = Y-pad
+- `X` = A, `Z` = B
+- `Enter` = Start
+- `O` = Open ROM picker
 
 ## Accuracy References
 
-Hardware behavior is checked first against primary WonderSwan references:
+Swanium validates behavior against primary WonderSwan documentation and public test projects:
 
 - [WSDev Wiki](https://ws.nesdev.org/wiki/WSdev_Wiki)
 - [WonderSwan - Sacred Tech Scroll](http://perfectkiosk.net/stsws.html)
-- [WonderSwan CPU test](https://github.com/FluBBaOfWard/WSCPUTest)
-- [WonderSwan test suite](https://github.com/asiekierka/ws-test-suite)
-
-Public test ROMs are run as opt-in compatibility tests because ROM binaries are
-not committed. See [`tests/README.md`](tests/README.md) and
-[`docs/dev/DevelopmentPlan.md`](docs/dev/DevelopmentPlan.md) for the testing
-policy and reference priority.
+- [FluBBaOfWard/WSCPUTest](https://github.com/FluBBaOfWard/WSCPUTest)
+- [asiekierka/ws-test-suite](https://github.com/asiekierka/ws-test-suite)
+- [FluBBaOfWard/WSTimingTest](https://github.com/FluBBaOfWard/WSTimingTest)
+- [FluBBaOfWard/WSHWTest](https://github.com/FluBBaOfWard/WSHWTest)
 
 ## Architecture
 
-```
-Frontend (Slint) → App → { Audio (cpal), Input (gilrs/keyboard) }
-                               ↓
-         Emulator Core: CPU · Memory · PPU · APU · DMA · Cartridge
+```text
+Slint GUI -> Frontend App -> { Audio (cpal), Input (gilrs) }
+                                          |
+                                          v
+                Emulator Core: CPU, Memory, Interrupts, Timers, DMA, PPU, APU, Cartridge, RTC
 ```
 
-The emulator core (`crates/core`, package `swanium-core`) has no dependency on
-GUI, audio, or input libraries and can be used headlessly — a requirement for
-the planned RetroAchievements (rcheevos) integration.
+The core crate (`crates/core`, package name `swanium-core`) remains headless and platform-independent by design.
 
 ## License
 
