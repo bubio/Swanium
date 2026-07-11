@@ -2,7 +2,6 @@
 set -euo pipefail
 
 PACKAGE="frontend"
-MANIFEST_PATH="crates/frontend/Cargo.toml"
 DIST_DIR="dist"
 DEB_DIR="${DIST_DIR}/deb"
 RPM_DIR="${DIST_DIR}/rpm"
@@ -59,8 +58,8 @@ if ! cargo generate-rpm --help >/dev/null 2>&1; then
 fi
 
 cargo build -p "${PACKAGE}" --release
-cargo deb --manifest-path "${MANIFEST_PATH}" --no-build
-cargo generate-rpm --manifest-path "${MANIFEST_PATH}"
+cargo deb -p "${PACKAGE}" --no-build
+cargo generate-rpm -p "${PACKAGE}"
 
 rm -rf "${DEB_DIR}" "${RPM_DIR}"
 mkdir -p "${DEB_DIR}" "${RPM_DIR}"

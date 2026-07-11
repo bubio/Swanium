@@ -68,7 +68,25 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/build-windows-app.ps1 --target "${{ matrix.target }}" --zip-path "dist/${{ matrix.zip_name }}"
-      - name: Upload zip artifact
+      - name: Prepare unpacked artifact
+        if: github.event_name != 'release'
+        shell: pwsh
+        run: |
+          $UnpackedDir = "dist/unpacked/${{ matrix.arch }}"
+          if (Test-Path $UnpackedDir) {
+            Remove-Item $UnpackedDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $UnpackedDir -Force | Out-Null
+          Expand-Archive -Path "dist/${{ matrix.zip_name }}" -DestinationPath $UnpackedDir
+      - name: Upload unpacked artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/unpacked/${{ matrix.arch }}/
+          if-no-files-found: error
+      - name: Upload release zip artifact
+        if: github.event_name == 'release'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
