@@ -28,6 +28,12 @@ problem.
 The highest-value next work is to turn more public test ROMs into deterministic
 opt-in regressions.
 
+Current actionable state: the local public-ROM inventory is exhausted. Do not
+spend the next session re-reading the same ws-test-suite sources unless new ROMs
+or upstream changes have been added. The next concrete emulator work should move
+to **P1 - Color PPU hardware validation**, starting with one visible rule from
+that section and recording the evidence in `CompatibilityMatrix.md`.
+
 Scope:
 
 - Inspect additional asiekierka/ws-test-suite ROM sources and identify their
@@ -49,6 +55,22 @@ Definition of done:
 
 Triage notes:
 
+- 2026-07-11: WSCpuTest was rechecked as a possible refresh path. The local
+  `/Volumes/CrucialX6/roms/WonderSwan/Tests/WSCpuTest` source/ROM is the 2023
+  release line, which is the last release to track here; do not chase a
+  non-existent newer released WSCpuTest before moving on.
+- 2026-07-11: `wonderful/libc/sbrk.ws` includes `test/pass_fail.h`, but
+  `src/wonderful/libc/sbrk/main.c` never calls `draw_pass_fail`; it only prints
+  the current `sbrk(0)` pointer and loops forever. It is intentionally not an
+  oracle candidate under the current deterministic rules.
+- 2026-07-11: Rechecked the remaining local ws-test-suite ROMs not already in
+  `public_roms.rs`: `wonderful/libc/sbrk.ws`, `wonderful/benchmark/dma.ws`, and
+  `tools/{eeprom_view_contents,hyper_voice_tester,power_draw_benchmark,startup_state_custom_crt0,timing_validator}.ws`.
+  Their sources expose human-readable dumps, manual controls, or benchmark
+  numbers, but no source-defined pass/fail condition suitable for the current
+  deterministic oracle rules. The next expansion needs either a new upstream
+  ws-test-suite ROM with an explicit result protocol or another public test ROM
+  plus source/hardware notes defining its expected result.
 - 2026-07-11: `mono/sound/quirks.ws` was promoted after adding APU
   CPU-visible sound-output readback ports, LFSR readback, and immediate
   noise-reset self-clear behavior; the evidence is recorded in
@@ -103,6 +125,13 @@ Definition of done:
 
 Color rendering is implemented and covered by synthetic tests, but several rules
 still need external confirmation.
+
+Next concrete task: validate the Color PPU color-zero transparency and backdrop
+palette-index behavior first. Start from the existing synthetic Color PPU tests
+to identify the exact assumptions, then compare the same minimal scene against a
+public ROM, hardware capture, or at least two mature reference emulators. If the
+evidence confirms current behavior, add a `CompatibilityMatrix.md` row; if it
+disagrees, change the renderer with a focused regression test.
 
 Scope:
 
