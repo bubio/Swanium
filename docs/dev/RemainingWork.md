@@ -123,21 +123,20 @@ Definition of done:
 
 ## P1 - Color PPU hardware validation
 
-Color rendering is implemented and covered by synthetic tests, but several rules
-still need external confirmation.
+Color rendering is implemented and covered by synthetic tests; the previously
+listed low-level assumptions now have reference-emulator evidence.
 
-Color-zero transparency, backdrop palette-index behavior, and Color 4bpp tile
-byte/nibble ordering are now validated against ares and Mednafen source and
-recorded in `CompatibilityMatrix.md`. Next concrete task: validate Color
-background tile-bank selection and sprite attribute bit meanings against a
-public ROM, hardware capture, or at least two mature reference emulators. If the
-evidence confirms current behavior, add a `CompatibilityMatrix.md` row; if it
-disagrees, change the renderer with a focused regression test.
+Color-zero transparency, backdrop palette-index behavior, Color 4bpp tile
+byte/nibble ordering, background tile-bank selection, and sprite attribute bit
+meanings are now validated against ares and Mednafen source and recorded in
+`CompatibilityMatrix.md`. Next concrete task: move to **P1 - HyperVoice, SDMA,
+and analog audio validation**, starting with one software-visible audio rule
+from that section and recording the evidence in `CompatibilityMatrix.md`.
 
 Scope:
 
-- Validate background tile-bank selection and sprite attribute bit meanings
-  against public ROMs, hardware captures, or multiple reference emulators.
+- Add any further Color PPU rules only when a public ROM, hardware capture,
+  reference-emulator discrepancy, or known title exposes a concrete issue.
 - Keep mono regression tests paired with shared PPU changes.
 - Revisit dot-level PPU only when a specific mid-scanline effect fails.
 
@@ -165,6 +164,17 @@ Validation notes:
   high-nibble-left ordering. Swanium has focused regressions
   `color_4bpp_planar_renders_plane_bits_left_to_right` and
   `color_4bpp_packed_renders_nibbles_left_to_right`.
+- 2026-07-11: Color background tile-map bank selection and sprite attribute
+  meanings are source-confirmed against ares and Mednafen. ares
+  `ares/ws/ppu/screen.cpp` folds background attribute bit 13 into the tile
+  number, while `ares/ws/ppu/sprite.cpp` decodes sprite bit 12 as the window
+  region, bit 13 as priority, and bits 14/15 as flips. Mednafen
+  `src/wswan/gfx.cpp` passes background `0x2000` as the tile-bank flag but calls
+  sprite `wsGetTile(..., 0)`, using the sprite attribute byte's `0x10`, `0x20`,
+  `0x40`, and `0x80` bits for window, priority, hflip, and vflip. Swanium has
+  focused regressions `color_2bpp_bank_bit_selects_second_tile_bank`,
+  `color_4bpp_renders_pixel_from_second_tile_bank_area`, and
+  `color_sprite_attribute_bit_13_is_priority_not_tile_bank`.
 
 ## P1 - HyperVoice, SDMA, and analog audio validation
 

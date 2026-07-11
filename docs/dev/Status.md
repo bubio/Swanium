@@ -309,7 +309,8 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   (tile-map bit 13). `sample_background`/`sample_sprite` decode per the active mode; mono is
   unchanged. `color/display/tile_screen_extended_range.wsc` confirms the second 2bpp tile bank plus
   upper-WRAM screen-map and sprite-table ranges in Color mode. 4bpp planar byte order and packed
-  nibble order are now source-confirmed against ares and Mednafen.
+  nibble order, background tile-map bank selection, and sprite attribute bit meanings are now
+  source-confirmed against ares and Mednafen.
 - **8d (done)**: the Color 64 KiB internal-RAM window. `Bus::read_wram`/`write_wram` gate the upper
   48 KiB (0x04000–0x0FFFF) — which holds the palette RAM at 0xFE00 and the 4bpp tile banks at 0x4000
   — behind `model.is_color()`; on mono it stays open bus and writes are dropped (verified, not just
@@ -364,10 +365,11 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   color-zero transparency, backdrop palette indexing, 4bpp planar byte order, packed high/low nibble
   order, background tile-map bank selection, and sprite attribute bit 13 as priority rather than a
   tile-bank selector. Hardware/public-ROM validation remains tracked in `RemainingWork.md`.
-- Color-mode color-zero transparency, backdrop palette indexing, 4bpp planar byte order, and packed
-  high/low nibble order are source-confirmed against ares and Mednafen and recorded in
-  `CompatibilityMatrix.md`; background tile-bank and sprite attribute semantics remain the next Color
-  PPU validation targets.
+- Color-mode color-zero transparency, backdrop palette indexing, 4bpp planar byte order, packed
+  high/low nibble order, background tile-bank selection, and sprite attribute semantics are
+  source-confirmed against ares and Mednafen and recorded in `CompatibilityMatrix.md`. Further Color
+  PPU work should wait for a concrete public-ROM, hardware-capture, reference-emulator, or
+  title-specific discrepancy.
 
 ## Tooling — profiling & benchmarks
 

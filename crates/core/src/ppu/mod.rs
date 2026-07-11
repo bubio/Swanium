@@ -67,7 +67,8 @@ const VIDEO_MODE: usize = 0x60;
 const VIDEO_MODE_COLOR: u8 = 1 << 7; // color palettes (1) vs mono shade pool (0)
 const VIDEO_MODE_4BPP: u8 = 1 << 6; // 16-color 4bpp tiles (1) vs 4-color 2bpp (0)
 const VIDEO_MODE_PACKED: u8 = 1 << 5; // packed 4bpp (1) vs planar 4bpp (0)
-/// In color mode, tile-map bit 13 selects the second 512-tile bank.
+/// In color mode, tile-map bit 13 selects the second 512-tile bank. This is
+/// only a background tile-map attribute; sprite attribute bit 13 is priority.
 const TILEMAP_BANK_BIT: u16 = 1 << 13;
 const TILE_BANK_SIZE: u16 = 512;
 /// A tile map is 32×32 entries of 16 bits each, row-major.
@@ -288,8 +289,9 @@ enum BgLayer {
 /// pixels; the palette (mono shade pool vs color RAM) is handled separately by
 /// the [`PaletteResolver`].
 ///
-/// Layouts (WSdev "Display"; 4bpp byte order cross-checked against ares
-/// `ares/ws/ppu/memory.cpp` and Mednafen `src/wswan/tcache.cpp`):
+/// Layouts (WSdev "Display"; 4bpp byte order and Color background/sprite
+/// attribute meanings cross-checked against ares `ares/ws/ppu/{memory,screen,
+/// sprite}.cpp` and Mednafen `src/wswan/{gfx,tcache}.cpp`):
 /// - 2bpp planar (mono and color 2bpp): 16 bytes/tile, per row two planes.
 /// - 4bpp planar: 32 bytes/tile, per row four plane bytes.
 /// - 4bpp packed: 32 bytes/tile, per row four bytes of two 4-bit pixels
@@ -300,7 +302,7 @@ pub(crate) struct TileMode {
     bpp4: bool,
     /// Packed 4bpp byte layout instead of planar (only meaningful when `bpp4`).
     packed: bool,
-    /// Color mode: tile-map bit 13 selects the second 512-tile bank.
+    /// Color mode: background tile-map bit 13 selects the second 512-tile bank.
     banked: bool,
 }
 

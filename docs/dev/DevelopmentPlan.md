@@ -616,7 +616,9 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     背景と共通。
 -   **検証済み/未検証の前提**: 4bpp planar のプレーン並び（行あたり4バイト＝plane0–3）・packed の左右ニブル
     （高位=左）は ares `ares/ws/ppu/memory.cpp` と Mednafen `src/wswan/tcache.cpp` に一致することを確認済み。
-    タイルバンク/4bppベースアドレスは引き続き実機/テストROM未確認。
+    背景 tile-map bit13 の第2 tile bank 選択と sprite attribute bit12/13/14/15（window/priority/hflip/vflip）
+    は ares `ares/ws/ppu/screen.cpp` / `sprite.cpp` と Mednafen `src/wswan/gfx.cpp` に一致することを確認済み。
+    4bppベースアドレスは引き続き実機/テストROM未確認。
 
 **実装メモ（8d）**
 -   内蔵RAM は元々 64 KiB（`wram: Box<[u8; 0x10000]>`）確保済みで、ギャップは *CPU/GDMA から
