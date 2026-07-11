@@ -115,12 +115,59 @@ impl WaveChannel {
     pub(crate) fn tick(&mut self, pitch: u16, wram: &[u8], wave_addr: usize) -> u8 {
         self.period_counter = self.period_counter.saturating_sub(1);
         if self.period_counter == 0 {
-            self.period_counter = 2048 - (pitch & PITCH_MASK);
-            self.sample_idx = (self.sample_idx + 1) & 0x1F;
-            let byte = wram[wave_addr + (self.sample_idx as usize) / 2];
-            self.sample = (byte >> ((self.sample_idx & 1) * 4)) & 0x0F;
+            self.advance_sample(2048 - (pitch & PITCH_MASK), wram, wave_addr);
         }
         self.sample
+    }
+
+    /// Advance `cycles` sound-clock ticks, producing the same final oscillator
+    /// state as calling [`WaveChannel::tick`] repeatedly with stable registers.
+    pub(crate) fn advance(&mut self, cycles: u32, pitch: u16, wram: &[u8], wave_addr: usize) -> u8 {
+        if cycles == 0 {
+            return self.sample;
+        }
+
+        let period = 2048 - (pitch & PITCH_MASK);
+        let mut remaining = cycles;
+        let first_advance = if self.period_counter == 0 {
+            1
+        } else {
+            self.period_counter as u32
+        };
+        if remaining < first_advance {
+            self.period_counter -= remaining as u16;
+            return self.sample;
+        }
+
+        remaining -= first_advance;
+        self.advance_sample(period, wram, wave_addr);
+        if remaining == 0 {
+            return self.sample;
+        }
+
+        let period = period as u32;
+        let additional_advances = remaining / period;
+        let leftover = remaining % period;
+        if additional_advances != 0 {
+            self.sample_idx = self
+                .sample_idx
+                .wrapping_add((additional_advances & 0x1F) as u8)
+                & 0x1F;
+            self.read_current_sample(wram, wave_addr);
+        }
+        self.period_counter = (period - leftover) as u16;
+        self.sample
+    }
+
+    fn advance_sample(&mut self, period: u16, wram: &[u8], wave_addr: usize) {
+        self.period_counter = period;
+        self.sample_idx = (self.sample_idx + 1) & 0x1F;
+        self.read_current_sample(wram, wave_addr);
+    }
+
+    fn read_current_sample(&mut self, wram: &[u8], wave_addr: usize) {
+        let byte = wram[wave_addr + (self.sample_idx as usize) / 2];
+        self.sample = (byte >> ((self.sample_idx & 1) * 4)) & 0x0F;
     }
 }
 
@@ -296,14 +343,18 @@ impl Apu {
             self.channels[3].sample,
         ];
 
-        for _ in 0..cycles {
+        let mut remaining = cycles;
+        while remaining != 0 {
+            let chunk = remaining.min(Self::CYCLES_PER_SAMPLE - self.sample_accum);
             for ch in 0..4 {
                 if ctrl & CTRL_ENABLE[ch] != 0 {
-                    samples[ch] = self.channels[ch].tick(pitches[ch], wram, wave_base + ch * 16);
+                    samples[ch] =
+                        self.channels[ch].advance(chunk, pitches[ch], wram, wave_base + ch * 16);
                 }
             }
 
-            self.sample_accum += 1;
+            self.sample_accum += chunk;
+            remaining -= chunk;
             if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
                 self.sample_accum = 0;
                 let (wave_l, wave_r) = mix_waves(&samples, ctrl, ports);

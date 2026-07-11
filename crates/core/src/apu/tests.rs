@@ -98,6 +98,25 @@ fn wave_channel_reads_from_wave_address_offset() {
     assert_eq!(ch.tick(0x7FF, &wram, 16), 7); // first tick → idx1 = 7
 }
 
+#[test]
+fn wave_channel_advance_matches_repeated_ticks() {
+    let mut wram = vec![0u8; 0x4000];
+    for (i, byte) in wram.iter_mut().take(16).enumerate() {
+        *byte = ((i as u8) << 4) | (15 - i as u8);
+    }
+    for (pitch, cycles) in [(0x7FF, 257), (0x7FE, 255), (0x700, 513), (0x000, 4097)] {
+        let mut stepped = WaveChannel::new();
+        let mut batched = WaveChannel::new();
+        let mut out = 0;
+        for _ in 0..cycles {
+            out = stepped.tick(pitch, &wram, 0);
+        }
+        assert_eq!(batched.advance(cycles, pitch, &wram, 0), out);
+        assert_eq!(batched.period_counter, stepped.period_counter);
+        assert_eq!(batched.sample_idx, stepped.sample_idx);
+    }
+}
+
 // ── pitch register decode ────────────────────────────────────────────────────
 
 #[test]
