@@ -58,6 +58,7 @@ To read the split programmatically, build with `--features profiling` and call
 ```sh
 cargo bench -p swanium-core                       # all benches
 cargo bench -p swanium-core --bench frame -- run_frame   # one bench by name
+cargo bench -p swanium-core --bench frame --no-run        # build-check only
 ```
 
 `crates/core/benches/frame.rs` provides:
@@ -75,6 +76,10 @@ cargo bench -p swanium-core -- --save-baseline before
 git stash pop        # apply the change
 cargo bench -p swanium-core -- --baseline before
 ```
+
+Use `--no-run` only as a tooling check after unrelated core changes. It proves
+the bench target still compiles under `[profile.bench]`; it does not produce
+performance numbers.
 
 ## 3. External sampling profiler (function/line hotspots)
 

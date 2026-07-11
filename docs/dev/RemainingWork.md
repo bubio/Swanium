@@ -312,6 +312,12 @@ Validation notes:
   During that check, CPU/APU bucket overlap was fixed so the in-core profiler
   reports exclusive CPU, PPU, APU, and DMA shares. Criterion benches remain the
   tool for before/after statistical regression tracking.
+- 2026-07-11: Criterion frame benchmarks were build-checked with
+  `cargo bench -p swanium-core --bench frame --no-run`. This verifies the
+  `run_frame`, `render_scanline`, and `tick_apu_frame` bench definitions still
+  compile under the bench profile. Do not spend the next session running full
+  Criterion measurements unless there is a concrete before/after performance
+  question.
 
 ## Deferred frontend polish
 

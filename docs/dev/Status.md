@@ -394,6 +394,7 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM.
 - **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`
   plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
+  Use `cargo bench -p swanium-core --bench frame --no-run` for a build-only tooling check.
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
 
