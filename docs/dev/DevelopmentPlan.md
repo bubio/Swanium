@@ -614,8 +614,9 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 -   **タイルマップのバンク**: color モードのみ bit13 を第2バンク選択として解釈（`TileMapEntry::bank`）。
     mono では無視。**スプライトはバンク無し**（属性 bit13 は priority）、タイルは 0–511 だが 2bpp/4bpp 形式は
     背景と共通。
--   **未検証の前提**: 4bpp planar のプレーン並び（行あたり4バイト＝plane0–3）・packed の左右ニブル
-    （高位=左）は WSdev 記述準拠だが実機/テストROM未確認。タイルバンク/4bppベースアドレスも同様。
+-   **検証済み/未検証の前提**: 4bpp planar のプレーン並び（行あたり4バイト＝plane0–3）・packed の左右ニブル
+    （高位=左）は ares `ares/ws/ppu/memory.cpp` と Mednafen `src/wswan/tcache.cpp` に一致することを確認済み。
+    タイルバンク/4bppベースアドレスは引き続き実機/テストROM未確認。
 
 **実装メモ（8d）**
 -   内蔵RAM は元々 64 KiB（`wram: Box<[u8; 0x10000]>`）確保済みで、ギャップは *CPU/GDMA から

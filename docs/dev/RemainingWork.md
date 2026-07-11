@@ -126,19 +126,18 @@ Definition of done:
 Color rendering is implemented and covered by synthetic tests, but several rules
 still need external confirmation.
 
-Color-zero transparency and backdrop palette-index behavior are now validated
-against ares and Mednafen source and recorded in `CompatibilityMatrix.md`. Next
-concrete task: validate Color 4bpp planar byte order and packed nibble order
-against a public ROM, hardware capture, or at least two mature reference
-emulators. If the evidence confirms current behavior, add a
-`CompatibilityMatrix.md` row; if it disagrees, change the renderer with a
-focused regression test.
+Color-zero transparency, backdrop palette-index behavior, and Color 4bpp tile
+byte/nibble ordering are now validated against ares and Mednafen source and
+recorded in `CompatibilityMatrix.md`. Next concrete task: validate Color
+background tile-bank selection and sprite attribute bit meanings against a
+public ROM, hardware capture, or at least two mature reference emulators. If the
+evidence confirms current behavior, add a `CompatibilityMatrix.md` row; if it
+disagrees, change the renderer with a focused regression test.
 
 Scope:
 
-- Validate 4bpp planar byte order, 4bpp packed nibble order, background
-  tile-bank selection, and sprite attribute bit meanings against public ROMs,
-  hardware captures, or multiple reference emulators.
+- Validate background tile-bank selection and sprite attribute bit meanings
+  against public ROMs, hardware captures, or multiple reference emulators.
 - Keep mono regression tests paired with shared PPU changes.
 - Revisit dot-level PPU only when a specific mid-scanline effect fails.
 
@@ -158,6 +157,14 @@ Validation notes:
   nibbles and only overwrites Color pixels when `wsTileRow[x]` is nonzero.
   Swanium has a focused regression
   `color_zero_screen_pixel_falls_back_to_color_backdrop`.
+- 2026-07-11: Color 4bpp tile byte/nibble ordering is source-confirmed against
+  ares and Mednafen. ares `ares/ws/ppu/memory.cpp` fetches planar rows from
+  `0x4000 + (tile << 5) + (y << 2)` with bits `7-x`, `15-x`, `23-x`, `31-x`,
+  and packed rows as high/low nibbles selected by `x`. Mednafen
+  `src/wswan/tcache.cpp` cases 6/7 decode the same plane0..plane3 and
+  high-nibble-left ordering. Swanium has focused regressions
+  `color_4bpp_planar_renders_plane_bits_left_to_right` and
+  `color_4bpp_packed_renders_nibbles_left_to_right`.
 
 ## P1 - HyperVoice, SDMA, and analog audio validation
 

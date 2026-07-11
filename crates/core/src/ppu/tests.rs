@@ -1093,6 +1093,30 @@ fn tile_pixel_4bpp_planar_all_planes_is_15() {
 }
 
 #[test]
+fn color_4bpp_planar_renders_plane_bits_left_to_right() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x60] = 0x80 | 0x40; // color, 4bpp, planar
+    write_map_entry(&mut wram, 0, 0, 0, 1 << 9); // tile 0, palette 1
+
+    // Pixel values 1,2,3,4,5,6,7,8 with plane0 as bit 0 and MSB as x=0.
+    write_tile_row_4bpp_planar(&mut wram, 0, 0, [0xAA, 0x66, 0x1E, 0x01]);
+    for color in 1..=8 {
+        write_palette_color(&mut wram, 1, color, 0x0200 | color as u16);
+    }
+
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+
+    assert_eq!(
+        &ppu.framebuffer()[0..8],
+        &[0x0201, 0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0208]
+    );
+}
+
+#[test]
 fn tile_pixel_4bpp_packed_high_nibble_is_left_pixel() {
     let mut wram = vec![0u8; 0x10000];
     write_tile_row_4bpp_packed(&mut wram, 0, 0, [0xAB, 0, 0, 0]);
@@ -1104,6 +1128,28 @@ fn tile_pixel_4bpp_packed_low_nibble_is_right_pixel() {
     let mut wram = vec![0u8; 0x10000];
     write_tile_row_4bpp_packed(&mut wram, 0, 0, [0xAB, 0, 0, 0]);
     assert_eq!(tile_pixel_4bpp(&wram, true, 0, 1, 0), 0xB); // tx=1 → low nibble
+}
+
+#[test]
+fn color_4bpp_packed_renders_nibbles_left_to_right() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x60] = 0x80 | 0x40 | 0x20; // color, 4bpp, packed
+    write_map_entry(&mut wram, 0, 0, 0, 1 << 9); // tile 0, palette 1
+    write_tile_row_4bpp_packed(&mut wram, 0, 0, [0x12, 0x34, 0x56, 0x78]);
+    for color in 1..=8 {
+        write_palette_color(&mut wram, 1, color, 0x0100 | color as u16);
+    }
+
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+
+    assert_eq!(
+        &ppu.framebuffer()[0..8],
+        &[0x0101, 0x0102, 0x0103, 0x0104, 0x0105, 0x0106, 0x0107, 0x0108]
+    );
 }
 
 #[test]

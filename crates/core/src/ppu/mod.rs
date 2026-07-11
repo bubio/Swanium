@@ -288,8 +288,8 @@ enum BgLayer {
 /// pixels; the palette (mono shade pool vs color RAM) is handled separately by
 /// the [`PaletteResolver`].
 ///
-/// Layouts (WSdev "Display"; exact 4bpp byte order unverified — see
-/// `docs/dev/DevelopmentPlan.md` "リスクと不確実性"):
+/// Layouts (WSdev "Display"; 4bpp byte order cross-checked against ares
+/// `ares/ws/ppu/memory.cpp` and Mednafen `src/wswan/tcache.cpp`):
 /// - 2bpp planar (mono and color 2bpp): 16 bytes/tile, per row two planes.
 /// - 4bpp planar: 32 bytes/tile, per row four plane bytes.
 /// - 4bpp packed: 32 bytes/tile, per row four bytes of two 4-bit pixels
