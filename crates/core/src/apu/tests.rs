@@ -145,6 +145,25 @@ fn one_sample_after_cycles_per_sample() {
 }
 
 #[test]
+fn silent_fast_path_batches_samples_and_clears_output_ports() {
+    let (mut ports, wram) = blank();
+    ports[SND_CH_OUT_R] = 7;
+    ports[SND_CH_OUT_L] = 8;
+    ports[SND_CH_OUT_LR] = 15;
+    let mut apu = Apu::new();
+    apu.tick(257, &wram, &mut ports, false);
+    assert_eq!(
+        (
+            apu.samples(),
+            u16::from_le_bytes([ports[SND_CH_OUT_R], ports[SND_CH_OUT_R + 1]]),
+            u16::from_le_bytes([ports[SND_CH_OUT_L], ports[SND_CH_OUT_L + 1]]),
+            u16::from_le_bytes([ports[SND_CH_OUT_LR], ports[SND_CH_OUT_LR + 1]]),
+        ),
+        (&[0, 0, 0, 0][..], 0, 0, 0)
+    );
+}
+
+#[test]
 fn clear_samples_empties_buffer() {
     let (mut ports, wram) = blank();
     let mut apu = Apu::new();

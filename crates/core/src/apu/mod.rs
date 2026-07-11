@@ -244,8 +244,30 @@ impl Apu {
     /// (`(ports[0x8F] << 6) + 64` bytes) or if `ports` is shorter than `0x100`.
     /// The real 16 KiB WRAM and 256-entry port file always satisfy this.
     pub fn tick(&mut self, cycles: u32, wram: &[u8], ports: &mut [u8], color: bool) {
+        if silent_fast_path(ports, color) {
+            self.tick_silence(cycles, ports);
+            return;
+        }
         for _ in 0..cycles {
             self.step(wram, ports, color);
+        }
+    }
+
+    fn tick_silence(&mut self, cycles: u32, ports: &mut [u8]) {
+        self.voice_lp.reset();
+        self.voice_level = 0;
+        write_port_word(ports, SND_CH_OUT_R, 0);
+        write_port_word(ports, SND_CH_OUT_L, 0);
+        write_port_word(ports, SND_CH_OUT_LR, 0);
+
+        let total = self.sample_accum + cycles;
+        let sample_count = total / Self::CYCLES_PER_SAMPLE;
+        self.sample_accum = total % Self::CYCLES_PER_SAMPLE;
+        if sample_count != 0 {
+            self.samples.resize(
+                self.samples.len() + sample_count as usize * STEREO_CHANNELS,
+                0,
+            );
         }
     }
 
@@ -447,6 +469,10 @@ fn write_port_word(ports: &mut [u8], port: usize, value: u16) {
     let [lo, hi] = value.to_le_bytes();
     ports[port] = lo;
     ports[port + 1] = hi;
+}
+
+fn silent_fast_path(ports: &[u8], color: bool) -> bool {
+    ports[0x90] == 0 && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
 }
 
 /// Expand the 8-bit HyperVoice `data` latch to a signed ~11-bit sample per the
