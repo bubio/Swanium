@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 //! Swanium frontend: a Slint window that plays a WonderSwan ROM.
 //!
 //! Scope (see `docs/dev/DevelopmentPlan.md` Phase 7): open a window, run the

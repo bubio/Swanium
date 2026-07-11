@@ -8,8 +8,10 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/**'
+      - 'scripts/build-windows-app.ps1'
       - 'tests/**'
       - '.github/workflows/ci-windows.yml'
+      - '.github/workflows/publish-release-assets.yml'
   pull_request:
     branches: [main, master]
     paths:
@@ -17,8 +19,10 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/**'
+      - 'scripts/build-windows-app.ps1'
       - 'tests/**'
       - '.github/workflows/ci-windows.yml'
+      - '.github/workflows/publish-release-assets.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -41,3 +45,42 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  bundle:
+    needs: test
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            artifact: swanium-windows-x86_64-zip
+            zip_name: swanium-windows-x86_64.zip
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            artifact: swanium-windows-arm64-zip
+            zip_name: swanium-windows-arm64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and package
+        shell: pwsh
+        run: |
+          ./scripts/build-windows-app.ps1 --target "${{ matrix.target }}" --zip-path "dist/${{ matrix.zip_name }}"
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.zip_name }}
+          if-no-files-found: error
+
+  publish-release:
+    if: github.event_name == 'release'
+    needs: bundle
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-release-assets.yml
+    with:
+      asset-patterns: |
+        *.zip

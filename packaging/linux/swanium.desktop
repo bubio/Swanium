@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Swanium
+Comment=A cross-platform WonderSwan / WonderSwan Color emulator
+Exec=swanium
+Icon=swanium
+Categories=Game;Emulator;
+Terminal=false
