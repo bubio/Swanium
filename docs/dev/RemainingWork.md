@@ -185,12 +185,18 @@ recorded in `CompatibilityMatrix.md`. Port `0x9E` speaker main-volume was
 triaged against ares, Mednafen, and MAME. MAME documents it as a WSC volume
 setting; Swanium keeps software-visible readback but does not apply attenuation
 to the core mix because emulators already expose arbitrary host/frontend volume
-control. Next concrete task: validate HyperVoice sample-rate/update cadence
-against public tests, mature reference emulators, or hardware capture.
+control. HyperVoice update cadence was triaged against ares and Mednafen; the
+mature references disagree on `0x6A` bits 4-6, so Swanium keeps the current
+Mednafen-like current-latch behavior. Next concrete task: add or select a
+public/self-built PCM fixture that emits deterministic `0x89`, SDMA, and
+HyperVoice write patterns for sample-sequence validation; if such a fixture is
+not available, defer audio changes until a public test, hardware capture, or
+known-title discrepancy exists.
 
 Scope:
 
-- Confirm HyperVoice sample-rate/update cadence if software-visible.
+- Add or select a public/self-built PCM fixture for deterministic `0x89`, SDMA,
+  and HyperVoice sample-sequence validation.
 - Validate SDMA bus-stall behavior against public tests, reference emulators,
   or hardware captures.
 - Keep port `0x9E` as software-visible volume-setting readback only; do not
@@ -224,6 +230,15 @@ Validation notes:
   readback for software visibility, but does not apply it to the deterministic
   core mix because emulator users can freely control output volume at the
   frontend/host layer.
+- 2026-07-11: HyperVoice update cadence was triaged against ares and Mednafen.
+  ares `ares/ws/apu/channel5.cpp` treats `0x6A` bits 4-6 as speed divisors
+  `{1,2,3,4,5,6,8,12}` and only updates changed L/R outputs when that divider
+  elapses. Mednafen `src/wswan/sound.cpp` ignores bits 4-6, updates HyperVoice
+  at `WSwan_SoundUpdate()` timestamps, and uses `0x6A` only for enable,
+  extension mode, and shift. Since the references disagree and no public ROM or
+  hardware capture pins software-visible timing, Swanium keeps the Mednafen-like
+  current-latch behavior. Focused regression:
+  `hypervoice_speed_bits_do_not_change_current_latch_output`.
 
 ## P2 - Compatibility matrix and local evidence
 

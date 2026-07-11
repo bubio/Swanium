@@ -30,9 +30,12 @@ Do not commit commercial ROMs, recordings, or extracted assets.
 
 - The current voice reconstruction removes the strongest multiplex buzz, but
   residual ripple from scanline-jittered write timing remains possible.
-- HyperVoice sample-rate divisor/update cadence is not hardware-validated. The
-  current implementation updates output at the core audio sample cadence using
-  the current latch/direct values.
+- HyperVoice update cadence is reference-triaged but not hardware-validated.
+  ares applies `0x6A` bits 4-6 as extra speed divisors, while Mednafen ignores
+  them and updates from the current latch/direct value at sound-update
+  timestamps. Swanium keeps the Mednafen-like current-latch behavior until a
+  public ROM, hardware capture, or known-title discrepancy proves the divider is
+  software-visible.
 - SDMA sample cadence is source-confirmed against ares and Mednafen as 24 kHz
   APU sample ticks divided by 6/4/2/1 for rate bits 0/1/2/3. CPU bus-stall
   behavior remains unvalidated.
@@ -51,17 +54,14 @@ Do not commit commercial ROMs, recordings, or extracted assets.
 The next improvement should be measurement-led, not another unconditional core
 filter change. Priority order:
 
-1. Add a small public/self-built PCM ROM that writes deterministic `0x89`, SDMA,
-   and HyperVoice patterns and validates emitted sample sequences in
-   `swanium-core`.
-2. Validate HyperVoice sample-rate/update cadence with public tests, reference
-   recordings/source, or hardware capture before changing latch/direct timing.
-3. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
+1. Add or select a public/self-built PCM ROM that can emit deterministic `0x89`,
+   SDMA, and HyperVoice write patterns for sample-sequence validation.
+2. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
    SDMA/HyperVoice-heavy title, then decide whether the remaining difference is
    core reconstruction or host resampling.
-4. Only change `crates/audio` resampling if the core sample stream already
+3. Only change `crates/audio` resampling if the core sample stream already
    matches the reference closely and the audible issue appears after host-rate
    conversion.
-5. Keep port `0x9E` as readback-only BIOS/body volume-setting state in the core;
+4. Keep port `0x9E` as readback-only BIOS/body volume-setting state in the core;
    host/frontend volume control is the correct place for emulator-wide output
    attenuation unless software proves it depends on mixer-side behavior.

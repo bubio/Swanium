@@ -194,8 +194,10 @@ its bundled tech note, while MAME comments it as the WSC volume setting. Swanium
 BIOS/body volume setting: useful on real hardware, but redundant in an emulator where host/frontend
 volume is freely adjustable. Sound DMA feeds the voice latch from ports `0x4A`–`0x52`; SDMA sample
 cadence is source-confirmed against ares and Mednafen as a 24 kHz APU cadence divided by 6/4/2/1 for
-rate bits 0/1/2/3. Remaining audio risks are HyperVoice sample-rate/update cadence and SDMA bus-stall
-validation.
+rate bits 0/1/2/3. HyperVoice `0x6A` bits 4-6 are reference-triaged but not applied: ares treats
+them as speed divisors, while Mednafen ignores them, so Swanium keeps the Mednafen-like current-latch
+behavior pending public-ROM or hardware evidence. Remaining audio risk is SDMA bus-stall validation
+or a deterministic PCM fixture exposing a concrete mismatch.
 
 ### Cartridge / save RAM — Phase 6 (`bus/cart/`)
 16-byte footer header parse, Bandai 2001/2003 banking via a `Mapper` enum, SRAM and
@@ -356,8 +358,9 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   master cycles per byte, and delivered bytes go through the same `0x89` voice-latch helper as CPU I/O
   writes so `Apu::write_voice` sees the real stream. Terminal count clears bit 7 unless repeat is set;
   repeat reloads source/counter shadows; hold outputs zero without advancing. Deferred/unverified: the
-  exact hardware bus-stall details and HyperVoice sample-rate/update cadence. SDMA rate bits 0/1/2/3
-  are source-confirmed against ares and Mednafen as 4000/6000/12000/24000 Hz transfer cadence. Port
+  exact hardware bus-stall details. SDMA rate bits 0/1/2/3 are source-confirmed against ares and
+  Mednafen as 4000/6000/12000/24000 Hz transfer cadence. HyperVoice `0x6A` speed bits are not applied
+  because ares and Mednafen disagree on their software-visible timing. Port
   `0x9E` attenuation is intentionally not applied: MAME identifies it as the WSC volume setting, and
   emulator-wide output attenuation belongs in frontend/host volume control rather than deterministic
   core mixing.

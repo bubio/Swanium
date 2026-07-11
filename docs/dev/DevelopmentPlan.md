@@ -661,7 +661,10 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     `wswan/sound.c` 準拠（`crates/core/src/apu/mod.rs` の `hypervoice_sample`/`hypervoice_output`）。
     -   **制御ポート 0x6A（`HV_CTRL`）**: bit7=イネーブル、bits3-2=サンプル拡張モード
         （0=unsigned / 0x4=unsigned negated / 0x8=signed / 0xC=raw）、bits1-0=音量シフト
-        （`<< (8 - shift)`、0=100%/1=50%/2=25%/3=12.5%）。
+        （`<< (8 - shift)`、0=100%/1=50%/2=25%/3=12.5%）。bits4-6 は readback には残すが
+        core sample cadence には適用しない。ares は speed divisor として扱う一方、Mednafen は無視して
+        current latch/direct 値を sound-update timestamp で反映するため、public ROM/実機 capture が出るまで
+        Mednafen 寄りの current-latch 挙動を維持する。
     -   **ルーティング 0x6B（`HV_CHAN_CTRL`）**: bit6=左出力、bit5=右出力。書き込みは `& 0x6F` マスク
         （Mednafen 準拠）。
     -   **データラッチ 0x69（`HV_DATA`）**: 8bit PCM。8bit→16bit 拡張後 `>> 5` で ~11bit 域へ戻し、

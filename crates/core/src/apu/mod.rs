@@ -57,6 +57,10 @@ const SND_CH_OUT_L: usize = 0x98; // current left-channel digital output (lo, hi
 const SND_CH_OUT_LR: usize = 0x9A; // current mono/summed digital output (lo, hi)
 
 // ── HyperVoice (WonderSwan Color only) ───────────────────────────────────────
+// HV_CTRL bits 4-6 are stored for readback, but not applied to the core sample
+// cadence: Mednafen ignores them, while ares treats them as an extra output
+// divider. Keep the Mednafen-like current-latch behavior until a public test or
+// hardware capture proves software-visible timing.
 const HV_DIRECT_L_LO: usize = 0x64; // signed 16-bit direct left output
 const HV_DIRECT_L_HI: usize = 0x65;
 const HV_DIRECT_R_LO: usize = 0x66; // signed 16-bit direct right output

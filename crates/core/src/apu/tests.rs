@@ -552,6 +552,23 @@ fn hypervoice_output_routes_left_only() {
 }
 
 #[test]
+fn hypervoice_speed_bits_do_not_change_current_latch_output() {
+    // ares treats HV_CTRL bits 4-6 as an output divider; Mednafen ignores them
+    // and uses the current latch value at the sound-update timestamp. Swanium
+    // keeps the Mednafen-like behavior until external evidence requires a
+    // software-visible divider.
+    let mut ports = [0u8; 0x100];
+    ports[HV_DATA] = 0x40;
+    ports[HV_CHAN_CTRL] = HV_LEFT | HV_RIGHT;
+
+    ports[HV_CTRL] = HV_ENABLE;
+    let base = hypervoice_output(&ports, true);
+
+    ports[HV_CTRL] = HV_ENABLE | 0x70;
+    assert_eq!(hypervoice_output(&ports, true), base);
+}
+
+#[test]
 fn hypervoice_direct_output_uses_signed_16_bit_words() {
     let mut ports = [0u8; 0x100];
     ports[HV_CTRL] = HV_ENABLE;
