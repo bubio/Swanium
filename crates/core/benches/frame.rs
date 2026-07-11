@@ -65,6 +65,40 @@ fn warm_wave_system() -> System {
     system
 }
 
+/// A warmed synthetic system with 32 visible sprites on scanline 0. This
+/// isolates sprite compositing cost without needing an external ROM.
+fn warm_sprite_system() -> System {
+    let mut system = warm_system();
+    let bus = system.bus_mut();
+
+    bus.write_io(0x00, 0x04); // sprites enabled only
+    bus.write_io(0x04, 0x01); // OAM base = 0x200
+    bus.write_io(0x05, 0x00); // first sprite
+    bus.write_io(0x06, 32); // process 32 sprites
+    bus.write_io(0x30, 0x10); // sprite palette 8: pixel 1 -> shade 1
+    bus.write_io(0x31, 0x32);
+    bus.write_io(0x1C, 0x10); // shade pool
+    bus.write_io(0x1D, 0x32);
+
+    for row in 0..8u32 {
+        let addr = 0x2000 + 16 + row * 2; // tile 1, 2bpp row
+        bus.write_u8(addr, 0xFF);
+        bus.write_u8(addr + 1, 0x00);
+    }
+
+    for idx in 0..32u32 {
+        let attr = 1u16; // tile 1, palette 0, back priority
+        let [lo, hi] = attr.to_le_bytes();
+        let addr = 0x200 + idx * 4;
+        bus.write_u8(addr, lo);
+        bus.write_u8(addr + 1, hi);
+        bus.write_u8(addr + 2, 0); // y
+        bus.write_u8(addr + 3, ((idx * 7) % 224) as u8); // x
+    }
+
+    system
+}
+
 fn bench_frame(c: &mut Criterion) {
     c.bench_function("run_frame", |b| {
         let mut system = warm_system();
@@ -80,6 +114,13 @@ fn bench_render_scanline(c: &mut Criterion) {
                 system.bus_mut().render_scanline(black_box(line));
             }
         });
+    });
+}
+
+fn bench_render_sprite_scanline(c: &mut Criterion) {
+    c.bench_function("render_sprite_scanline", |b| {
+        let mut system = warm_sprite_system();
+        b.iter(|| system.bus_mut().render_scanline(black_box(0)));
     });
 }
 
@@ -110,6 +151,7 @@ criterion_group!(
     benches,
     bench_frame,
     bench_render_scanline,
+    bench_render_sprite_scanline,
     bench_tick_apu,
     bench_tick_apu_wave
 );

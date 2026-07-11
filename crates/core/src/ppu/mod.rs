@@ -237,6 +237,32 @@ impl Ppu {
         if dc.scr2_enabled {
             fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
         }
+        let mut sprite_back_line = [None; SCREEN_WIDTH];
+        let mut sprite_front_line = [None; SCREEN_WIDTH];
+        if dc.sprites_enabled {
+            fill_sprite_line(
+                wram,
+                ports,
+                &dc,
+                line_sprites,
+                mode,
+                line,
+                false,
+                resolver,
+                &mut sprite_back_line,
+            );
+            fill_sprite_line(
+                wram,
+                ports,
+                &dc,
+                line_sprites,
+                mode,
+                line,
+                true,
+                resolver,
+                &mut sprite_front_line,
+            );
+        }
 
         for x in 0..SCREEN_WIDTH {
             let mut color = backdrop;
@@ -246,20 +272,8 @@ impl Ppu {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
-            if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(
-                    wram,
-                    ports,
-                    &dc,
-                    line_sprites,
-                    mode,
-                    x,
-                    line,
-                    false,
-                    resolver,
-                ) {
-                    color = px;
-                }
+            if let Some(px) = sprite_back_line[x] {
+                color = px;
             }
             if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
                 let s = scr2_line[x];
@@ -267,20 +281,8 @@ impl Ppu {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
-            if dc.sprites_enabled {
-                if let Some(px) = sample_sprite(
-                    wram,
-                    ports,
-                    &dc,
-                    line_sprites,
-                    mode,
-                    x,
-                    line,
-                    true,
-                    resolver,
-                ) {
-                    color = px;
-                }
+            if let Some(px) = sprite_front_line[x] {
+                color = px;
             }
             self.framebuffer[row + x] = color;
         }
@@ -717,69 +719,63 @@ fn sprite_axis_delta(screen: u8, origin: u8) -> usize {
     screen.wrapping_sub(origin) as usize
 }
 
-/// Sample the sprite layer at `(screen_x, line)` for sprites whose priority
-/// matches `want_priority`.
-///
-/// Walks `line_sprites` — the sprites covering this scanline in table order
-/// (lower index = higher priority), as gathered once by
-/// [`collect_line_sprites`] — and returns the color of the first
-/// non-transparent overlapping sprite pixel, or `None` if none covers this
-/// pixel. Sprite pixels use palettes 8–15.
 #[allow(clippy::too_many_arguments)]
-fn sample_sprite<R: PaletteResolver>(
+fn fill_sprite_line<R: PaletteResolver>(
     wram: &[u8],
     ports: &[u8],
     dc: &DisplayControl,
     line_sprites: &[SpriteEntry],
     mode: TileMode,
-    screen_x: usize,
     line: u8,
     want_priority: bool,
     resolver: &R,
-) -> Option<Rgb444> {
+    out: &mut [Option<Rgb444>; SCREEN_WIDTH],
+) {
     for sprite in line_sprites {
         if sprite.priority != want_priority {
             continue;
         }
-        // A window-attributed sprite is shown only inside the sprite window
-        // (exact inside/outside semantics are unverified against hardware; see
-        // docs/dev/DevelopmentPlan.md "リスクと不確実性").
-        if dc.sprite_window_enabled
-            && sprite.window
-            && !in_window(
-                ports,
-                screen_x,
-                line,
-                SPR_WINDOW_X1,
-                SPR_WINDOW_Y1,
-                SPR_WINDOW_X2,
-                SPR_WINDOW_Y2,
-            )
-        {
-            continue;
-        }
-        let tx = sprite_axis_delta(screen_x as u8, sprite.x);
-        if tx >= SPRITE_SIZE {
-            continue;
-        }
         // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
-        let mut tx = tx;
         let mut ty = sprite_axis_delta(line, sprite.y);
-        if sprite.hflip {
-            tx = SPRITE_SIZE - 1 - tx;
-        }
         if sprite.vflip {
             ty = SPRITE_SIZE - 1 - ty;
         }
-        // Sprites carry no bank bit (attribute bit 13 is priority), so their
-        // tiles are limited to 0–511, but they follow the active 2bpp/4bpp
-        // format like backgrounds.
-        let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
-        let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
-        if resolver.transparent(palette, pixel) {
-            continue;
+
+        for dx in 0..SPRITE_SIZE {
+            let screen_x = sprite.x.wrapping_add(dx as u8) as usize;
+            if screen_x >= SCREEN_WIDTH || out[screen_x].is_some() {
+                continue;
+            }
+            // A window-attributed sprite is shown only inside the sprite window
+            // (exact inside/outside semantics are unverified against hardware; see
+            // docs/dev/DevelopmentPlan.md "リスクと不確実性").
+            if dc.sprite_window_enabled
+                && sprite.window
+                && !in_window(
+                    ports,
+                    screen_x,
+                    line,
+                    SPR_WINDOW_X1,
+                    SPR_WINDOW_Y1,
+                    SPR_WINDOW_X2,
+                    SPR_WINDOW_Y2,
+                )
+            {
+                continue;
+            }
+            let tx = if sprite.hflip {
+                SPRITE_SIZE - 1 - dx
+            } else {
+                dx
+            };
+            // Sprites carry no bank bit (attribute bit 13 is priority), so their
+            // tiles are limited to 0–511, but they follow the active 2bpp/4bpp
+            // format like backgrounds.
+            let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
+            let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
+            if !resolver.transparent(palette, pixel) {
+                out[screen_x] = Some(resolver.resolve(ports, palette, pixel));
+            }
         }
-        return Some(resolver.resolve(ports, palette, pixel));
     }
-    None
 }

@@ -65,7 +65,9 @@ cargo bench -p swanium-core --bench frame --no-run        # build-check only
 
 - `run_frame` — a whole frame (the top-level number to watch),
 - `render_scanline` — the PPU renderer over 144 visible lines,
-- `tick_apu_frame` — the APU over one frame's sound-clock ticks.
+- `render_sprite_scanline` — a sprite-heavy PPU scanline,
+- `tick_apu_frame` — the APU over one frame's sound-clock ticks,
+- `tick_apu_wave_frame` — one wave channel over one frame's sound-clock ticks.
 
 Criterion writes HTML reports and compares against the previous run under
 `target/criterion/`. Typical before/after workflow:
