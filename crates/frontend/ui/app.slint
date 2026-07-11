@@ -205,7 +205,7 @@ export component MainWindow inherits Window {
             }
         }
         // Status bar: fixed-height strip showing the ROM name, FPS, and a
-        // master-volume slider.
+        // compact master-volume slider.
         Rectangle {
             height: root.status-bar-height;
             background: #1e1e1e;
@@ -223,26 +223,25 @@ export component MainWindow inherits Window {
                     horizontal-alignment: left;
                     horizontal-stretch: 1;
                 }
-                if root.view-width >= 220px: Text {
-                    text: "Vol";
-                    color: #cccccc;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                }
-                if root.view-width >= 220px: Slider {
-                    width: 90px;
-                    minimum: 0;
-                    maximum: 100;
-                    value: root.volume;
-                    changed(v) => { root.set-volume(round(v)); }
-                }
-                if root.view-width >= 220px: Text {
-                    text: root.volume + "%";
-                    color: #cccccc;
-                    font-size: 12px;
-                    width: 34px;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
+                if root.view-width >= 220px: HorizontalLayout {
+                    spacing: 3px;
+                    Rectangle {
+                        width: 14px;
+                        Image {
+                            y: (parent.height - self.height) / 2;
+                            width: 14px;
+                            height: 14px;
+                            source: @image-url("speaker.svg");
+                            image-fit: contain;
+                        }
+                    }
+                    Slider {
+                        width: 90px;
+                        minimum: 0;
+                        maximum: 100;
+                        value: root.volume;
+                        changed(v) => { root.set-volume(round(v)); }
+                    }
                 }
             }
         }
