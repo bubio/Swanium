@@ -12,6 +12,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
+use swanium_core::cpu::MemoryBus;
 use swanium_core::keypad::KeyState;
 use swanium_core::system::System;
 
@@ -46,6 +47,24 @@ fn warm_system() -> System {
     system
 }
 
+/// A warmed system with a single plain wave channel enabled: this exercises the
+/// APU wave-only fast path rather than the complete-silence path.
+fn warm_wave_system() -> System {
+    let mut system = warm_system();
+    let bus = system.bus_mut();
+    for i in 0..16 {
+        bus.write_u8(i, 0x55);
+    }
+    bus.write_io(0x80, 0x00); // ch1 pitch low
+    bus.write_io(0x81, 0x00); // ch1 pitch high
+    bus.write_io(0x88, 0x11); // ch1 left/right volume
+    bus.write_io(0x8F, 0x00); // waveform base
+    bus.write_io(0x90, 0x01); // enable ch1, no voice/sweep/noise
+    bus.write_io(0x91, 0x80); // headphone path
+    system.clear_audio_samples();
+    system
+}
+
 fn bench_frame(c: &mut Criterion) {
     c.bench_function("run_frame", |b| {
         let mut system = warm_system();
@@ -76,5 +95,22 @@ fn bench_tick_apu(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_frame, bench_render_scanline, bench_tick_apu);
+fn bench_tick_apu_wave(c: &mut Criterion) {
+    c.bench_function("tick_apu_wave_frame", |b| {
+        let mut system = warm_wave_system();
+        b.iter(|| {
+            for _ in 0..159 {
+                system.bus_mut().tick_apu(black_box(256));
+            }
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_frame,
+    bench_render_scanline,
+    bench_tick_apu,
+    bench_tick_apu_wave
+);
 criterion_main!(benches);

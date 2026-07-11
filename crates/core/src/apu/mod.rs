@@ -248,6 +248,10 @@ impl Apu {
             self.tick_silence(cycles, ports);
             return;
         }
+        if wave_only_fast_path(ports, color) {
+            self.tick_wave_only(cycles, wram, ports);
+            return;
+        }
         for _ in 0..cycles {
             self.step(wram, ports, color);
         }
@@ -269,6 +273,47 @@ impl Apu {
                 0,
             );
         }
+    }
+
+    fn tick_wave_only(&mut self, cycles: u32, wram: &[u8], ports: &mut [u8]) {
+        self.fast_sweep_primed = false;
+        self.noise_active = false;
+        self.voice_lp.reset();
+        self.voice_level = 0;
+
+        let ctrl = ports[0x90];
+        let wave_base = (ports[SND_WAVE_BASE] as usize) << 6;
+        let pitches = [
+            pitch_of(ports, 0),
+            pitch_of(ports, 1),
+            pitch_of(ports, 2),
+            pitch_of(ports, 3),
+        ];
+        let mut samples = [
+            self.channels[0].sample,
+            self.channels[1].sample,
+            self.channels[2].sample,
+            self.channels[3].sample,
+        ];
+
+        for _ in 0..cycles {
+            for ch in 0..4 {
+                if ctrl & CTRL_ENABLE[ch] != 0 {
+                    samples[ch] = self.channels[ch].tick(pitches[ch], wram, wave_base + ch * 16);
+                }
+            }
+
+            self.sample_accum += 1;
+            if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
+                self.sample_accum = 0;
+                let (wave_l, wave_r) = mix_waves(&samples, ctrl, ports);
+                let (left, right) = apply_output_control(wave_l, wave_r, ports);
+                self.samples.push(left);
+                self.samples.push(right);
+            }
+        }
+
+        self.update_output_ports(&samples, ctrl, ports);
     }
 
     /// Advance the APU by a single sound-clock tick.
@@ -473,6 +518,11 @@ fn write_port_word(ports: &mut [u8], port: usize, value: u16) {
 
 fn silent_fast_path(ports: &[u8], color: bool) -> bool {
     ports[0x90] == 0 && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
+}
+
+fn wave_only_fast_path(ports: &[u8], color: bool) -> bool {
+    ports[0x90] & (CTRL_VOICE | CTRL_SWEEP | CTRL_NOISE) == 0
+        && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
 }
 
 /// Expand the 8-bit HyperVoice `data` latch to a signed ~11-bit sample per the
