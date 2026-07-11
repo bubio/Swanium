@@ -891,6 +891,8 @@ fn color_resolver_masks_stored_value_to_12_bits() {
 fn color_resolver_pixel_zero_is_transparent_for_all_palettes() {
     let wram = vec![0u8; 0x10000];
     let resolver = ColorPaletteResolver::new(&wram);
+    // ares `PPU::opaque` and Mednafen's color path both treat color index 0 as
+    // transparent in Color mode, unlike mono-compatible 2bpp palettes 0-3/8-11.
     for palette in 0..16 {
         assert!(resolver.transparent(palette, 0));
     }
@@ -912,6 +914,23 @@ fn color_resolver_backdrop_indexes_palette_ram_by_port_0x01() {
     ports[0x01] = 0x25;
     let resolver = ColorPaletteResolver::new(&wram);
     assert_eq!(resolver.backdrop(&ports), 0x0123);
+}
+
+#[test]
+fn color_zero_screen_pixel_falls_back_to_color_backdrop() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x01; // SCR1 enable
+    ports[0x01] = 0x7E; // backdrop palette 7, color 14
+    write_map_entry(&mut wram, 0, 0, 0, 2 << 9); // palette 2, tile 0 pixel 0
+    write_palette_color(&mut wram, 2, 0, 0x0001); // would draw if color 0 were opaque
+    write_palette_color(&mut wram, 7, 14, 0x0ACE);
+
+    let mut ppu = Ppu::new();
+    let resolver = ColorPaletteResolver::new(&wram);
+    ppu.render_scanline(0, &wram, &ports, &resolver);
+
+    assert_eq!(ppu.framebuffer()[0], 0x0ACE);
 }
 
 #[test]

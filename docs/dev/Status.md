@@ -148,6 +148,9 @@ tests cover overflow ordering and a 33rd priority-1 sprite that would otherwise 
 SCR2. Sprite X/Y coordinates wrap in 8-bit screen space, so sprites starting at
 `0xF8`-`0xFF` can appear clipped at the left/top visible edge; tests cover both
 axes.
+Color-mode color-zero transparency and backdrop palette-index behavior are now
+source-confirmed against ares and Mednafen: color index 0 falls through to the
+backdrop, and port `0x01` is an 8-bit palette-RAM backdrop index.
 
 Milestone 10's raster audit keeps the PPU at scanline granularity for now. `System::run_frame_traced`
 is covered for one trace row per visible line and CPU-written scroll state before line rendering;

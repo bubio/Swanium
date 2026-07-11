@@ -143,7 +143,9 @@ impl PaletteResolver for ColorPaletteResolver<'_> {
     fn backdrop(&self, ports: &[u8]) -> Rgb444 {
         // Back color register (I/O port 0x01) is an 8-bit index into the 256
         // palette-RAM colors: high nibble = palette, low nibble = color.
-        // (Unverified against hardware; see DevelopmentPlan "リスクと不確実性".)
+        // Confirmed against ares `ares/ws/ppu/memory.cpp` and Mednafen
+        // `src/wswan/gfx.cpp`: both use the full byte as a palette-RAM index
+        // in Color mode.
         self.color(ports[DISP_CTRL_HI] >> 4, ports[DISP_CTRL_HI] & 0x0F)
     }
 }

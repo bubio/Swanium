@@ -126,19 +126,19 @@ Definition of done:
 Color rendering is implemented and covered by synthetic tests, but several rules
 still need external confirmation.
 
-Next concrete task: validate the Color PPU color-zero transparency and backdrop
-palette-index behavior first. Start from the existing synthetic Color PPU tests
-to identify the exact assumptions, then compare the same minimal scene against a
-public ROM, hardware capture, or at least two mature reference emulators. If the
-evidence confirms current behavior, add a `CompatibilityMatrix.md` row; if it
-disagrees, change the renderer with a focused regression test.
+Color-zero transparency and backdrop palette-index behavior are now validated
+against ares and Mednafen source and recorded in `CompatibilityMatrix.md`. Next
+concrete task: validate Color 4bpp planar byte order and packed nibble order
+against a public ROM, hardware capture, or at least two mature reference
+emulators. If the evidence confirms current behavior, add a
+`CompatibilityMatrix.md` row; if it disagrees, change the renderer with a
+focused regression test.
 
 Scope:
 
-- Validate color-zero transparency, backdrop palette indexing, 4bpp planar byte
-  order, 4bpp packed nibble order, background tile-bank selection, and sprite
-  attribute bit meanings against public ROMs, hardware captures, or multiple
-  reference emulators.
+- Validate 4bpp planar byte order, 4bpp packed nibble order, background
+  tile-bank selection, and sprite attribute bit meanings against public ROMs,
+  hardware captures, or multiple reference emulators.
 - Keep mono regression tests paired with shared PPU changes.
 - Revisit dot-level PPU only when a specific mid-scanline effect fails.
 
@@ -147,6 +147,17 @@ Definition of done:
 - `CompatibilityMatrix.md` records the external evidence for each validated
   Color PPU rule.
 - Any changed renderer behavior has deterministic regression coverage.
+
+Validation notes:
+
+- 2026-07-11: Color-mode color-zero transparency and backdrop palette indexing
+  are source-confirmed against ares and Mednafen. ares `ares/ws/ppu/memory.cpp`
+  uses `iram.read16(0xfe00 + (color << 1))` for the backdrop and only treats
+  color index 0 as opaque in 2bpp palettes whose bit 2 is clear. Mednafen
+  `src/wswan/gfx.cpp` seeds the Color framebuffer from `BGColor` high/low
+  nibbles and only overwrites Color pixels when `wsTileRow[x]` is nonzero.
+  Swanium has a focused regression
+  `color_zero_screen_pixel_falls_back_to_color_backdrop`.
 
 ## P1 - HyperVoice, SDMA, and analog audio validation
 
