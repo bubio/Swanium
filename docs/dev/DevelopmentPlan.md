@@ -680,8 +680,11 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         stereo mix へ加算する。mono では 0x64–0x67 書き込みも破棄。APU単体/Bus/Color統合テストで固定。
     -   **0x9E speaker main volume**: WSdev `Sound` の `Sound Speaker Main Volume` 記述に従い、
         全モデルで low 2bit を保持する。内蔵スピーカー経路への倍率適用は、0=mute の仮実装で既存ソフトが
-        無音化したため保留。STS の `LCD_VOLUME` は port 0x1A のLCDアイコン状態であり、port 0x9E とは別物。
-        正確なアナログ曲線は実機/録音比較待ち。
+        無音化したため保留。ares は non-ASWAN SoC で最終 stream amplitude に適用するが、Mednafen は
+        audio path に実装せず bundled tech note でも unknown としている。MAME は WSC volume setting と
+        コメントしているため、実機では本体で可能な音量設定として意味がある一方、エミュレーターでは
+        frontend/host 側で任意に音量調整できる。したがって core mixer には適用せず readback 状態だけ保持する。
+        STS の `LCD_VOLUME` は port 0x1A のLCDアイコン状態であり、port 0x9E とは別物。
     -   **AudioAccuracy.md**: PCM-heavy fixture候補と比較手順を `docs/dev/AudioAccuracy.md` に分離。
 -   **残る未検証項目**:
     -   **データポートの不確定性**: WSdev は 0x69（8bit 入力、Sound DMA ターゲット）、Mednafen は

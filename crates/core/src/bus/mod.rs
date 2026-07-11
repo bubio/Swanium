@@ -1095,7 +1095,8 @@ impl MemoryBus for Bus {
             0xA1 => {}
             0xA2 | 0xA3 => self.ports[port as usize] = value & 0x0F,
             // Built-in speaker main volume. WSdev documents only the low two
-            // bits as meaningful; the APU applies it to the speaker path only.
+            // bits as meaningful. Keep readback state, but do not attenuate the
+            // mix until the analog curve is hardware-confirmed.
             0x9E => self.ports[0x9E] = value & 0x03,
             // Voice (channel-2 PCM) data latch. In voice mode every write feeds
             // the APU's reconstruction filter, so it sees the full PCM stream

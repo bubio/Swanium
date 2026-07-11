@@ -181,19 +181,21 @@ Validation notes:
 HyperVoice 8-bit PCM, 16-bit direct output, and SDMA feeding are implemented.
 The remaining uncertainty is validation quality, not basic feature presence.
 SDMA sample cadence is now source-confirmed against ares and Mednafen and
-recorded in `CompatibilityMatrix.md`. Next concrete task: validate port `0x9E`
-speaker main-volume analog transfer and zero-write behavior before applying it
-to the mix. If no hardware capture is available, inspect whether ares/Mednafen
-agree on a conservative behavior and record the remaining risk instead of
-guessing an analog curve.
+recorded in `CompatibilityMatrix.md`. Port `0x9E` speaker main-volume was
+triaged against ares, Mednafen, and MAME. MAME documents it as a WSC volume
+setting; Swanium keeps software-visible readback but does not apply attenuation
+to the core mix because emulators already expose arbitrary host/frontend volume
+control. Next concrete task: validate HyperVoice sample-rate/update cadence
+against public tests, mature reference emulators, or hardware capture.
 
 Scope:
 
-- Confirm the sample-rate divisor/update cadence if software-visible.
+- Confirm HyperVoice sample-rate/update cadence if software-visible.
 - Validate SDMA bus-stall behavior against public tests, reference emulators,
   or hardware captures.
-- Validate port `0x9E` speaker main-volume analog transfer and zero-write
-  behavior before applying it to the mix.
+- Keep port `0x9E` as software-visible volume-setting readback only; do not
+  apply it to the core mix unless a concrete title/reference discrepancy shows
+  software depends on mixer-side attenuation.
 - Continue using `AudioAccuracy.md` for manual PCM comparison notes.
 
 Definition of done:
@@ -212,6 +214,16 @@ Validation notes:
   producing the same 6/4/2/1 call cadence. Swanium has the focused regression
   `sdma_rate_bits_select_apu_sample_divider`. CPU bus-stall behavior remains
   unvalidated.
+- 2026-07-11: Port `0x9E` speaker main-volume was triaged against ares,
+  Mednafen, and MAME. ares `ares/ws/apu/io.cpp` reads/writes
+  `io.masterVolume` on non-ASWAN SoCs, and `ares/ws/apu/apu.cpp` applies it as
+  final stream amplitude. Mednafen does not implement `0x9E` in
+  `wswan/sound.cpp`; its bundled `wstech24.txt` lists `0x9E` as default `0x03`
+  unknown. MAME `src/mame/bandai/wswan.cpp` comments `0x9e/2` as the WSC volume
+  setting. Swanium treats it as a BIOS/body volume setting: it keeps low-two-bit
+  readback for software visibility, but does not apply it to the deterministic
+  core mix because emulator users can freely control output volume at the
+  frontend/host layer.
 
 ## P2 - Compatibility matrix and local evidence
 

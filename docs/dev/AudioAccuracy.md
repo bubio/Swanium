@@ -38,9 +38,13 @@ Do not commit commercial ROMs, recordings, or extracted assets.
   behavior remains unvalidated.
 - Port `0x9E` is implemented as the built-in speaker main-volume register. It
   keeps the documented low two bits for readback, but the value is not applied
-  to the audio mix yet. The exact analog curve remains unverified, and treating
-  value 0 as literal mute has been observed to break software that initializes
-  the register to zero.
+  to the audio mix. ares applies it as a final stream amplitude on non-ASWAN
+  SoCs, while Mednafen does not implement it in the audio path and its bundled
+  tech note lists the port as unknown. MAME comments it as the WSC volume
+  setting. Swanium treats it as a BIOS/body volume setting that matters on real
+  hardware but is redundant for an emulator, where the frontend/host can adjust
+  output volume freely. Treating value 0 as literal mute has been observed to
+  break software that initializes the register to zero.
 
 ## Decision
 
@@ -50,12 +54,14 @@ filter change. Priority order:
 1. Add a small public/self-built PCM ROM that writes deterministic `0x89`, SDMA,
    and HyperVoice patterns and validates emitted sample sequences in
    `swanium-core`.
-2. Validate port `0x9E` speaker main-volume zero-write and analog transfer from
-   hardware capture or, failing that, record the conservative behavior shared by
-   mature reference emulators before applying any attenuation to the mix.
+2. Validate HyperVoice sample-rate/update cadence with public tests, reference
+   recordings/source, or hardware capture before changing latch/direct timing.
 3. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
    SDMA/HyperVoice-heavy title, then decide whether the remaining difference is
    core reconstruction or host resampling.
 4. Only change `crates/audio` resampling if the core sample stream already
    matches the reference closely and the audible issue appears after host-rate
    conversion.
+5. Keep port `0x9E` as readback-only BIOS/body volume-setting state in the core;
+   host/frontend volume control is the correct place for emulator-wide output
+   attenuation unless software proves it depends on mixer-side behavior.

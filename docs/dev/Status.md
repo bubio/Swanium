@@ -188,12 +188,14 @@ take precedence over the 8-bit latch when non-zero. The gate is applied on both 
 mixing: `Bus::write_io` drops mono writes to `0x64`–`0x6B`, and `Apu::tick(…, color)` receives
 `color=true` only when the machine is Color/Crystal and port `0x60` bit 7 enables color mode.
 Port `0x9E` is implemented as the built-in speaker main-volume register on all models for
-software-visible low-two-bit readback. It is not applied to the mix yet because the exact analog
-curve and observed zero-write behaviour still need hardware validation. Sound DMA feeds the voice
-latch from ports `0x4A`–`0x52`; SDMA sample cadence is source-confirmed against ares and Mednafen
-as a 24 kHz APU cadence divided by 6/4/2/1 for rate bits 0/1/2/3. Remaining audio risks are
-HyperVoice sample-rate divisor/update cadence, SDMA bus-stall validation, and the exact analog curve
-for speaker main volume.
+software-visible low-two-bit readback. It is not applied to the mix: ares applies it as a final
+stream amplitude, but Mednafen leaves `0x9E` out of the audio path and labels the port unknown in
+its bundled tech note, while MAME comments it as the WSC volume setting. Swanium treats it as a
+BIOS/body volume setting: useful on real hardware, but redundant in an emulator where host/frontend
+volume is freely adjustable. Sound DMA feeds the voice latch from ports `0x4A`–`0x52`; SDMA sample
+cadence is source-confirmed against ares and Mednafen as a 24 kHz APU cadence divided by 6/4/2/1 for
+rate bits 0/1/2/3. Remaining audio risks are HyperVoice sample-rate/update cadence and SDMA bus-stall
+validation.
 
 ### Cartridge / save RAM — Phase 6 (`bus/cart/`)
 16-byte footer header parse, Bandai 2001/2003 banking via a `Mapper` enum, SRAM and
@@ -354,9 +356,11 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   master cycles per byte, and delivered bytes go through the same `0x89` voice-latch helper as CPU I/O
   writes so `Apu::write_voice` sees the real stream. Terminal count clears bit 7 unless repeat is set;
   repeat reloads source/counter shadows; hold outputs zero without advancing. Deferred/unverified: the
-  exact hardware bus-stall details, HyperVoice sample-rate divisor/update cadence, and the exact analog
-  transfer curve for `0x9E` speaker main volume. SDMA rate bits 0/1/2/3 are source-confirmed against
-  ares and Mednafen as 4000/6000/12000/24000 Hz transfer cadence.
+  exact hardware bus-stall details and HyperVoice sample-rate/update cadence. SDMA rate bits 0/1/2/3
+  are source-confirmed against ares and Mednafen as 4000/6000/12000/24000 Hz transfer cadence. Port
+  `0x9E` attenuation is intentionally not applied: MAME identifies it as the WSC volume setting, and
+  emulator-wide output attenuation belongs in frontend/host volume control rather than deterministic
+  core mixing.
 - **8g (done)**: integration-level test consolidation for the Phase 8 features and mono-regression
   parity, plus this final doc pass. New end-to-end tests drive the Color paths through the same public
   API the frontend uses, each pinned against its mono-regression twin: `crates/core/tests/color_render.rs`
