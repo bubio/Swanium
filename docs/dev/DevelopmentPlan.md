@@ -246,7 +246,9 @@ video               audio                input
     background color（濃淡プール index）を表示する。今後の PPU 回帰検証では
     [asiekierka/ws-test-suite](https://github.com/asiekierka/ws-test-suite) の表示系テストも
     重要リファレンスとして扱う。
--   スプライトウィンドウのinside/outside意味は実機未確認（コードコメントで明記）。
+-   スプライトウィンドウは、window 属性付きスプライトを矩形内で隠し、矩形外に表示する。
+    Golden Axe (J) は矩形を画面外 `(250,250)-(250,250)` に置いた上でキャラクター
+    スプライトに window 属性を付けるため、この inside/outside 解釈を回帰テストで固定する。
 -   PPU内部型（`tile_pixel`/`SpriteEntry`/`TileMapEntry`/`DisplayControl`）は `pub(crate)`。
     crate公開APIは `Ppu`/`SCREEN_WIDTH`/`SCREEN_HEIGHT`/`PaletteResolver`/`MonoPaletteResolver` のみ。
 -   テスト数: PPUユニット 61 + Bus統合 6 + `ppu_render.rs` 7 = Phase 4で +74。

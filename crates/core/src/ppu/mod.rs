@@ -622,7 +622,8 @@ pub(crate) struct SpriteEntry {
     /// Priority: `true` draws in front of SCR2, `false` behind it.
     pub priority: bool,
     /// Window attribute (bit 12): when the sprite window is enabled, such a
-    /// sprite is shown only inside the sprite window.
+    /// sprite is clipped out inside the sprite window and remains visible
+    /// outside it.
     pub window: bool,
     /// Horizontal flip.
     pub hflip: bool,
@@ -746,12 +747,13 @@ fn fill_sprite_line<R: PaletteResolver>(
             if screen_x >= SCREEN_WIDTH || out[screen_x].is_some() {
                 continue;
             }
-            // A window-attributed sprite is shown only inside the sprite window
-            // (exact inside/outside semantics are unverified against hardware; see
-            // docs/dev/DevelopmentPlan.md "リスクと不確実性").
+            // A window-attributed sprite is hidden inside the sprite window and
+            // shown outside it. Golden Axe parks the sprite window off-screen
+            // while using bit 12 on character sprites, so the opposite
+            // interpretation removes the actors while leaving backgrounds/HUD.
             if dc.sprite_window_enabled
                 && sprite.window
-                && !in_window(
+                && in_window(
                     ports,
                     screen_x,
                     line,

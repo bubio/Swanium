@@ -148,6 +148,11 @@ tests cover overflow ordering and a 33rd priority-1 sprite that would otherwise 
 SCR2. Sprite X/Y coordinates wrap in 8-bit screen space, so sprites starting at
 `0xF8`-`0xFF` can appear clipped at the left/top visible edge; tests cover both
 axes.
+Sprite-window semantics now match commercial-observed behavior: window-attributed sprites are
+hidden inside the sprite window and visible outside it. Golden Axe (J) sets an off-screen sprite
+window `(250,250)-(250,250)` while marking character sprites with the window bit, so this fixes
+missing actors while preserving backgrounds/HUD; focused unit tests cover inside, outside, and
+off-screen-window cases.
 Color-mode color-zero transparency and backdrop palette-index behavior are now
 source-confirmed against ares and Mednafen: color index 0 falls through to the
 backdrop, and port `0x01` is an 8-bit palette-RAM backdrop index.

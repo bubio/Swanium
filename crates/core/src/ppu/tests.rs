@@ -802,9 +802,9 @@ fn scr2_outside_window_hides_pixel_within_bounds() {
 }
 
 #[test]
-fn windowed_sprite_hidden_outside_sprite_window() {
+fn windowed_sprite_shown_outside_sprite_window() {
     // Sprite with window attribute (bit12); sprite window enabled, window at
-    // x∈[100,107]. The sprite at x=0 should be hidden.
+    // x∈[100,107]. The sprite at x=0 should be shown outside that window.
     let mut wram = vec![0u8; 0x10000];
     let mut ports = [0u8; 0x100];
     ports[0x00] = 0x04 | (1 << 3); // SPR enable + sprite window enable
@@ -820,11 +820,11 @@ fn windowed_sprite_hidden_outside_sprite_window() {
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
-    assert_eq!(ppu.framebuffer()[0], grey(0));
+    assert_eq!(ppu.framebuffer()[0], grey(1));
 }
 
 #[test]
-fn windowed_sprite_shown_inside_sprite_window() {
+fn windowed_sprite_hidden_inside_sprite_window() {
     let mut wram = vec![0u8; 0x10000];
     let mut ports = [0u8; 0x100];
     ports[0x00] = 0x04 | (1 << 3); // SPR enable + sprite window enable
@@ -837,6 +837,26 @@ fn windowed_sprite_shown_inside_sprite_window() {
     ports[0x0E] = 7; // X2
     ports[0x0F] = 143;
     write_sprite(&mut wram, 0x200, 0, 1 | (1 << 12), 0, 0); // window attr, x=0 inside
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(0));
+}
+
+#[test]
+fn windowed_sprite_shown_when_sprite_window_is_offscreen() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x04 | (1 << 3); // SPR enable + sprite window enable
+    ports[0x04] = 0x01;
+    ports[0x05] = 0;
+    ports[0x06] = 1;
+    set_identity_sprite_palette(&mut ports);
+    ports[0x0C] = 250;
+    ports[0x0D] = 250;
+    ports[0x0E] = 250;
+    ports[0x0F] = 250;
+    write_sprite(&mut wram, 0x200, 0, 1 | (1 << 12), 0, 0);
     write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0b0000_0000);
     let mut ppu = Ppu::new();
     ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
