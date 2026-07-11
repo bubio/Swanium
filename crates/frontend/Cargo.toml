@@ -35,7 +35,7 @@ section = "games"
 priority = "optional"
 copyright = "2026 Bubio"
 assets = [
-    ["../../target/release/frontend", "usr/bin/swanium", "755"],
+    ["target/release/frontend", "usr/bin/swanium", "755"],
     ["../../packaging/linux/swanium.desktop", "usr/share/applications/swanium.desktop", "644"],
     ["../../assets/icons/AppIcon.png", "usr/share/icons/hicolor/512x512/apps/swanium.png", "644"],
     ["../../LICENSE", "usr/share/doc/swanium/copyright", "644"],

@@ -59,7 +59,7 @@ fi
 
 cargo build -p "${PACKAGE}" --release
 cargo deb -p "${PACKAGE}" --no-build
-cargo generate-rpm -p "${PACKAGE}"
+cargo generate-rpm -p "crates/${PACKAGE}"
 
 rm -rf "${DEB_DIR}" "${RPM_DIR}"
 mkdir -p "${DEB_DIR}" "${RPM_DIR}"
