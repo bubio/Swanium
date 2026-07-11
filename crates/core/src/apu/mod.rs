@@ -496,14 +496,13 @@ impl Apu {
     /// Tick the channel-4 noise generator (port 0x8E), advancing the 15-bit
     /// LFSR and exposing it through the read-only 0x92/0x93 ports.
     fn step_noise(&mut self, ctrl: u8, ports: &mut [u8]) {
-        if ctrl & CTRL_NOISE == 0 || ctrl & CTRL_ENABLE[3] == 0 {
-            self.noise_active = false;
-            return;
-        }
+        let output_enabled = ctrl & CTRL_NOISE != 0 && ctrl & CTRL_ENABLE[3] != 0;
         let noise_ctrl = ports[SND_NOISE];
         if noise_ctrl & NOISE_GATE == 0 {
+            self.noise_active = false;
             return; // noise gate closed: hold previous state
         }
+        self.noise_active = output_enabled;
         if self.noise_counter != 0 {
             self.noise_counter -= 1;
             return;
@@ -550,7 +549,7 @@ impl Apu {
         // shifted in), kept in the 4-bit domain like the wave channels — exactly
         // StoicGoose's `(NoiseLfsr & 1) * 0x0F`.
         self.noise_output = if self.lfsr & 1 != 0 { 0x0F } else { 0x00 };
-        self.noise_active = true;
+        self.noise_active = output_enabled;
     }
 }
 
@@ -568,11 +567,14 @@ fn write_port_word(ports: &mut [u8], port: usize, value: u16) {
 }
 
 fn silent_fast_path(ports: &[u8], color: bool) -> bool {
-    ports[0x90] == 0 && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
+    ports[0x90] == 0
+        && ports[SND_NOISE] & NOISE_GATE == 0
+        && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
 }
 
 fn wave_only_fast_path(ports: &[u8], color: bool) -> bool {
     ports[0x90] & (CTRL_VOICE | CTRL_SWEEP | CTRL_NOISE) == 0
+        && ports[SND_NOISE] & NOISE_GATE == 0
         && (!color || ports[HV_CTRL] & HV_ENABLE == 0)
 }
 

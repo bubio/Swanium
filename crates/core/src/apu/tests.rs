@@ -422,6 +422,19 @@ fn noise_advances_lfsr_into_random_port() {
 }
 
 #[test]
+fn noise_gate_advances_random_port_without_noise_output_enabled() {
+    // Some games use the random readback as an RNG source without routing
+    // channel 4 through the noise DAC. The LFSR gate controls the random port;
+    // 0x90 only controls whether noise replaces channel 4's audible output.
+    let (mut ports, wram) = blank();
+    ports[0x90] = CTRL_ENABLE[3];
+    ports[SND_NOISE] = 0x10; // gate open, tap 0
+    let mut apu = Apu::new();
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(ports[SND_RANDOM], 1);
+}
+
+#[test]
 fn noise_gate_closed_holds_lfsr() {
     // Gate bit (0x10) clear: the LFSR must not advance.
     let (mut ports, wram) = blank();
