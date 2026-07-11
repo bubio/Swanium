@@ -19,7 +19,7 @@ start with `docs/dev/README.md`.
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 657 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 662 passing
 tests (+5 opt-in, env-gated public-ROM test functions marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 

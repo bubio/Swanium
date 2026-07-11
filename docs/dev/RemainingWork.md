@@ -328,7 +328,9 @@ Validation notes:
 ## Deferred frontend polish
 
 Frontend Phase 7 is usable. The remaining listed polish is non-blocking for
-emulation correctness.
+emulation correctness. There is no generic "continue" task in this section:
+start here only when choosing a concrete product feature or UI polish item, and
+then update this section with the selected scope before implementing it.
 
 - Bicubic renderer / shader-style scaling remains deferred until a future wgpu
   rendering path exists.
