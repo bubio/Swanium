@@ -129,9 +129,11 @@ listed low-level assumptions now have reference-emulator evidence.
 Color-zero transparency, backdrop palette-index behavior, Color 4bpp tile
 byte/nibble ordering, background tile-bank selection, and sprite attribute bit
 meanings are now validated against ares and Mednafen source and recorded in
-`CompatibilityMatrix.md`. Next concrete task: move to **P1 - HyperVoice, SDMA,
-and analog audio validation**, starting with one software-visible audio rule
-from that section and recording the evidence in `CompatibilityMatrix.md`.
+`CompatibilityMatrix.md`. The audio follow-up also now has a license-clean
+Bus-level PCM fixture for deterministic sample-sequence coverage. Next concrete
+task: finish **P1 - HyperVoice, SDMA, and analog audio validation** only if new
+public-ROM, hardware-capture, or title-specific evidence appears; otherwise move
+to the P2/P3 follow-up items below.
 
 Scope:
 
@@ -187,16 +189,19 @@ setting; Swanium keeps software-visible readback but does not apply attenuation
 to the core mix because emulators already expose arbitrary host/frontend volume
 control. HyperVoice update cadence was triaged against ares and Mednafen; the
 mature references disagree on `0x6A` bits 4-6, so Swanium keeps the current
-Mednafen-like current-latch behavior. Next concrete task: add or select a
-public/self-built PCM fixture that emits deterministic `0x89`, SDMA, and
-HyperVoice write patterns for sample-sequence validation; if such a fixture is
-not available, defer audio changes until a public test, hardware capture, or
-known-title discrepancy exists.
+Mednafen-like current-latch behavior. A license-clean Bus-level PCM fixture now
+pins deterministic `0x89`, SDMA, and HyperVoice sample sequences without
+committing a ROM binary. Next concrete task: do not change audio behavior
+further unless a public test, hardware capture, or known-title discrepancy
+exposes a concrete mismatch. If audio validation must continue, first promote
+the fixture patterns into a public/self-built guest-code ROM so the CPU,
+interrupt, and I/O path is covered in addition to the Bus-level sample sequence.
 
 Scope:
 
-- Add or select a public/self-built PCM fixture for deterministic `0x89`, SDMA,
-  and HyperVoice sample-sequence validation.
+- Promote the self-built PCM fixture patterns into a guest-code ROM only if a
+  future issue needs CPU/interrupt-path coverage beyond the Bus-level sample
+  sequence.
 - Validate SDMA bus-stall behavior against public tests, reference emulators,
   or hardware captures.
 - Keep port `0x9E` as software-visible volume-setting readback only; do not
@@ -239,6 +244,12 @@ Validation notes:
   hardware capture pins software-visible timing, Swanium keeps the Mednafen-like
   current-latch behavior. Focused regression:
   `hypervoice_speed_bits_do_not_change_current_latch_output`.
+- 2026-07-11: Added `crates/core/tests/pcm_fixture.rs`, a license-clean
+  Bus-level PCM sample-sequence oracle. It pins CPU `0x89` voice writes
+  `0xC0,0x80,0x40` as `(2048,2048),(2048,2048),(-2048,-2048)`, fastest SDMA-fed
+  voice writes `0xC0,0x40` as `(2048,2048),(0,0)`, and HyperVoice latch writes
+  `0x10,0x20` as `(4096,4096),(8192,8192)`. A future public/self-built ROM can
+  reuse the same patterns if guest-code-path coverage becomes necessary.
 
 ## P2 - Compatibility matrix and local evidence
 

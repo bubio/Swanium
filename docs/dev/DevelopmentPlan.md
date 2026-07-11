@@ -688,6 +688,10 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         コメントしているため、実機では本体で可能な音量設定として意味がある一方、エミュレーターでは
         frontend/host 側で任意に音量調整できる。したがって core mixer には適用せず readback 状態だけ保持する。
         STS の `LCD_VOLUME` は port 0x1A のLCDアイコン状態であり、port 0x9E とは別物。
+    -   **PCM fixture**: `crates/core/tests/pcm_fixture.rs` に license-clean な Bus-level sample-sequence
+        oracle を追加。CPU `0x89` voice write、fastest SDMA-fed voice write、HyperVoice latch write の
+        既知サンプル列を固定し、ROM バイナリをコミットせずに core PCM 経路を回帰テストできる。CPU/IRQ/guest-code
+        経路まで検証が必要になった場合だけ、同じパターンを public/self-built ROM へ昇格する。
     -   **AudioAccuracy.md**: PCM-heavy fixture候補と比較手順を `docs/dev/AudioAccuracy.md` に分離。
 -   **残る未検証項目**:
     -   **データポートの不確定性**: WSdev は 0x69（8bit 入力、Sound DMA ターゲット）、Mednafen は

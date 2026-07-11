@@ -24,7 +24,8 @@ Do not commit commercial ROMs, recordings, or extracted assets.
 |---|---|---|---|---|---|
 | *Last Alive* | Local commercial ROM | HBlank-timer voice PCM, time-multiplexed `0x89` writes | Mednafen/ares recording or hardware capture | Selected manual fixture | Previously used to identify scanline-batched APU timing and multiplex buzz. Recheck residual ripple after any reconstruction change. |
 | SDMA/HyperVoice-heavy WSC title | Local commercial ROM or future public ROM | Sound DMA feeding, HyperVoice color-mode gate, direct/8-bit PCM paths | Mednafen/ares recording or hardware capture | Needs selection | Prefer a public fixture before relying on commercial-ROM evidence. |
-| Public synthetic PCM ROM | Public/self-built ROM | Deterministic sample-level regression for known `0x89`, SDMA, and HyperVoice write patterns | Analytical expected samples | Needs fixture | Best next automation target: no assets, stable oracle, CI-friendly. |
+| Self-built PCM fixture | Swanium core integration test | Deterministic sample-level regression for known `0x89`, SDMA, and HyperVoice write patterns | Analytical expected samples | Added as `crates/core/tests/pcm_fixture.rs` | License-clean Bus-level fixture; future work can promote the same patterns into a public/self-built ROM oracle. |
+| Public synthetic PCM ROM | Public/self-built ROM | Guest-code oracle for the same `0x89`, SDMA, and HyperVoice write patterns | Analytical expected samples | Future fixture | Only needed if we want to validate the CPU/interrupt/guest-code path in addition to the deterministic Bus-level sample sequence. |
 
 ## Observed issues
 
@@ -54,8 +55,9 @@ Do not commit commercial ROMs, recordings, or extracted assets.
 The next improvement should be measurement-led, not another unconditional core
 filter change. Priority order:
 
-1. Add or select a public/self-built PCM ROM that can emit deterministic `0x89`,
-   SDMA, and HyperVoice write patterns for sample-sequence validation.
+1. Promote the self-built PCM fixture patterns into a guest-code ROM only if an
+   audio issue needs CPU/interrupt-path coverage beyond the Bus-level sample
+   sequence.
 2. Capture short Mednafen/ares comparisons for *Last Alive* and one WSC
    SDMA/HyperVoice-heavy title, then decide whether the remaining difference is
    core reconstruction or host resampling.

@@ -13,13 +13,13 @@ start with `docs/dev/README.md`.
 | Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
 | Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
 | Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest pages 0-28 and WSHWTest `Test All` public oracles pass; further precision work is evidence-driven follow-up. |
-| Remaining emulator work | Tracked in `docs/dev/RemainingWork.md` | Next priority is broader public ROM oracle coverage; dot-level PPU, timing decomposition, and audio/SDMA validation stay evidence-driven. |
+| Remaining emulator work | Tracked in `docs/dev/RemainingWork.md` | Public-ROM oracle, PPU, timing, and audio follow-ups are now evidence-driven; self-built PCM sample-sequence coverage exists for `0x89`, SDMA, and HyperVoice. |
 | Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
 | Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
 
 Phases 1–7 of `docs/dev/DevelopmentPlan.md` are substantially complete; **Phase 8
 (WonderSwan Color) is complete** (subphases 8a–8g done, plus a HW_FLAGS 0xA0
-boot-state fix that makes real WSC ROMs render in colour). The workspace has 654 passing
+boot-state fix that makes real WSC ROMs render in colour). The workspace has 657 passing
 tests (+5 opt-in, env-gated public-ROM test functions marked `ignored`; one ws-test-suite
 ignored test covers multiple source-confirmed ROMs).
 
@@ -196,8 +196,10 @@ volume is freely adjustable. Sound DMA feeds the voice latch from ports `0x4A`�
 cadence is source-confirmed against ares and Mednafen as a 24 kHz APU cadence divided by 6/4/2/1 for
 rate bits 0/1/2/3. HyperVoice `0x6A` bits 4-6 are reference-triaged but not applied: ares treats
 them as speed divisors, while Mednafen ignores them, so Swanium keeps the Mednafen-like current-latch
-behavior pending public-ROM or hardware evidence. Remaining audio risk is SDMA bus-stall validation
-or a deterministic PCM fixture exposing a concrete mismatch.
+behavior pending public-ROM or hardware evidence. `crates/core/tests/pcm_fixture.rs` now provides a
+license-clean Bus-level PCM sample-sequence oracle for CPU `0x89`, fastest SDMA-fed voice, and
+HyperVoice latch writes. Remaining audio risk is SDMA bus-stall validation or a guest-code/public-ROM
+fixture exposing a concrete mismatch beyond the Bus-level sequence.
 
 ### Cartridge / save RAM — Phase 6 (`bus/cart/`)
 16-byte footer header parse, Bandai 2001/2003 banking via a `Mapper` enum, SRAM and
