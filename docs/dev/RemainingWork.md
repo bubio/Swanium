@@ -318,6 +318,12 @@ Validation notes:
   compile under the bench profile. Do not spend the next session running full
   Criterion measurements unless there is a concrete before/after performance
   question.
+- 2026-07-11: Full workspace validation passed after the P0/P1 evidence-driven
+  cleanup and P2 tooling checks: `cargo test --workspace` and
+  `cargo clippy --workspace --all-targets -- -D warnings`. Do not repeat this
+  as the next task unless new code changes land; the next useful step needs new
+  compatibility evidence, a concrete frontend polish request, or a planned
+  performance/precision change.
 
 ## Deferred frontend polish
 
