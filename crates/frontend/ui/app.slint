@@ -60,7 +60,7 @@ export component MainWindow inherits Window {
     // ignored. Runtime resizing (scale changes) is driven from Rust via
     // `window().set_size()`.
     preferred-width: root.view-width;
-    preferred-height: root.view-height;
+    preferred-height: root.view-height + root.status-bar-height;
     forward-focus: scope;
 
     MenuBar {
@@ -217,24 +217,26 @@ export component MainWindow inherits Window {
                     text: root.status-text;
                     color: #cccccc;
                     font-size: 12px;
+                    min-width: 0px;
+                    overflow: elide;
                     vertical-alignment: center;
                     horizontal-alignment: left;
                     horizontal-stretch: 1;
                 }
-                Text {
+                if root.view-width >= 220px: Text {
                     text: "Vol";
                     color: #cccccc;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
-                Slider {
+                if root.view-width >= 220px: Slider {
                     width: 90px;
                     minimum: 0;
                     maximum: 100;
                     value: root.volume;
                     changed(v) => { root.set-volume(round(v)); }
                 }
-                Text {
+                if root.view-width >= 220px: Text {
                     text: root.volume + "%";
                     color: #cccccc;
                     font-size: 12px;

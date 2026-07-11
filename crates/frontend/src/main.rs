@@ -783,10 +783,11 @@ fn apply_view(window: &MainWindow, config: &Config) {
     } else {
         (video::SCREEN_WIDTH as u32, video::SCREEN_HEIGHT as u32)
     };
-    let w = (bw * scale) as f32;
-    let h = (bh * scale) as f32 + STATUS_BAR_HEIGHT;
-    window.set_view_width(w);
-    window.set_view_height(h);
+    let view_w = (bw * scale) as f32;
+    let view_h = (bh * scale) as f32;
+    let window_h = view_h + STATUS_BAR_HEIGHT;
+    window.set_view_width(view_w);
+    window.set_view_height(view_h);
     window.set_current_scale(scale as i32);
     window.set_rotation(match config.rotation {
         RotationKind::None => 0,
@@ -798,7 +799,7 @@ fn apply_view(window: &MainWindow, config: &Config) {
     window.set_volume(config.volume.min(100) as i32);
     window.window().set_fullscreen(config.fullscreen);
     if !config.fullscreen {
-        window.window().set_size(LogicalSize::new(w, h));
+        window.window().set_size(LogicalSize::new(view_w, window_h));
     }
 }
 
