@@ -125,6 +125,10 @@ impl DisplayControl {
             scr2_window_outside: v & DISP_SCR2_WINDOW_OUTSIDE != 0,
         }
     }
+
+    fn all_layers_disabled(self) -> bool {
+        !self.scr1_enabled && !self.scr2_enabled && !self.sprites_enabled
+    }
 }
 
 /// PPU state: the rendered framebuffer plus the current scanline position.
@@ -199,6 +203,13 @@ impl Ppu {
         let dc = DisplayControl::from_ports(ports);
         let mode = TileMode::from_ports(ports);
         let row = y * SCREEN_WIDTH;
+        let backdrop = resolver.backdrop(ports);
+
+        if dc.all_layers_disabled() {
+            self.framebuffer[row..row + SCREEN_WIDTH].fill(backdrop);
+            self.current_line = line;
+            return;
+        }
 
         // Decode the sprite attribute table once per scanline and keep only the
         // entries that cover this line (preserving table order, i.e. priority),
@@ -228,7 +239,7 @@ impl Ppu {
         }
 
         for x in 0..SCREEN_WIDTH {
-            let mut color = resolver.backdrop(ports);
+            let mut color = backdrop;
             if dc.scr1_enabled {
                 let s = scr1_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {

@@ -255,6 +255,19 @@ fn scr1_disabled_shows_backdrop() {
 }
 
 #[test]
+fn all_layers_disabled_fills_scanline_with_backdrop() {
+    let (wram, mut ports) = setup_scr1_single_tile(0, (0b1000_0000, 0b0000_0000));
+    ports[0x00] = 0x00;
+    ports[0x01] = 7;
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(3, &wram, &ports, &MonoPaletteResolver);
+    let row = 3 * SCREEN_WIDTH;
+    assert!(ppu.framebuffer()[row..row + SCREEN_WIDTH]
+        .iter()
+        .all(|&color| color == grey(0)));
+}
+
+#[test]
 fn scr1_scroll_x_shifts_sampled_column() {
     // Place a distinct tile at map column 1; scroll right by 8 so screen x=0
     // samples column 1.
