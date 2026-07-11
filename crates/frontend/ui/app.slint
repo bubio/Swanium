@@ -55,6 +55,7 @@ export component MainWindow inherits Window {
     callback quit();
 
     title: root.window-title;
+    icon: @image-url("../../../assets/icons/AppIcon.png");
     // Only a *preferred* size, not a hard `width`/`height` binding: pinning the
     // window size would make it fixed-size and cause `set_fullscreen` to be
     // ignored. Runtime resizing (scale changes) is driven from Rust via
