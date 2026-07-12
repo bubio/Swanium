@@ -16,14 +16,15 @@
 //! | 0x9    | Game revision / version                              |
 //! | 0xA    | ROM size code                                        |
 //! | 0xB    | Save type code (SRAM / EEPROM size, or none)         |
-//! | 0xC    | Flags: bit 0 orientation, bit 2 RTC, bit 3 speed |
+//! | 0xC    | Flags: bit 0 orientation, bit 2 ROM access speed      |
 //! | 0xD    | Mapper chip (0 ⇒ Bandai 2001, 1 ⇒ Bandai 2003)       |
 //! | 0xE–F  | 16-bit checksum (little-endian)                      |
 //!
 //! The mapper byte at offset 0xD follows WonderCrab's verified interpretation.
-//! On-cartridge RTC presence is decoded from the flags byte (offset 0xC, bit 2),
-//! as observed in the ws-test-suite `mono/rtc/mapper` ROM generated with
-//! `rtc = true`.
+//! On-cartridge RTC presence is a conservative compatibility heuristic: the
+//! ws-test-suite `mono/rtc/mapper` ROM generated with `rtc = true` sets flags
+//! bit 2 and byte 0x0D, but many retail cartridges use flags bit 2 only for ROM
+//! access speed. Requiring both avoids exposing a phantom RTC to those titles.
 
 /// Length of the WonderSwan ROM footer in bytes.
 pub const FOOTER_LEN: usize = 16;
@@ -43,8 +44,9 @@ const OFF_CHECKSUM: usize = 0xE;
 const SYSTEM_COLOR: u8 = 0x01;
 /// Bit 0 of the flags byte: screen orientation (1 ⇒ vertical).
 const FLAG_VERTICAL: u8 = 0x01;
-/// Bit 2 of the flags byte: on-cartridge RTC present.
-const FLAG_RTC: u8 = 0x04;
+/// Bit 2 of the flags byte: fast ROM access on retail carts; also used by the
+/// ws-test-suite RTC mapper fixture together with a non-zero byte 0x0D.
+const FLAG_FAST_ROM_OR_RTC: u8 = 0x04;
 
 /// The mapper (bank-switch) chip a cartridge uses.
 ///
@@ -133,7 +135,7 @@ pub struct CartridgeHeader {
     pub save_type: SaveType,
     /// Screen orientation is vertical (otherwise horizontal).
     pub vertical: bool,
-    /// Cartridge carries a real-time clock (flags byte bit 2).
+    /// Cartridge carries a real-time clock by the conservative footer signal.
     pub rtc: bool,
     /// Bank-switch mapper chip.
     pub mapper: Mapper,
@@ -155,7 +157,7 @@ impl CartridgeHeader {
             rom_size_code: footer[OFF_ROM_SIZE],
             save_type: SaveType::from_code(footer[OFF_SAVE_TYPE]),
             vertical: footer[OFF_FLAGS] & FLAG_VERTICAL != 0,
-            rtc: footer[OFF_FLAGS] & FLAG_RTC != 0,
+            rtc: footer[OFF_FLAGS] & FLAG_FAST_ROM_OR_RTC != 0 && footer[OFF_MAPPER] != 0,
             mapper: Mapper::from_code(footer[OFF_MAPPER]),
             checksum: u16::from_le_bytes([footer[OFF_CHECKSUM], footer[OFF_CHECKSUM + 1]]),
         })

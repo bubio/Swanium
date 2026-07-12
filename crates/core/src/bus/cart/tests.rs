@@ -107,6 +107,20 @@ fn header_parse_reads_vertical_flag() {
 }
 
 #[test]
+fn header_parse_does_not_treat_fast_rom_flag_alone_as_rtc() {
+    // Beat Mania (J) [M][!] uses flags 0x05 (vertical + fast ROM), SRAM save
+    // code 0x02, and byte 0x0D = 0. That is not an RTC cartridge.
+    let rom = rom_with_footer(0x100, &[(0xB, 0x02), (0xC, 0x05), (0xD, 0x00)]);
+    assert!(!CartridgeHeader::parse(&rom).unwrap().rtc);
+}
+
+#[test]
+fn header_parse_marks_rtc_when_fixture_rtc_signal_is_present() {
+    let rom = rom_with_footer(0x100, &[(0xC, 0x04), (0xD, 0x01)]);
+    assert!(CartridgeHeader::parse(&rom).unwrap().rtc);
+}
+
+#[test]
 fn header_parse_decodes_bandai_2001_mapper() {
     let rom = rom_with_footer(0x100, &[(0xD, 0x00)]);
     assert_eq!(

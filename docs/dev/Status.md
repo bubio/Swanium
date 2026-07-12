@@ -56,6 +56,10 @@ instruction set against the `MemoryBus` trait.
 20-bit address space with WRAM / I/O port / cartridge-ROM dispatch; interrupt controller
 (IVT, IRQ priority, INT/IRET linkage, VBlank line); HBlank/VBlank + general hardware timers;
 GDMA (memory-to-memory) and SDMA (sound) transfer engines. I/O ports dispatch to handlers.
+Direct cartridge boot now uses the bootstrap-post stack pointer `SP=0x2000` (with `SS=0`),
+matching StoicGoose's startup state. Beat Mania (J) calls helper code before explicitly
+initializing SP; leaving SP at zero made the first CALL push into mono open bus at
+`0x0FFFA`, so RET jumped to `0x9090` and execution fell into data.
 Real BIOS startup is supported beyond direct-cart boot: the bus now models the console internal
 EEPROM (`IEEPROM`, ports `0xBA`–`0xBE`) synchronously enough for the BIOS configuration reads/writes.
 The internal EEPROM starts zero-filled, matching NewOswan's newly-created `*_ieeprom.bin` files;
@@ -126,10 +130,13 @@ The mono sound quirks oracle pins CPU-visible APU output readback ports
 `0x96`/`0x98`/`0x9A`, LFSR readback through `0x92`/`0x93`, voice readback while
 the channel enable bit is clear, channel counter behavior across alternate
 voice/sweep/noise modes, and immediate `0x8E` noise-reset self-clear.
-The ws-test-suite RTC mapper oracle pins the generated RTC footer flag
-(`0x0C` bit 2 / flags value `0x04`), status-port ready/busy bits, command
-payload lengths for `0x10`-`0x1B`, unsupported-command timeout for `0x1C`, and
-the rule that writing the ready bit to port `0xCA` does not force ready.
+The ws-test-suite RTC mapper oracle pins the generated RTC footer signal
+(`0x0C` bit 2 / flags value `0x04` together with non-zero byte `0x0D`), status-port
+ready/busy bits, command payload lengths for `0x10`-`0x1B`, unsupported-command
+timeout for `0x1C`, and the rule that writing the ready bit to port `0xCA` does
+not force ready. Retail cartridges commonly use `0x0C` bit 2 as the fast-ROM
+flag, so Swanium no longer exposes an RTC from that bit alone; Beat Mania (J)
+is the regression case (`flags=0x05`, SRAM save code `0x02`, byte `0x0D=0`).
 
 ### PPU — Phase 4 (`ppu/`) + Milestone 10 correctness pass
 Mono 224×144, 4-shade grayscale, scanline-driven. SCR1/SCR2 backgrounds (scroll, tile flip),
@@ -339,8 +346,9 @@ framebuffer-format / RTC-determinism decisions are recorded in DevelopmentPlan P
   with **no wall-clock in core**: the frontend injects an absolute time once via `System::set_rtc_datetime`
   (default epoch 2000-01-01 if never injected), and the clock free-runs off the emulated master clock
   (`System::drive_frame` → `Bus::tick_rtc(CYCLES_PER_FRAME)`) with full BCD carry and leap-year handling.
-  `Bus` routes 0xCA/0xCB to the RTC only when `cart.has_rtc()`; presence is decoded from footer flags byte
-  0x0C bit 2, confirmed by ws-test-suite `mono/rtc/mapper.ws` (`rtc = true` generates flags `0x04`).
+  `Bus` routes 0xCA/0xCB to the RTC only when `cart.has_rtc()`; presence is decoded conservatively
+  from footer flags byte 0x0C bit 2 plus non-zero byte 0x0D. This keeps the ws-test-suite
+  `mono/rtc/mapper.ws` fixture working while avoiding false RTC detection for retail fast-ROM titles.
   Port `0xCA` reads ready/busy status rather than echoing the command byte, and the mapper oracle pins
   command payload lengths and ready-cleared-on-new behavior. Alarm-IRQ behavior is still unverified/deferred —
   see DevelopmentPlan 実装メモ（8e）.

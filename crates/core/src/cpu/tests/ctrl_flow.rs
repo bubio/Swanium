@@ -4,6 +4,14 @@ use crate::cpu::Cpu;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[test]
+fn reset_initializes_bootstrap_stack_pointer() {
+    let mut cpu = Cpu::new();
+    cpu.reset(0xFFFF, 0x0000);
+    assert_eq!(cpu.regs.sp, 0x2000);
+    assert_eq!(cpu.regs.ss, 0x0000);
+}
+
+#[test]
 fn jmp_short_advances_ip_by_signed_offset() {
     // JMP short +0x05 (0xEB 0x05). After fetching the 2-byte instruction,
     // IP=2, so the landing address is 2 + 5 = 7.

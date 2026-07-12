@@ -81,6 +81,11 @@ impl Cpu {
         *self = Cpu::default();
         self.regs.cs = cs;
         self.regs.ip = ip;
+        // Direct cartridge boot starts after the console bootstrap has set up
+        // a valid stack in mono WRAM. Several commercial ROMs call helper
+        // routines before explicitly touching SP; StoicGoose uses the same
+        // bootstrap-post state.
+        self.regs.sp = 0x2000;
     }
 
     fn fetch_u8<B: MemoryBus>(&mut self, bus: &mut B) -> u8 {

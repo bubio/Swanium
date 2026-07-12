@@ -1340,6 +1340,7 @@ fn mono_model_ignores_color_bit() {
 fn rom_with_rtc() -> Vec<u8> {
     let mut rom = vec![0u8; 16];
     rom[0xC] = 0x04;
+    rom[0xD] = 0x01;
     rom
 }
 
@@ -1359,7 +1360,7 @@ fn cart_without_rtc_reads_open_bus_on_data_port() {
 }
 
 #[test]
-fn rtc_footer_bit_creates_clock() {
+fn rtc_footer_signal_creates_clock() {
     let bus = Bus::from_rom(rom_with_rtc());
     assert!(bus.has_rtc());
 }

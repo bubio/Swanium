@@ -197,7 +197,7 @@ fn eeprom_write_disable_initialization_blocks_later_write() {
 
 /// Build a bus whose cartridge footer marks an RTC device as present.
 fn rtc_bus() -> Bus {
-    Bus::from_rom(rom_with_footer(0x10000, &[(0xC, 0x04)]))
+    Bus::from_rom(rom_with_footer(0x10000, &[(0xC, 0x04), (0xD, 0x01)]))
 }
 
 #[test]
