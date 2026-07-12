@@ -24,6 +24,10 @@ use crate::model::HardwareModel;
 #[cfg(feature = "profiling")]
 use crate::profile::{FrameProfile, ProfileSnapshot};
 
+const STATE_MAGIC: &[u8; 8] = b"SWANST01";
+const STATE_VERSION: u32 = 1;
+const STATE_HEADER_LEN: usize = STATE_MAGIC.len() + std::mem::size_of::<u32>();
+
 /// Time the given block, adding its wall-clock nanoseconds into `$slot`.
 ///
 /// Under the `profiling` feature this brackets the block with
@@ -74,6 +78,7 @@ pub struct ScanlineTrace {
 }
 
 /// The complete emulated WonderSwan: CPU plus the hardware [`Bus`].
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct System {
     cpu: Cpu,
     bus: Bus,
@@ -83,7 +88,28 @@ pub struct System {
     /// Cumulative per-subsystem frame timings (present only with the
     /// `profiling` feature). See [`crate::profile`].
     #[cfg(feature = "profiling")]
+    #[serde(skip, default)]
     profile: FrameProfile,
+}
+
+/// Errors raised while serialising or restoring a whole-machine save state.
+#[derive(Debug, thiserror::Error)]
+pub enum StateError {
+    /// The byte stream does not start with Swanium's save-state header.
+    #[error("invalid save-state magic")]
+    InvalidMagic,
+    /// The save state was written by an incompatible format version.
+    #[error("unsupported save-state version {0}")]
+    UnsupportedVersion(u32),
+    /// The byte stream ended before the fixed header was complete.
+    #[error("truncated save-state header")]
+    TruncatedHeader,
+    /// bincode failed while encoding the state.
+    #[error("save-state encode error: {0}")]
+    Encode(#[from] bincode::error::EncodeError),
+    /// bincode failed while decoding the state.
+    #[error("save-state decode error: {0}")]
+    Decode(#[from] bincode::error::DecodeError),
 }
 
 impl System {
@@ -151,6 +177,7 @@ impl System {
         // Advance the cartridge RTC (if any) off the emulated clock, one frame's
         // worth of master-clock cycles — keeps timekeeping deterministic.
         self.bus.tick_rtc(CYCLES_PER_FRAME);
+        self.bus.latch_sprites();
         for line in 0..SCANLINES_PER_FRAME {
             let budget = CYCLES_PER_SCANLINE.saturating_sub(self.cycle_carry);
             // Keep CPU and APU buckets exclusive: APU ticking happens inside
@@ -344,6 +371,45 @@ impl System {
         self.bus.load_save_data(data);
     }
 
+    /// Serialise the complete emulated machine for a frontend/tooling save state.
+    ///
+    /// This is separate from cartridge SRAM/EEPROM persistence: it captures CPU,
+    /// bus, PPU, APU, timers, RAM, ROM, and mapper state so execution can resume
+    /// at the same emulated instant.
+    pub fn save_state_bytes(&self) -> Result<Vec<u8>, StateError> {
+        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())?;
+        let mut out = Vec::with_capacity(STATE_HEADER_LEN + payload.len());
+        out.extend_from_slice(STATE_MAGIC);
+        out.extend_from_slice(&STATE_VERSION.to_le_bytes());
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    /// Restore a complete emulated machine from [`save_state_bytes`](Self::save_state_bytes).
+    pub fn load_state_bytes(&mut self, data: &[u8]) -> Result<(), StateError> {
+        if data.len() < STATE_HEADER_LEN {
+            return Err(StateError::TruncatedHeader);
+        }
+        if &data[..STATE_MAGIC.len()] != STATE_MAGIC {
+            return Err(StateError::InvalidMagic);
+        }
+        let version_start = STATE_MAGIC.len();
+        let version = u32::from_le_bytes(
+            data[version_start..STATE_HEADER_LEN]
+                .try_into()
+                .expect("fixed-size save-state version"),
+        );
+        if version != STATE_VERSION {
+            return Err(StateError::UnsupportedVersion(version));
+        }
+        let (restored, _) = bincode::serde::decode_from_slice(
+            &data[STATE_HEADER_LEN..],
+            bincode::config::standard(),
+        )?;
+        *self = restored;
+        Ok(())
+    }
+
     /// Read one byte of the 20-bit physical address space.
     ///
     /// Stable, side-effect-free* memory-inspection API for tooling and the
@@ -423,6 +489,21 @@ mod tests {
         system.run_frame(KeyState::NONE);
         // Reaching here without panicking is the assertion.
         assert_eq!(system.framebuffer().len(), 224 * 144);
+    }
+
+    #[test]
+    fn save_state_restores_complete_system_state() {
+        let mut system = System::new(halting_rom());
+        system.run_frame(KeyState::A);
+        let saved = system.save_state_bytes().expect("save state");
+        let saved_fb = system.framebuffer().to_vec();
+        let saved_cpu = *system.cpu();
+
+        system.run_frame(KeyState::B);
+        system.load_state_bytes(&saved).expect("load state");
+
+        assert_eq!(system.framebuffer(), saved_fb);
+        assert_eq!(*system.cpu(), saved_cpu);
     }
 
     #[test]

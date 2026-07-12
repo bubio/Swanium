@@ -137,12 +137,18 @@ impl DisplayControl {
 /// `SCREEN_WIDTH * SCREEN_HEIGHT` entries. Monochrome output is a grey RGB444
 /// value (see [`palette::grey_rgb444`]); color output is the 12-bit palette RAM
 /// color. RGB444 → RGBA8888 expansion happens in `crates/video`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ppu {
     /// Resolved RGB444 colors, row-major (`y * SCREEN_WIDTH + x`).
     framebuffer: Box<[Rgb444]>,
     /// Scanline currently being rendered (0–143 visible; up to 158 total).
     current_line: u8,
+    /// Sprite attributes latched for the currently rendered
+    /// frame. Games often rewrite OAM over several CPU instructions; rendering
+    /// directly from live WRAM can then combine old and new body parts.
+    latched_sprites: Box<[SpriteEntry]>,
+    latched_sprite_count: usize,
+    sprite_latch_valid: bool,
 }
 
 impl Default for Ppu {
@@ -157,6 +163,9 @@ impl Ppu {
         Self {
             framebuffer: vec![0u16; FRAMEBUFFER_LEN].into_boxed_slice(),
             current_line: 0,
+            latched_sprites: vec![SpriteEntry::default(); SPRITE_TABLE_LEN].into_boxed_slice(),
+            latched_sprite_count: 0,
+            sprite_latch_valid: false,
         }
     }
 
@@ -164,6 +173,8 @@ impl Ppu {
     pub fn reset(&mut self) {
         self.framebuffer.fill(0);
         self.current_line = 0;
+        self.latched_sprite_count = 0;
+        self.sprite_latch_valid = false;
     }
 
     /// The rendered framebuffer: `SCREEN_WIDTH * SCREEN_HEIGHT` [`Rgb444`]
@@ -176,6 +187,20 @@ impl Ppu {
     /// The scanline the PPU is currently positioned at.
     pub fn current_line(&self) -> u8 {
         self.current_line
+    }
+
+    /// Latch the sprite table for subsequent visible scanline rendering.
+    pub fn latch_sprites(&mut self, wram: &[u8], ports: &[u8]) {
+        let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
+        let first = ports[SPR_FIRST] as usize;
+        let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
+
+        for i in 0..count {
+            let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
+            self.latched_sprites[i] = SpriteEntry::decode(wram, oam_base + idx * 4);
+        }
+        self.latched_sprite_count = count;
+        self.sprite_latch_valid = true;
     }
 
     /// Render one visible scanline into the framebuffer.
@@ -205,6 +230,10 @@ impl Ppu {
         let row = y * SCREEN_WIDTH;
         let backdrop = resolver.backdrop(ports);
 
+        if dc.sprites_enabled && !self.sprite_latch_valid {
+            self.latch_sprites(wram, ports);
+        }
+
         if dc.all_layers_disabled() {
             self.framebuffer[row..row + SCREEN_WIDTH].fill(backdrop);
             self.current_line = line;
@@ -220,7 +249,11 @@ impl Ppu {
         // sized to the full table, filled up to `sprite_count`.
         let mut line_sprites = [SpriteEntry::default(); SPRITE_TABLE_LEN];
         let sprite_count = if dc.sprites_enabled {
-            collect_line_sprites(wram, ports, line, &mut line_sprites)
+            collect_line_sprites(
+                &self.latched_sprites[..self.latched_sprite_count],
+                line,
+                &mut line_sprites,
+            )
         } else {
             0
         };
@@ -237,33 +270,6 @@ impl Ppu {
         if dc.scr2_enabled {
             fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
         }
-        let mut sprite_back_line = [None; SCREEN_WIDTH];
-        let mut sprite_front_line = [None; SCREEN_WIDTH];
-        if dc.sprites_enabled {
-            fill_sprite_line(
-                wram,
-                ports,
-                &dc,
-                line_sprites,
-                mode,
-                line,
-                false,
-                resolver,
-                &mut sprite_back_line,
-            );
-            fill_sprite_line(
-                wram,
-                ports,
-                &dc,
-                line_sprites,
-                mode,
-                line,
-                true,
-                resolver,
-                &mut sprite_front_line,
-            );
-        }
-
         for x in 0..SCREEN_WIDTH {
             let mut color = backdrop;
             if dc.scr1_enabled {
@@ -272,16 +278,27 @@ impl Ppu {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
-            if let Some(px) = sprite_back_line[x] {
-                color = px;
-            }
+            let mut scr2_color = None;
             if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
                 let s = scr2_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
-                    color = resolver.resolve(ports, s.palette, s.pixel);
+                    scr2_color = Some(resolver.resolve(ports, s.palette, s.pixel));
                 }
             }
-            if let Some(px) = sprite_front_line[x] {
+
+            if let Some(px) = sample_sprite_pixel(
+                ports,
+                wram,
+                &dc,
+                line_sprites,
+                mode,
+                line,
+                x,
+                scr2_color.is_some(),
+                resolver,
+            ) {
+                color = px;
+            } else if let Some(px) = scr2_color {
                 color = px;
             }
             self.framebuffer[row + x] = color;
@@ -613,7 +630,7 @@ fn fill_background_line(
 
 /// A decoded 4-byte sprite attribute-table entry (internal to the `ppu`
 /// module).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SpriteEntry {
     /// Tile number (9 bits, 0–511).
     pub tile_idx: u16,
@@ -681,30 +698,19 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
     }
 }
 
-/// Decode the sprite attribute table into `out`, keeping (in table order,
+/// Filter the latched sprite table into `out`, keeping (in table order,
 /// i.e. priority order) only the sprites whose 8-pixel-tall box covers `line`.
 /// Collection stops after 32 matching sprites, matching the hardware's
 /// per-scanline overflow behavior: later OAM entries on that line are ignored
 /// even if earlier entries are transparent at a given pixel.
 /// Returns how many entries were written.
-///
-/// Called once per scanline by [`Ppu::render_scanline`] so the per-pixel
-/// sprite sampler works from a short pre-filtered list rather than re-decoding
-/// all 128 entries for every pixel.
 fn collect_line_sprites(
-    wram: &[u8],
-    ports: &[u8],
+    latched_sprites: &[SpriteEntry],
     line: u8,
     out: &mut [SpriteEntry; SPRITE_TABLE_LEN],
 ) -> usize {
-    let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
-    let first = ports[SPR_FIRST] as usize;
-    let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
-
     let mut n = 0;
-    for i in 0..count {
-        let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
-        let sprite = SpriteEntry::decode(wram, oam_base + idx * 4);
+    for &sprite in latched_sprites {
         if sprite_axis_delta(line, sprite.y) < SPRITE_SIZE {
             out[n] = sprite;
             n += 1;
@@ -721,63 +727,62 @@ fn sprite_axis_delta(screen: u8, origin: u8) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fill_sprite_line<R: PaletteResolver>(
-    wram: &[u8],
+fn sample_sprite_pixel<R: PaletteResolver>(
     ports: &[u8],
+    wram: &[u8],
     dc: &DisplayControl,
     line_sprites: &[SpriteEntry],
     mode: TileMode,
     line: u8,
-    want_priority: bool,
+    screen_x: usize,
+    scr2_opaque: bool,
     resolver: &R,
-    out: &mut [Option<Rgb444>; SCREEN_WIDTH],
-) {
+) -> Option<Rgb444> {
     for sprite in line_sprites {
-        if sprite.priority != want_priority {
-            continue;
-        }
         // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
         let mut ty = sprite_axis_delta(line, sprite.y);
         if sprite.vflip {
             ty = SPRITE_SIZE - 1 - ty;
         }
 
-        for dx in 0..SPRITE_SIZE {
-            let screen_x = sprite.x.wrapping_add(dx as u8) as usize;
-            if screen_x >= SCREEN_WIDTH || out[screen_x].is_some() {
-                continue;
-            }
-            // A window-attributed sprite is hidden inside the sprite window and
-            // shown outside it. Golden Axe parks the sprite window off-screen
-            // while using bit 12 on character sprites, so the opposite
-            // interpretation removes the actors while leaving backgrounds/HUD.
-            if dc.sprite_window_enabled
-                && sprite.window
-                && in_window(
-                    ports,
-                    screen_x,
-                    line,
-                    SPR_WINDOW_X1,
-                    SPR_WINDOW_Y1,
-                    SPR_WINDOW_X2,
-                    SPR_WINDOW_Y2,
-                )
-            {
-                continue;
-            }
-            let tx = if sprite.hflip {
-                SPRITE_SIZE - 1 - dx
-            } else {
-                dx
-            };
-            // Sprites carry no bank bit (attribute bit 13 is priority), so their
-            // tiles are limited to 0–511, but they follow the active 2bpp/4bpp
-            // format like backgrounds.
-            let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
-            let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
-            if !resolver.transparent(palette, pixel) {
-                out[screen_x] = Some(resolver.resolve(ports, palette, pixel));
-            }
+        let dx = sprite_axis_delta(screen_x as u8, sprite.x);
+        if dx >= SPRITE_SIZE {
+            continue;
         }
+        // A window-attributed sprite is hidden inside the sprite window and
+        // shown outside it. Golden Axe parks the sprite window off-screen while
+        // using bit 12 on character sprites, so the opposite interpretation
+        // removes the actors while leaving backgrounds/HUD.
+        if dc.sprite_window_enabled
+            && sprite.window
+            && in_window(
+                ports,
+                screen_x,
+                line,
+                SPR_WINDOW_X1,
+                SPR_WINDOW_Y1,
+                SPR_WINDOW_X2,
+                SPR_WINDOW_Y2,
+            )
+        {
+            continue;
+        }
+        let tx = if sprite.hflip {
+            SPRITE_SIZE - 1 - dx
+        } else {
+            dx
+        };
+        // Sprite attributes are frame-latched, but tile pixels are fetched
+        // from WRAM at draw time.
+        let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
+        let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
+        if resolver.transparent(palette, pixel) {
+            continue;
+        }
+        if !sprite.priority && scr2_opaque {
+            continue;
+        }
+        return Some(resolver.resolve(ports, palette, pixel));
     }
+    None
 }

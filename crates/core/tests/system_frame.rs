@@ -95,6 +95,42 @@ fn color_background_tile_reaches_framebuffer_after_a_frame() {
 }
 
 #[test]
+fn sprite_oam_write_during_frame_is_visible_next_frame() {
+    // MOV byte [0x0203],8 ; HLT. The program moves sprite 0's X coordinate
+    // from 0 to 8 during the first frame. Sprite attributes are latched before
+    // visible rendering, so the old position remains stable for frame 1 and the
+    // new position appears on frame 2.
+    let mut system = System::new(rom_with_reset_code(&[
+        0xC6, 0x06, 0x03, 0x02, 0x08, // MOV byte [0x0203], 8
+        0xF4, // HLT
+    ]));
+    let grey1 = {
+        let n = (15 - 1u16) & 0x0F;
+        (n << 8) | (n << 4) | n
+    };
+    {
+        let bus = system.bus_mut();
+        bus.write_io(0x00, 0x04); // enable sprites
+        bus.write_io(0x04, 0x01); // OAM base 0x200
+        bus.write_io(0x05, 0);
+        bus.write_io(0x06, 1);
+        bus.write_io(0x30, 0x10); // sprite palette 8: pixel1 -> pool1
+        bus.write_io(0x1C, 0x10); // pool1 -> shade 1
+        bus.write_u8(0x0200, 1); // tile 1
+        bus.write_u8(0x0201, 0);
+        bus.write_u8(0x0202, 0); // y
+        bus.write_u8(0x0203, 0); // x before CPU moves it
+        bus.write_u8(0x2010, 0b1000_0000); // tile 1 row 0, x0 = pixel 1
+    }
+
+    system.run_frame(KeyState::NONE);
+    assert_eq!(system.framebuffer()[0], grey1);
+
+    system.run_frame(KeyState::NONE);
+    assert_eq!(system.framebuffer()[8], grey1);
+}
+
+#[test]
 fn hblank_timer_counts_visible_and_vblank_scanlines_per_frame() {
     let mut system = System::new(halting_rom());
     let period = SCANLINES_PER_FRAME;

@@ -77,7 +77,7 @@ const OPEN_BUS: u8 = 0x90;
 /// Holds the battery-backed BCD date/time registers plus the alarm and status
 /// registers, and drives them forward off the emulated master clock. All fields
 /// are plain data so the device is trivially serialisable for save states.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rtc {
     // Battery-backed BCD registers.
     year: u8,    // 00–99 ⇒ calendar year 2000–2099

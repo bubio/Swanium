@@ -678,6 +678,29 @@ fn sprite_priority_0_drawn_behind_scr2() {
 }
 
 #[test]
+fn earlier_priority_0_sprite_wins_over_later_priority_1_when_scr2_transparent() {
+    let mut wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    ports[0x00] = 0x06; // SCR2 + SPR
+    ports[0x04] = 0x01;
+    ports[0x05] = 0;
+    ports[0x06] = 2;
+    set_identity_palette(&mut ports);
+    set_identity_sprite_palette(&mut ports);
+
+    // SCR2 is enabled but transparent at x=0, so sprite OAM order decides.
+    write_map_entry(&mut wram, 0, 0, 0, 4 << 9);
+    write_sprite(&mut wram, 0x200, 0, 1, 0, 0); // priority 0, first
+    write_sprite(&mut wram, 0x200, 1, 2 | (1 << 13), 0, 0); // priority 1, later
+    write_tile_row(&mut wram, 1, 0, 0b1000_0000, 0); // pixel 1
+    write_tile_row(&mut wram, 2, 0, 0, 0b1000_0000); // pixel 2
+
+    let mut ppu = Ppu::new();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+    assert_eq!(ppu.framebuffer()[0], grey(1));
+}
+
+#[test]
 fn sprite_overflow_ignores_33rd_sprite_on_scanline() {
     let mut wram = vec![0u8; 0x10000];
     let mut ports = [0u8; 0x100];

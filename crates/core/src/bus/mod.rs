@@ -40,7 +40,7 @@ const SERIAL_TX_READY_IRQ: u8 = 1 << IrqSource::SerialReceive as u8;
 /// Priority: higher bit number = higher priority (bit 7 checked first).
 /// Unverified against real hardware; see "リスクと不確実性への対処方針" in
 /// `docs/dev/DevelopmentPlan.md`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum IrqSource {
     SerialReceive = 0,
@@ -72,6 +72,7 @@ pub enum IrqSource {
 ///
 /// If an internal boot ROM is installed, it overlays the top of the 20-bit
 /// space; a 64 KiB BIOS therefore maps at 0xF0000–0xFFFFF.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Bus {
     /// 64 KiB work RAM (only first 16 KiB accessible on WonderSwan mono).
     wram: Box<[u8]>,
@@ -91,7 +92,7 @@ pub struct Bus {
     /// Shadow of all 256 I/O port registers.
     /// Exceptions (side-effect on read, read-only bits, etc.) are handled
     /// explicitly in `read_io` / `write_io`.
-    ports: [u8; 0x100],
+    ports: Box<[u8]>,
     /// CPU-visible wait cycles accumulated by synchronous I/O side effects.
     pending_wait_cycles: u32,
     /// Picture processing unit (renders from `wram` + display registers).
@@ -109,7 +110,7 @@ pub struct Bus {
 }
 
 impl Bus {
-    fn init_port_defaults(ports: &mut [u8; 0x100]) {
+    fn init_port_defaults(ports: &mut [u8]) {
         // Keep the speaker path audible unless software explicitly lowers the
         // built-in speaker main volume. Treating reset as 0 mutes games/tests
         // that rely on the default speaker route and never touch port 0x9E.
@@ -133,7 +134,7 @@ impl Bus {
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
-            ports: [0u8; 0x100],
+            ports: vec![0u8; 0x100].into_boxed_slice(),
             pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -153,7 +154,7 @@ impl Bus {
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
-            ports: [0u8; 0x100],
+            ports: vec![0u8; 0x100].into_boxed_slice(),
             pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -178,7 +179,7 @@ impl Bus {
             boot_rom: None,
             ieeprom: Eeprom::new(vec![0; 2048], 10),
             ieeprom_status: IeepromStatus::default(),
-            ports: [0u8; 0x100],
+            ports: vec![0u8; 0x100].into_boxed_slice(),
             pending_wait_cycles: 0,
             ppu: Ppu::new(),
             apu: Apu::new(),
@@ -492,6 +493,11 @@ impl Bus {
         self.on_hblank();
     }
 
+    /// Capture the sprite table for the upcoming frame.
+    pub(crate) fn latch_sprites(&mut self) {
+        self.ppu.latch_sprites(&self.wram, &self.ports);
+    }
+
     /// Whether the PPU should render in WonderSwan Color mode: the emulated
     /// model has color features *and* the video-mode register (I/O port 0x60)
     /// has the color-mode bit (bit 7) set. A Color console running a
@@ -781,7 +787,7 @@ impl Bus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct IeepromStatus {
     done: bool,
     read_done_delay: u8,
@@ -818,7 +824,7 @@ impl IeepromStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct SdmaState {
     source: u32,
     counter: u32,

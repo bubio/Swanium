@@ -5,7 +5,7 @@
 /// bits are modeled after the 8086 (bit 1 always reads as 1, others as 0).
 /// If real-hardware testing later shows the V30MZ differs, update
 /// `to_u16`/`from_u16` and note the correction here.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Flags {
     pub carry: bool,
     pub parity: bool,

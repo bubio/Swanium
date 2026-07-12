@@ -24,7 +24,7 @@
 /// A lightweight bit set over the eleven hardware keys. Construct it from the
 /// associated key constants combined with `|`, e.g.
 /// `KeyState::X1 | KeyState::A`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct KeyState(u16);
 
 impl KeyState {

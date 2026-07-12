@@ -177,9 +177,6 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         .inspect_err(|e| tracing::warn!("audio unavailable: {e}"))
         .ok();
 
-    let width = video::SCREEN_WIDTH as u32;
-    let height = video::SCREEN_HEIGHT as u32;
-
     let timer = Timer::default();
     let window_weak = window.as_weak();
     let app_timer = app.clone();
@@ -334,21 +331,8 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
         system.clear_audio_samples();
 
-        let rotation = app.config.borrow().rotation;
-        let (bw, bh) = if rotation.is_rotated() {
-            (height, width)
-        } else {
-            (width, height)
-        };
-        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(bw, bh);
-        let fb = system.framebuffer();
-        match rotation {
-            RotationKind::None => video::write_rgba(fb, buffer.make_mut_bytes()),
-            RotationKind::Right => video::write_rgba_rotated_cw(fb, buffer.make_mut_bytes()),
-            RotationKind::Left => video::write_rgba_rotated_ccw(fb, buffer.make_mut_bytes()),
-        }
         if let Some(window) = window_weak.upgrade() {
-            window.set_frame(Image::from_rgba8(buffer));
+            update_window_frame(&window, system, app.config.borrow().rotation);
         }
         drop(system_ref);
 
@@ -441,6 +425,24 @@ fn wire_menu(window: &MainWindow, app: &App) {
             save(&app);
             if let Some(window) = weak.upgrade() {
                 window.set_recent_files(recent_model(&app.config.borrow()));
+            }
+        }
+    });
+    window.on_save_state({
+        let app = app.clone();
+        let weak = window.as_weak();
+        move || {
+            if let Some(window) = weak.upgrade() {
+                save_current_state(&app, &window);
+            }
+        }
+    });
+    window.on_load_state({
+        let app = app.clone();
+        let weak = window.as_weak();
+        move || {
+            if let Some(window) = weak.upgrade() {
+                load_current_state(&app, &window);
             }
         }
     });
@@ -1188,16 +1190,129 @@ fn load_cartridge_save(rom_path: &Path, system: &mut System) {
     }
 }
 
+fn save_current_state(app: &App, window: &MainWindow) {
+    let Some(rom_path) = app.rom_path.borrow().clone() else {
+        return;
+    };
+    let system_ref = app.system.borrow();
+    let Some(system) = system_ref.as_ref() else {
+        return;
+    };
+    let path = match state_path_for_rom(&rom_path) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!(rom = %rom_path.display(), "could not locate state directory: {e}");
+            window
+                .set_status_text(format!("{} — save state failed", app.rom_label.borrow()).into());
+            return;
+        }
+    };
+    let data = match system.save_state_bytes() {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(state = %path.display(), "could not encode save state: {e}");
+            window
+                .set_status_text(format!("{} — save state failed", app.rom_label.borrow()).into());
+            return;
+        }
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(state = %path.display(), "could not create state directory: {e}");
+            window
+                .set_status_text(format!("{} — save state failed", app.rom_label.borrow()).into());
+            return;
+        }
+    }
+    match std::fs::write(&path, data) {
+        Ok(()) => {
+            tracing::info!(state = %path.display(), "saved state");
+            window.set_status_text(
+                format!(
+                    "{} — state saved: {}",
+                    app.rom_label.borrow(),
+                    path.display()
+                )
+                .into(),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(state = %path.display(), "could not write save state: {e}");
+            window
+                .set_status_text(format!("{} — save state failed", app.rom_label.borrow()).into());
+        }
+    }
+}
+
+fn load_current_state(app: &App, window: &MainWindow) {
+    let Some(rom_path) = app.rom_path.borrow().clone() else {
+        return;
+    };
+    let path = match state_path_for_rom(&rom_path) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!(rom = %rom_path.display(), "could not locate state directory: {e}");
+            window
+                .set_status_text(format!("{} — load state failed", app.rom_label.borrow()).into());
+            return;
+        }
+    };
+    let data = match std::fs::read(&path) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(state = %path.display(), "could not read save state: {e}");
+            window
+                .set_status_text(format!("{} — load state failed", app.rom_label.borrow()).into());
+            return;
+        }
+    };
+    let mut system_ref = app.system.borrow_mut();
+    let Some(system) = system_ref.as_mut() else {
+        return;
+    };
+    match system.load_state_bytes(&data) {
+        Ok(()) => {
+            update_window_frame(window, system, app.config.borrow().rotation);
+            tracing::info!(state = %path.display(), bytes = data.len(), "loaded state");
+            window.set_status_text(
+                format!(
+                    "{} — state loaded: {}",
+                    app.rom_label.borrow(),
+                    path.display()
+                )
+                .into(),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(state = %path.display(), "could not decode save state: {e}");
+            window
+                .set_status_text(format!("{} — load state failed", app.rom_label.borrow()).into());
+        }
+    }
+}
+
 fn save_path_for_rom(rom_path: &Path) -> Result<PathBuf, common::error::SwaniumError> {
     Ok(Config::saves_dir()?.join(save_file_name_for_rom(rom_path)))
 }
 
+fn state_path_for_rom(rom_path: &Path) -> Result<PathBuf, common::error::SwaniumError> {
+    Ok(Config::states_dir()?.join(state_file_name_for_rom(rom_path)))
+}
+
 fn save_file_name_for_rom(rom_path: &Path) -> String {
+    file_name_for_rom(rom_path, ".sav")
+}
+
+fn state_file_name_for_rom(rom_path: &Path) -> String {
+    file_name_for_rom(rom_path, ".state")
+}
+
+fn file_name_for_rom(rom_path: &Path, suffix: &str) -> String {
     let raw = rom_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("cartridge");
-    let mut name = String::with_capacity(raw.len() + 4);
+    let mut name = String::with_capacity(raw.len() + suffix.len());
     for ch in raw.chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
             name.push(ch);
@@ -1208,8 +1323,24 @@ fn save_file_name_for_rom(rom_path: &Path) -> String {
     if name.is_empty() {
         name.push_str("cartridge");
     }
-    name.push_str(".sav");
+    name.push_str(suffix);
     name
+}
+
+fn update_window_frame(window: &MainWindow, system: &System, rotation: RotationKind) {
+    let (bw, bh) = if rotation.is_rotated() {
+        (video::SCREEN_HEIGHT as u32, video::SCREEN_WIDTH as u32)
+    } else {
+        (video::SCREEN_WIDTH as u32, video::SCREEN_HEIGHT as u32)
+    };
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(bw, bh);
+    let fb = system.framebuffer();
+    match rotation {
+        RotationKind::None => video::write_rgba(fb, buffer.make_mut_bytes()),
+        RotationKind::Right => video::write_rgba_rotated_cw(fb, buffer.make_mut_bytes()),
+        RotationKind::Left => video::write_rgba_rotated_ccw(fb, buffer.make_mut_bytes()),
+    }
+    window.set_frame(Image::from_rgba8(buffer));
 }
 
 /// Run one frame with per-scanline tracing and print a compact report of the
@@ -1296,6 +1427,14 @@ mod tests {
         assert_eq!(
             save_file_name_for_rom(Path::new("bad name!.wsc")),
             "bad_name_.wsc.sav"
+        );
+    }
+
+    #[test]
+    fn state_file_name_for_rom_uses_state_suffix() {
+        assert_eq!(
+            state_file_name_for_rom(Path::new("bad name!.wsc")),
+            "bad_name_.wsc.state"
         );
     }
 

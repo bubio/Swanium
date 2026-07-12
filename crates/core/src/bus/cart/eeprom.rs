@@ -15,6 +15,7 @@
 //! sits just below the opcode field.
 
 /// A 93Cxx-style serial EEPROM holding 16-bit words.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Eeprom {
     /// EEPROM contents, little-endian 16-bit words. Length is a multiple of 2.
     contents: Vec<u8>,

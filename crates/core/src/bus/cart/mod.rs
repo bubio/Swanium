@@ -36,6 +36,7 @@ const EEPROM_OP_WRITE: u8 = 0b0010;
 const EEPROM_OP_COMMAND: u8 = 0b0100;
 
 /// WonderSwan cartridge: ROM, optional SRAM, and bank-switch registers.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Cartridge {
     /// Cartridge ROM image.
     pub rom: Vec<u8>,

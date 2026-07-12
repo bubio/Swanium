@@ -42,6 +42,8 @@ export component MainWindow inherits Window {
     callback open-rom();
     callback open-recent(int);
     callback clear-recent();
+    callback save-state();
+    callback load-state();
     callback set-scale(int);
     callback toggle-fullscreen();
     callback set-rotation(int);
@@ -84,6 +86,19 @@ export component MainWindow inherits Window {
                     enabled: root.recent-files.length > 0;
                     activated => { root.clear-recent(); }
                 }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Save State";
+                enabled: root.has-rom;
+                shortcut: @keys(Control + S);
+                activated => { root.save-state(); }
+            }
+            MenuItem {
+                title: "Load State";
+                enabled: root.has-rom;
+                shortcut: @keys(Control + L);
+                activated => { root.load-state(); }
             }
             MenuSeparator {}
             MenuItem {

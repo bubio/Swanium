@@ -89,7 +89,7 @@ const VOICE_CHANNEL: usize = 1;
 
 /// One wave-table oscillator: walks a 32-entry / 4-bit-per-sample waveform held
 /// in WRAM, advancing one entry every `2048 - pitch` sound-clock ticks.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) struct WaveChannel {
     /// Sound-clock ticks remaining until the next sample advance.
     period_counter: u16,
@@ -175,6 +175,7 @@ impl WaveChannel {
 ///
 /// Drive it with [`Apu::tick`] in lockstep with the CPU, then drain the
 /// generated samples with [`Apu::samples`] / [`Apu::clear_samples`].
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Apu {
     channels: [WaveChannel; 4],
     /// 15-bit noise LFSR (channel 4).
@@ -714,7 +715,7 @@ fn clamp_i16(sample: i32) -> i16 {
 /// together — the reconstruction real hardware's analog output stage performs —
 /// while leaving the audio band (and its treble) essentially untouched. A single
 /// stream reconstructs at half amplitude, which [`VOICE_GAIN`] restores.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct VoiceLowPass {
     prev: i32,
 }

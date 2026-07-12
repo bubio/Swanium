@@ -34,6 +34,8 @@ const BIOS_DIR: &str = "bios";
 
 /// Directory name for cartridge SRAM/EEPROM save files.
 const SAVES_DIR: &str = "saves";
+/// Directory name for whole-machine save-state files.
+const STATES_DIR: &str = "states";
 
 fn default_scale() -> u32 {
     DEFAULT_SCALE
@@ -219,6 +221,13 @@ impl Config {
         let dirs =
             directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
         Ok(dirs.config_dir().join(SAVES_DIR))
+    }
+
+    /// Directory where whole-machine save-state files are stored.
+    pub fn states_dir() -> Result<PathBuf, SwaniumError> {
+        let dirs =
+            directories::ProjectDirs::from("", "", APP_NAME).ok_or(SwaniumError::NoConfigDir)?;
+        Ok(dirs.config_dir().join(STATES_DIR))
     }
 
     /// Path to the fixed BIOS ROM file for `kind`, or `None` when BIOS is disabled.

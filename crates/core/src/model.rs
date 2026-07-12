@@ -8,7 +8,7 @@
 //! default so every earlier phase keeps behaving identically.
 
 /// Which WonderSwan hardware variant the core emulates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum HardwareModel {
     /// Original monochrome WonderSwan (`WS`).
     #[default]

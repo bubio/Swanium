@@ -50,7 +50,7 @@ const FLAG_RTC: u8 = 0x04;
 ///
 /// The bank-register width differs between the two Bandai mappers: see
 /// [`super::Cartridge`] for how each one resolves a physical ROM/SRAM address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Mapper {
     /// Bandai 2001: 8-bit bank registers (the common mono/early-Color mapper).
     Bandai2001,
@@ -77,7 +77,7 @@ impl Mapper {
 /// memory map (0x10000–0x1FFFF); EEPROM is a serial device accessed through I/O
 /// ports. The capacity drives both allocation and (for EEPROM) the command
 /// address width.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SaveType {
     /// No persistent save.
     None,
@@ -117,7 +117,7 @@ impl SaveType {
 }
 
 /// Parsed WonderSwan cartridge header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CartridgeHeader {
     /// Publisher (maker) ID.
     pub publisher: u8,

@@ -5098,8 +5098,11 @@ dependencies = [
 name = "swanium-core"
 version = "1.0.0"
 dependencies = [
+ "bincode",
  "common",
  "criterion",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

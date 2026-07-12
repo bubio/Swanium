@@ -4,7 +4,7 @@
 /// 0=AL,1=CL,2=DL,3=BL,4=AH,5=CH,6=DH,7=BH.
 /// 16-bit register indices follow the same encoding order:
 /// 0=AX,1=CX,2=DX,3=BX,4=SP,5=BP,6=SI,7=DI.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Registers {
     pub ax: u16,
     pub cx: u16,

@@ -36,7 +36,7 @@ const LONG_REP_INTERRUPT_RETURN_CYCLE_THRESHOLD: u32 = 256;
 /// which materially affects interrupt-heavy games; per-clock (prefetch-queue
 /// exact) modelling remains a later-phase refinement (see
 /// docs/dev/DevelopmentPlan.md "サイクル精度設計の考慮点").
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     pub regs: Registers,
     pub flags: Flags,
@@ -63,7 +63,7 @@ pub struct Cpu {
     interrupt_return_override_ip: Option<u16>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CpuFault {
     pub opcode: u8,
     pub cs: u16,
