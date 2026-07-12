@@ -17,9 +17,10 @@
 //!
 //! The noise generator (channel 4) follows StoicGoose's `SoundChannel4`: a 15-bit
 //! LFSR with XNOR feedback (`1 ^ bit7 ^ bit_tap`), stepped every `2048 - pitch`
-//! sound-clock ticks, whose low bit drives a `0x0F`/`0x00` DAC.  The sweep-step
-//! reload uses a saturating subtraction (a deviation from WonderCrab) so a zero
-//! sweep-time register cannot underflow.
+//! sound-clock ticks while both channel 4 and noise mode are enabled, whose low
+//! bit drives a `0x0F`/`0x00` DAC.  The sweep-step reload uses a saturating
+//! subtraction (a deviation from WonderCrab) so a zero sweep-time register
+//! cannot underflow.
 //!
 //! **HyperVoice** (WonderSwan Color only) is an extra PCM source, separate from
 //! the four wave channels. The normal path expands 8-bit samples to a signed
@@ -306,6 +307,7 @@ impl Apu {
     }
 
     fn tick_silence(&mut self, cycles: u32, ports: &mut [u8]) {
+        self.fast_sweep_primed = false;
         self.voice_lp.reset();
         self.voice_level = 0;
         write_port_word(ports, SND_CH_OUT_R, 0);
@@ -499,11 +501,11 @@ impl Apu {
     fn step_noise(&mut self, ctrl: u8, ports: &mut [u8]) {
         let output_enabled = ctrl & CTRL_NOISE != 0 && ctrl & CTRL_ENABLE[3] != 0;
         let noise_ctrl = ports[SND_NOISE];
-        if noise_ctrl & NOISE_GATE == 0 {
+        if noise_ctrl & NOISE_GATE == 0 || !output_enabled {
             self.noise_active = false;
             return; // noise gate closed: hold previous state
         }
-        self.noise_active = output_enabled;
+        self.noise_active = true;
         if self.noise_counter != 0 {
             self.noise_counter -= 1;
             return;
@@ -550,7 +552,7 @@ impl Apu {
         // shifted in), kept in the 4-bit domain like the wave channels — exactly
         // StoicGoose's `(NoiseLfsr & 1) * 0x0F`.
         self.noise_output = if self.lfsr & 1 != 0 { 0x0F } else { 0x00 };
-        self.noise_active = output_enabled;
+        self.noise_active = true;
     }
 }
 

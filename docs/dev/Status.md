@@ -119,7 +119,8 @@ and GDMA source gating/timing: SRAM sources abort, and source `0x80000` in the
 slow-ROM window aborts while port `0xA0` bit 3 (`SYSTEM_CTRL1_ROM_WAIT`) is
 set; upper linear ROM, fast-ROM, and IRAM sources still complete when allowed.
 The GDMA timing oracle also pins the APU fast-sweep test counter used by the
-ROM's cycle-count harness and the CPU-visible GDMA stall formula of
+ROM's cycle-count harness, including re-priming when sweep is disabled through
+the silent fast path, and the CPU-visible GDMA stall formula of
 `5 + transferred_bytes` for started transfers, with zero extra stall for
 zero-length and immediately-aborted SRAM-source cases.
 The SDMA oracle pins 20-bit source/length masks, ROM/IRAM/SRAM source access,
@@ -129,7 +130,9 @@ masking unused bit 5.
 The mono sound quirks oracle pins CPU-visible APU output readback ports
 `0x96`/`0x98`/`0x9A`, LFSR readback through `0x92`/`0x93`, voice readback while
 the channel enable bit is clear, channel counter behavior across alternate
-voice/sweep/noise modes, and immediate `0x8E` noise-reset self-clear.
+voice/sweep/noise modes, the rule that the noise LFSR advances only when
+`CH4_ENABLE` and `CH4_NOISE` are both set, and immediate `0x8E` noise-reset
+self-clear.
 The ws-test-suite RTC mapper oracle pins the generated RTC footer signal
 (`0x0C` bit 2 / flags value `0x04` together with non-zero byte `0x0D`), status-port
 ready/busy bits, command payload lengths for `0x10`-`0x1B`, unsupported-command

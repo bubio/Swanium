@@ -422,19 +422,6 @@ fn noise_advances_lfsr_into_random_port() {
 }
 
 #[test]
-fn noise_gate_advances_random_port_without_noise_output_enabled() {
-    // Some games use the random readback as an RNG source without routing
-    // channel 4 through the noise DAC. The LFSR gate controls the random port;
-    // 0x90 only controls whether noise replaces channel 4's audible output.
-    let (mut ports, wram) = blank();
-    ports[0x90] = CTRL_ENABLE[3];
-    ports[SND_NOISE] = 0x10; // gate open, tap 0
-    let mut apu = Apu::new();
-    apu.tick(1, &wram, &mut ports, false);
-    assert_eq!(ports[SND_RANDOM], 1);
-}
-
-#[test]
 fn noise_gate_closed_holds_lfsr() {
     // Gate bit (0x10) clear: the LFSR must not advance.
     let (mut ports, wram) = blank();
@@ -443,6 +430,27 @@ fn noise_gate_closed_holds_lfsr() {
     let mut apu = Apu::new();
     apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_RANDOM], 0);
+}
+
+#[test]
+fn noise_lfsr_requires_channel4_and_noise_mode() {
+    // ws-test-suite `mono/sound/quirks.ws` verifies that the CPU-visible LFSR
+    // readback is held unless both CH4_ENABLE and CH4_NOISE are set.
+    let (mut ports, wram) = blank();
+    ports[SND_NOISE] = NOISE_GATE;
+    let mut apu = Apu::new();
+
+    ports[0x90] = CTRL_ENABLE[3];
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(ports[SND_RANDOM], 0);
+
+    ports[0x90] = CTRL_NOISE;
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(ports[SND_RANDOM], 0);
+
+    ports[0x90] = CTRL_ENABLE[3] | CTRL_NOISE;
+    apu.tick(1, &wram, &mut ports, false);
+    assert_eq!(ports[SND_RANDOM], 1);
 }
 
 #[test]
@@ -544,6 +552,30 @@ fn fast_sweep_test_mode_ticks_every_cycle() {
     ports[SND_SWEEP_TIME] = 0;
     set_pitch(&mut ports, 2, 0);
     let mut apu = Apu::new();
+    apu.tick(6, &wram, &mut ports, false);
+    assert_eq!(pitch_of(&ports, 2), 5);
+}
+
+#[test]
+fn fast_sweep_test_mode_reprimes_after_silent_disable() {
+    // The ws-test-suite GDMA timing ROM uses fast sweep as a cycle counter,
+    // disabling channel 3 between measurements. When SND_CH_CTRL=0, the APU
+    // takes the silent fast path, which must still clear the fast-sweep primer.
+    let (mut ports, wram) = blank();
+    ports[SND_TEST] = SND_TEST_FAST_SWEEP;
+    ports[SND_SWEEP_VALUE] = 1;
+    ports[SND_SWEEP_TIME] = 0;
+    let mut apu = Apu::new();
+
+    ports[0x90] = CTRL_SWEEP | CTRL_ENABLE[2];
+    apu.tick(6, &wram, &mut ports, false);
+    assert_eq!(pitch_of(&ports, 2), 5);
+
+    ports[0x90] = 0;
+    apu.tick(1, &wram, &mut ports, false);
+
+    set_pitch(&mut ports, 2, 0);
+    ports[0x90] = CTRL_SWEEP | CTRL_ENABLE[2];
     apu.tick(6, &wram, &mut ports, false);
     assert_eq!(pitch_of(&ports, 2), 5);
 }
