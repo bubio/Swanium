@@ -493,9 +493,20 @@ impl Bus {
         self.on_hblank();
     }
 
-    /// Capture the sprite table for the upcoming frame.
-    pub(crate) fn latch_sprites(&mut self) {
-        self.ppu.latch_sprites(&self.wram, &self.ports);
+    /// Capture an initial sprite table only if no frame-latched table exists.
+    pub(crate) fn latch_sprites_if_needed(&mut self) {
+        self.ppu.latch_sprites_if_needed(&self.wram, &self.ports);
+    }
+
+    /// Capture sprite attributes near the end of the visible frame for use on
+    /// the next frame.
+    pub(crate) fn capture_next_frame_sprites(&mut self) {
+        self.ppu.capture_next_frame_sprites(&self.wram, &self.ports);
+    }
+
+    /// Make the captured next-frame sprite attributes active.
+    pub(crate) fn promote_next_frame_sprites(&mut self) {
+        self.ppu.promote_next_frame_sprites();
     }
 
     /// Whether the PPU should render in WonderSwan Color mode: the emulated
@@ -507,6 +518,37 @@ impl Bus {
     /// without it, a Color title must set the bit itself.)
     fn color_rendering_enabled(&self) -> bool {
         self.model.is_color() && (self.ports[0x60] & 0x80 != 0)
+    }
+
+    fn clock_tower_trace_enabled() -> bool {
+        std::env::var_os("SWANIUM_CT_TRACE").is_some()
+    }
+
+    fn trace_clock_tower_io_write(&self, port: u8, value: u8) {
+        if !Self::clock_tower_trace_enabled() {
+            return;
+        }
+        if matches!(port, 0x04..=0x06) {
+            eprintln!(
+                "ct_trace line={} io[{port:02x}]={value:02x} prev={:02x}",
+                self.ports[0x02], self.ports[port as usize]
+            );
+        }
+    }
+
+    fn trace_clock_tower_wram_write(&self, addr: u32, value: u8) {
+        if !Self::clock_tower_trace_enabled() {
+            return;
+        }
+        let active_oam = ((self.ports[0x04] as u32) & 0x3F) << 9;
+        let in_known_oam = (0x0E00..0x1000).contains(&addr) || (0x1600..0x1800).contains(&addr);
+        let tail_offset = addr & 0x1FF;
+        if in_known_oam && tail_offset >= 100 * 4 {
+            eprintln!(
+                "ct_trace line={} wram[{addr:04x}]={value:02x} active_oam={active_oam:04x} spr_base={:02x}",
+                self.ports[0x02], self.ports[0x04]
+            );
+        }
     }
 
     fn hypervoice_enabled(&self) -> bool {
@@ -865,7 +907,10 @@ impl MemoryBus for Bus {
 
     fn write_u8(&mut self, addr: u32, value: u8) {
         match addr & 0xF_FFFF {
-            a @ 0x00000..=0x0FFFF => self.write_wram(a, value),
+            a @ 0x00000..=0x0FFFF => {
+                self.trace_clock_tower_wram_write(a, value);
+                self.write_wram(a, value);
+            }
             a @ 0x10000..=0x1FFFF => self.cart.write_sram(a, value),
             _ => {} // ROM is read-only
         }
@@ -1015,6 +1060,7 @@ impl MemoryBus for Bus {
     }
 
     fn write_io(&mut self, port: u8, value: u8) {
+        self.trace_clock_tower_io_write(port, value);
         match port {
             // DISP_CTRL: layer/window enable bits; upper bits are not writable.
             0x00 => self.ports[0x00] = value & 0x3F,

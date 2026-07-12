@@ -147,7 +147,14 @@ pub struct Ppu {
     /// frame. Games often rewrite OAM over several CPU instructions; rendering
     /// directly from live WRAM can then combine old and new body parts.
     latched_sprites: Box<[SpriteEntry]>,
+    /// Sprite attributes captured near the end of the current visible frame
+    /// and promoted at the frame boundary. WonderSwan evaluates sprites for
+    /// the next frame before VBlank-side register changes are complete.
+    #[serde(skip, default = "default_sprite_buffer")]
+    next_sprites: Box<[SpriteEntry]>,
     latched_sprite_count: usize,
+    #[serde(skip)]
+    next_sprite_count: usize,
     sprite_latch_valid: bool,
 }
 
@@ -164,7 +171,9 @@ impl Ppu {
             framebuffer: vec![0u16; FRAMEBUFFER_LEN].into_boxed_slice(),
             current_line: 0,
             latched_sprites: vec![SpriteEntry::default(); SPRITE_TABLE_LEN].into_boxed_slice(),
+            next_sprites: vec![SpriteEntry::default(); SPRITE_TABLE_LEN].into_boxed_slice(),
             latched_sprite_count: 0,
+            next_sprite_count: 0,
             sprite_latch_valid: false,
         }
     }
@@ -200,6 +209,36 @@ impl Ppu {
             self.latched_sprites[i] = SpriteEntry::decode(wram, oam_base + idx * 4);
         }
         self.latched_sprite_count = count;
+        self.sprite_latch_valid = true;
+    }
+
+    /// Ensure the first rendered frame has a valid sprite table without
+    /// overriding the end-of-frame capture used by subsequent frames.
+    pub fn latch_sprites_if_needed(&mut self, wram: &[u8], ports: &[u8]) {
+        if !self.sprite_latch_valid {
+            self.latch_sprites(wram, ports);
+        }
+    }
+
+    /// Capture the sprite table that will become active on the next frame.
+    pub fn capture_next_frame_sprites(&mut self, wram: &[u8], ports: &[u8]) {
+        let oam_base = ((ports[SPR_BASE] as usize) & 0x3F) << 9;
+        let first = ports[SPR_FIRST] as usize;
+        let count = (ports[SPR_COUNT] as usize).min(SPRITE_TABLE_LEN);
+
+        for i in 0..count {
+            let idx = (first + i) & (SPRITE_TABLE_LEN - 1);
+            self.next_sprites[i] = SpriteEntry::decode(wram, oam_base + idx * 4);
+        }
+        self.next_sprite_count = count;
+    }
+
+    /// Promote the end-of-visible-frame sprite capture for the next frame.
+    pub fn promote_next_frame_sprites(&mut self) {
+        for i in 0..self.next_sprite_count {
+            self.latched_sprites[i] = self.next_sprites[i];
+        }
+        self.latched_sprite_count = self.next_sprite_count;
         self.sprite_latch_valid = true;
     }
 
@@ -305,6 +344,10 @@ impl Ppu {
         }
         self.current_line = line;
     }
+}
+
+fn default_sprite_buffer() -> Box<[SpriteEntry]> {
+    vec![SpriteEntry::default(); SPRITE_TABLE_LEN].into_boxed_slice()
 }
 
 /// Which background screen layer is being sampled.
@@ -698,8 +741,8 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
     }
 }
 
-/// Filter the latched sprite table into `out`, keeping (in table order,
-/// i.e. priority order) only the sprites whose 8-pixel-tall box covers `line`.
+/// Filter the latched sprite table into `out`, keeping table order for the
+/// hardware's scanline sprite limit.
 /// Collection stops after 32 matching sprites, matching the hardware's
 /// per-scanline overflow behavior: later OAM entries on that line are ignored
 /// even if earlier entries are transparent at a given pixel.
@@ -772,8 +815,8 @@ fn sample_sprite_pixel<R: PaletteResolver>(
         } else {
             dx
         };
-        // Sprite attributes are frame-latched, but tile pixels are fetched
-        // from WRAM at draw time.
+        // Sprite attributes are frame-latched; tile pixels are fetched from
+        // WRAM at draw time.
         let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
         let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
         if resolver.transparent(palette, pixel) {

@@ -177,7 +177,7 @@ impl System {
         // Advance the cartridge RTC (if any) off the emulated clock, one frame's
         // worth of master-clock cycles — keeps timekeeping deterministic.
         self.bus.tick_rtc(CYCLES_PER_FRAME);
-        self.bus.latch_sprites();
+        self.bus.latch_sprites_if_needed();
         for line in 0..SCANLINES_PER_FRAME {
             let budget = CYCLES_PER_SCANLINE.saturating_sub(self.cycle_carry);
             // Keep CPU and APU buckets exclusive: APU ticking happens inside
@@ -202,6 +202,9 @@ impl System {
             // profiler's `dma_ns` bucket stays zero.
 
             if line < VISIBLE_SCANLINES {
+                if line == VISIBLE_SCANLINES - 2 {
+                    self.bus.capture_next_frame_sprites();
+                }
                 if let Some(trace) = trace.as_deref_mut() {
                     trace.push(ScanlineTrace {
                         line: line as u8,
@@ -230,6 +233,7 @@ impl System {
                 self.service_pending_rep_irq_after_scanline_event();
             }
         }
+        self.bus.promote_next_frame_sprites();
 
         #[cfg(feature = "profiling")]
         {

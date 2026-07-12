@@ -531,6 +531,20 @@ fn setup_single_sprite(word: u16, y: u8, x: u8, row0: (u8, u8)) -> (Vec<u8>, [u8
 }
 
 #[test]
+fn promoted_next_frame_sprites_use_end_of_visible_frame_capture() {
+    let (mut wram, ports) = setup_single_sprite(1, 0, 0, (0b1000_0000, 0));
+    let mut ppu = Ppu::new();
+
+    ppu.capture_next_frame_sprites(&wram, &ports);
+    wram[0x0203] = 8; // VBlank-side OAM change after sprite evaluation.
+    ppu.promote_next_frame_sprites();
+    ppu.render_scanline(0, &wram, &ports, &MonoPaletteResolver);
+
+    assert_eq!(ppu.framebuffer()[0], grey(1));
+    assert_ne!(ppu.framebuffer()[8], grey(1));
+}
+
+#[test]
 fn sprite_renders_pixel_at_its_position() {
     // sprite tile 1, x=0 y=0, pixel at tile x0 = 1
     let (wram, ports) = setup_single_sprite(1, 0, 0, (0b1000_0000, 0b0000_0000));
