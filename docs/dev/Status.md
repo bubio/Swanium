@@ -286,7 +286,9 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
   File ▸ Open ROM… / Open Recent (dynamic history) / Clear History / Settings… / Quit;
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
-  Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`). Menu
+  Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`). ROM load automatically
+  maps cartridge-footer vertical orientation to `RotationKind::Left` and returns horizontal
+  cartridges to normal orientation. Menu
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
   About is platform-aware: macOS uses the OS-standard application-menu About item, while
   Windows/Linux keep the Slint Help ▸ About dialog.

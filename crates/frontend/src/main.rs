@@ -1110,6 +1110,12 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
                 sys.set_model(model);
             }
             load_cartridge_save(path, &mut sys);
+            app.config.borrow_mut().rotation = if sys.cartridge_is_vertical() {
+                RotationKind::Left
+            } else {
+                RotationKind::None
+            };
+            apply_view(window, &app.config.borrow());
             let kind = if sys.model().is_color() {
                 "Color"
             } else {

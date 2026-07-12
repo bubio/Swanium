@@ -324,6 +324,11 @@ impl System {
         self.bus.model()
     }
 
+    /// Whether the cartridge footer marks this ROM as a vertical-orientation game.
+    pub fn cartridge_is_vertical(&self) -> bool {
+        self.bus.cart().header().is_some_and(|h| h.vertical)
+    }
+
     /// Override the emulated hardware model (Mono / Color / Crystal).
     pub fn set_model(&mut self, model: HardwareModel) {
         self.bus.set_model(model);
@@ -485,6 +490,17 @@ mod tests {
     fn framebuffer_has_full_screen_size() {
         let system = System::new(halting_rom());
         assert_eq!(system.framebuffer().len(), 224 * 144);
+    }
+
+    #[test]
+    fn cartridge_is_vertical_reflects_footer_orientation_flag() {
+        let mut rom = halting_rom();
+        let flags_offset = rom.len() - 16 + 0x0C;
+        rom[flags_offset] = 0x01;
+
+        let system = System::from_rom(rom);
+
+        assert!(system.cartridge_is_vertical());
     }
 
     #[test]
