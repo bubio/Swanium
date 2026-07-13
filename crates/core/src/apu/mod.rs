@@ -301,8 +301,12 @@ impl Apu {
             self.tick_wave_only(cycles, wram, ports);
             return;
         }
+        let mut samples = [0u8; 4];
         for _ in 0..cycles {
-            self.step(wram, ports, color);
+            samples = self.step(wram, ports, color);
+        }
+        if cycles != 0 {
+            self.update_output_ports(&samples, ports[0x90], ports);
         }
     }
 
@@ -371,7 +375,7 @@ impl Apu {
     }
 
     /// Advance the APU by a single sound-clock tick.
-    fn step(&mut self, wram: &[u8], ports: &mut [u8], color: bool) {
+    fn step(&mut self, wram: &[u8], ports: &mut [u8], color: bool) -> [u8; 4] {
         let ctrl = ports[0x90];
         self.step_sweep(ctrl, ports);
         self.step_noise(ctrl, ports);
@@ -390,8 +394,6 @@ impl Apu {
         if self.noise_active {
             samples[3] = self.noise_output;
         }
-        self.update_output_ports(&samples, ctrl, ports);
-
         self.sample_accum += 1;
         if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
             self.sample_accum = 0;
@@ -407,6 +409,7 @@ impl Apu {
             self.samples.push(left);
             self.samples.push(right);
         }
+        samples
     }
 
     /// The channel-2 voice (8-bit PCM) contribution.

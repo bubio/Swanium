@@ -22,10 +22,13 @@ workspace `[profile.release]`/`[profile.bench]` use `lto = "thin"` and
 ## 1. In-core frame profiler (subsystem split)
 
 Gated behind the `profiling` feature so a normal build has **zero** overhead and
-stays fully deterministic (it reads wall-clock `Instant` only when the feature
-is on, and never influences emulated state — see `crates/core/src/profile.rs`).
-CPU/APU/PPU/DMA buckets are reported as exclusive wall-clock buckets; the small
-unattributed remainder is frame-driver overhead and measurement overhead.
+stays fully deterministic. When enabled it reads wall-clock `Instant` around
+fine-grained work, including CPU/APU work at instruction boundaries; this never
+influences emulated state, but the measurement cost can materially slow the
+workload and distort absolute frame time (see `crates/core/src/profile.rs`).
+Treat CPU/APU/PPU/DMA percentages as orientation, not as a normal-release timing
+baseline. Use Criterion without `profiling` for frame time and an external
+sampling profiler for function-level attribution.
 
 ```sh
 # Synthetic ROM:
@@ -51,7 +54,8 @@ To read the split programmatically, build with `--features profiling` and call
 
 > Note: the synthetic ROM's CPU is a trivial spin loop, so its CPU share is much
 > lower than a real game's. Use a real ROM via `SWANIUM_BENCH_ROM` for a
-> representative CPU/PPU/APU balance.
+> representative CPU/PPU/APU balance. Very fast synthetic workloads are also
+> the most distorted by the per-instruction timing probes.
 
 ## 2. Criterion benchmarks (regression tracking)
 

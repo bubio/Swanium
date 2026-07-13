@@ -269,6 +269,30 @@ fn output_ports_track_current_digital_mix() {
 }
 
 #[test]
+fn batched_full_path_matches_single_cycle_output_ports() {
+    let (mut batched_ports, mut wram) = blank();
+    write_waveform(&mut wram, 0, [0x21; 16]);
+    batched_ports[0x90] = CTRL_ENABLE[0] | CTRL_ENABLE[2] | CTRL_SWEEP;
+    batched_ports[SND_CH_VOL] = 0x11;
+    batched_ports[SND_CH_VOL + 2] = 0x22;
+    set_pitch(&mut batched_ports, 0, 0x7ff);
+    set_pitch(&mut batched_ports, 2, 0x7fe);
+    let mut stepped_ports = batched_ports;
+    let mut batched = Apu::new();
+    let mut stepped = Apu::new();
+
+    batched.tick(37, &wram, &mut batched_ports, false);
+    for _ in 0..37 {
+        stepped.tick(1, &wram, &mut stepped_ports, false);
+    }
+
+    assert_eq!(
+        &batched_ports[SND_CH_OUT_R..SND_CH_OUT_LR + 2],
+        &stepped_ports[SND_CH_OUT_R..SND_CH_OUT_LR + 2]
+    );
+}
+
+#[test]
 fn mix_sums_two_channels_on_left() {
     // ch1 sample 5 × vol 1 + ch2 sample 5 × vol 2 = raw 15, scaled = 480.
     let mut ports = [0u8; 0x100];

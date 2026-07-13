@@ -413,12 +413,20 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   fully deterministic) accumulates exclusive per-subsystem wall-clock time (CPU / PPU / APU / DMA)
   inside `System::drive_frame`; read it via `System::profile_snapshot()` (`crates/core/src/profile.rs`).
   The `profile` example (`cargo run -p swanium-core --features profiling --example profile --release`)
-  prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM.
+  prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM. The enabled profiler's
+  per-instruction timing materially perturbs fast workloads, so use its percentages only for
+  subsystem orientation and use Criterion/external sampling for absolute frame time.
 - **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`
   plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
   Use `cargo bench -p swanium-core --bench frame --no-run` for a build-only tooling check.
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
+- **Steady-state core hot paths (2026-07-14)** — the disabled Clock Tower trace flag is cached once;
+  full-path APU output-register readback is committed once per `Apu::tick` boundary instead of each
+  sound clock; background rows are processed in tile spans; and sprites are rasterized once into
+  OAM-order/priority-preserving scanline buffers. On macOS ARM64 with the local Wizardry WSC ROM,
+  normal release `run_frame` improved from about 1.0125 ms to 0.3680 ms (about 64% less time, 2.75x
+  throughput). CPU memory-map restructuring and event-driven APU work remain deferred as higher-risk.
 
 ## Release tooling — macOS App Bundle
 

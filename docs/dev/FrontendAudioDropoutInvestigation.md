@@ -217,11 +217,37 @@ fn clock_tower_trace_enabled() -> bool {
 }
 ```
 
-This check is called from hot write paths (`trace_clock_tower_io_write` /
-`trace_clock_tower_wram_write`). Even when tracing is disabled, reading the
-process environment from emulated memory/I/O writes is avoidable overhead. Cache
-the result once (for example with `std::sync::OnceLock<bool>`) or compile-gate
-the trace helper so the normal emulator path does not call `std::env::var_os`.
+This check was called from hot write paths (`trace_clock_tower_io_write` /
+`trace_clock_tower_wram_write`). Even when tracing was disabled, reading the
+process environment from emulated memory/I/O writes added avoidable overhead.
+As of 2026-07-14 the result is cached with `std::sync::OnceLock<bool>`, so the
+environment is read only on the first trace check.
+
+### Core optimization follow-up (2026-07-14)
+
+The original Linux number above came from the in-core `profiling` feature. A
+follow-up on macOS ARM64 showed that the profiler's per-instruction `Instant`
+measurements materially perturb this workload: with the same local Wizardry ROM,
+normal release Criterion measured about 1.0125 ms/frame before the changes while
+the profiler-enabled example measured about 1.243 ms/frame. The synthetic ROM
+was affected much more strongly. Consequently the profiler remains useful for
+subsystem orientation, but its frame time must not be treated as normal release
+throughput.
+
+Four low-risk steady-state changes were then applied:
+
+- cache the Clock Tower trace environment flag once;
+- update APU output-register readback once at each `Apu::tick` boundary instead
+  of every sound clock (sample generation and `tick(1)` SDMA behavior remain
+  unchanged);
+- process background scanlines by at-most-eight-pixel tile spans;
+- rasterize sprites once per scanline into buffers that preserve OAM order and
+  front/behind-SCR2 priority.
+
+Normal release Criterion after all four changes measured 367.24–368.68 us/frame
+on the same macOS machine and ROM, about 64% less time than the 1.0125 ms baseline
+(about 2.75x throughput). This is a core-only result and does not remove the need
+to fix Linux GUI/audio scheduling.
 
 ## Interpretation
 
@@ -231,10 +257,13 @@ At ~40 GUI FPS, only about 53% of the required audio batches are generated per
 second. The ring buffer cannot compensate for sustained underproduction; it can
 only absorb short jitter.
 
-Core-only release is already near the target, but with little margin. Any
-additional GUI cost from Slint image upload, scaling, compositing, status updates,
-input polling, or window-system overhead can push total throughput below the
-required cadence.
+The follow-up macOS Criterion result shows that the normal core has substantial
+headroom on that machine after the steady-state fixes. The original Linux
+profiler result is not a reliable absolute release baseline because the timing
+probes perturb the workload. Linux GUI cost from Slint image upload, scaling,
+compositing, status updates, input polling, or window-system synchronization can
+still push total throughput below the required cadence and must be measured
+separately on the affected host.
 
 The GUI sampling makes this more specific for the tested Linux PC:
 
@@ -243,15 +272,16 @@ The GUI sampling makes this more specific for the tested Linux PC:
 - software backend: samples move to core PPU work and software image rendering;
 - process CPU usage is low enough that a pure CPU bottleneck is unlikely for the
   default backend run;
-- there is also at least one clear core hot-path cleanup (`SWANIUM_CT_TRACE`
-  environment-variable polling).
+- the clear core hot-path cleanup (`SWANIUM_CT_TRACE` environment-variable
+  polling) has since been completed along with the follow-up optimizations above.
 
 ## Recommended fix order
 
-### 1. Remove known core hot-path overhead
+### 1. Remove known core hot-path overhead (done 2026-07-14)
 
-Cache or compile-gate `SWANIUM_CT_TRACE` so normal memory/I/O writes do not read
-the environment. This is a low-risk cleanup independent of the GUI/backend work.
+`SWANIUM_CT_TRACE` is now cached once, so normal memory/I/O writes no longer read
+the environment repeatedly. The same core pass also batched APU output readback
+and PPU tile/sprite scanline work as described above.
 
 ### 2. Add frontend timing instrumentation
 
@@ -309,9 +339,9 @@ This preserves audio production better than the current “one run = one draw”
 path. The visual result may skip frames under load, but audio should crackle
 less because sound generation is prioritized over drawing every frame.
 
-Important constraint: because core-only release measured ~74 FPS on the tested
-ROM, frame skip can only recover time spent outside the core frame. It will not
-fix titles where the core itself cannot reach real time.
+Important constraint: frame skip can only recover time spent outside skipped
+draws. It will not fix titles or hosts where normal (non-profiled) core execution
+itself cannot reach real time.
 
 ### 5. Medium-term fix: decouple emulation/audio from GUI rendering
 
@@ -339,18 +369,21 @@ need careful synchronization for:
 - save RAM flushes,
 - framebuffer ownership/copying.
 
-### 6. Performance work remains useful
+### 6. Continue measurement-driven performance work
 
-The headless release profile for this ROM is very close to the 75 FPS target, so
-optimization still matters. The profiler shows CPU and APU as the largest core
+The 2026-07-14 steady-state pass produced a large normal-release improvement.
+The enabled profiler previously identified CPU and APU as the largest core
 buckets for this ROM:
 
 ```text
 CPU 53.9%, APU 29.5%, PPU 16.2%
 ```
 
-Future optimization should use `docs/dev/Profiling.md` and measure before/after
-with the same ROM or a license-clean equivalent.
+These percentages are observer-affected and should only guide the next external
+profile. Future optimization should use `docs/dev/Profiling.md` and measure
+before/after with normal release Criterion on the same ROM or a license-clean
+equivalent. CPU memory-map restructuring and event-driven APU scheduling were
+deliberately deferred because they carry more cycle-accuracy risk.
 
 ## Related but separate issue: perceived volume
 

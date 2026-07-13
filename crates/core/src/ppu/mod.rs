@@ -56,6 +56,7 @@ const SCR2_SCROLL_Y: usize = 0x13;
 
 /// 2bpp tile data (monochrome and WonderSwan Color 2bpp) lives at a fixed WRAM
 /// offset; each tile is 16 bytes (8 rows × 2 planar bytes), 2 bits per pixel.
+const TILE_SIZE: usize = 8;
 const TILE_DATA_BASE: usize = 0x2000;
 const TILE_BYTES: usize = 16;
 /// WonderSwan Color 4bpp tile data lives at a higher fixed offset; each tile is
@@ -83,7 +84,7 @@ const SPR_COUNT: usize = 0x06; // number of sprites to process (0–128)
 /// Sprites use palettes 8–15, so the entry's 3-bit palette is offset by 8.
 const SPRITE_PALETTE_OFFSET: u8 = 8;
 /// Sprite tiles are 8×8 like background tiles.
-const SPRITE_SIZE: usize = 8;
+const SPRITE_SIZE: usize = TILE_SIZE;
 /// The sprite attribute table holds up to 128 four-byte entries.
 const SPRITE_TABLE_LEN: usize = 128;
 /// Hardware only evaluates the first 32 sprites that overlap a scanline.
@@ -309,6 +310,21 @@ impl Ppu {
         if dc.scr2_enabled {
             fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
         }
+        let mut sprite_any_line = [None; SCREEN_WIDTH];
+        let mut sprite_front_line = [None; SCREEN_WIDTH];
+        if dc.sprites_enabled {
+            fill_sprite_lines(
+                ports,
+                wram,
+                &dc,
+                line_sprites,
+                mode,
+                line,
+                resolver,
+                &mut sprite_any_line,
+                &mut sprite_front_line,
+            );
+        }
         for x in 0..SCREEN_WIDTH {
             let mut color = backdrop;
             if dc.scr1_enabled {
@@ -325,17 +341,12 @@ impl Ppu {
                 }
             }
 
-            if let Some(px) = sample_sprite_pixel(
-                ports,
-                wram,
-                &dc,
-                line_sprites,
-                mode,
-                line,
-                x,
-                scr2_color.is_some(),
-                resolver,
-            ) {
+            let sprite_color = if scr2_color.is_some() {
+                sprite_front_line[x]
+            } else {
+                sprite_any_line[x]
+            };
+            if let Some(px) = sprite_color {
                 color = px;
             } else if let Some(px) = scr2_color {
                 color = px;
@@ -638,36 +649,33 @@ fn fill_background_line(
     let map_row = (bg_y >> 3) as usize;
     let base = map_base(ports, layer);
 
-    // Cached state for the current tile column; recomputed only when the span
-    // changes. `cur_col = usize::MAX` forces a load on the first pixel.
-    let mut cur_col = usize::MAX;
-    let mut palette = 0u8;
-    let mut hflip = false;
-    let mut row_bytes = [0u8; 4];
-
-    for (x, slot) in out.iter_mut().enumerate() {
+    let mut x = 0;
+    while x < SCREEN_WIDTH {
         let bg_x = (x as u16 + scroll_x as u16) & BG_WRAP_MASK;
         let col = (bg_x >> 3) as usize;
-        if col != cur_col {
-            cur_col = col;
-            let entry = tilemap_entry(wram, base, col, map_row);
-            palette = entry.palette;
-            hflip = entry.hflip;
-            let ty = if entry.vflip {
-                7 - (bg_y & 7) as usize
-            } else {
-                (bg_y & 7) as usize
-            };
-            row_bytes = mode.read_row(wram, mode.bg_tile(&entry), ty);
-        }
-        let mut tx = (bg_x & 7) as usize;
-        if hflip {
-            tx = 7 - tx;
-        }
-        *slot = BgSample {
-            pixel: mode.pixel_in_row(&row_bytes, tx),
-            palette,
+        let entry = tilemap_entry(wram, base, col, map_row);
+        let ty = if entry.vflip {
+            7 - (bg_y & 7) as usize
+        } else {
+            (bg_y & 7) as usize
         };
+        let row_bytes = mode.read_row(wram, mode.bg_tile(&entry), ty);
+        let tile_x = (bg_x & 7) as usize;
+        let span = (TILE_SIZE - tile_x).min(SCREEN_WIDTH - x);
+
+        for offset in 0..span {
+            let source_x = tile_x + offset;
+            let tx = if entry.hflip {
+                TILE_SIZE - 1 - source_x
+            } else {
+                source_x
+            };
+            out[x + offset] = BgSample {
+                pixel: mode.pixel_in_row(&row_bytes, tx),
+                palette: entry.palette,
+            };
+        }
+        x += span;
     }
 }
 
@@ -770,17 +778,17 @@ fn sprite_axis_delta(screen: u8, origin: u8) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sample_sprite_pixel<R: PaletteResolver>(
+fn fill_sprite_lines<R: PaletteResolver>(
     ports: &[u8],
     wram: &[u8],
     dc: &DisplayControl,
     line_sprites: &[SpriteEntry],
     mode: TileMode,
     line: u8,
-    screen_x: usize,
-    scr2_opaque: bool,
     resolver: &R,
-) -> Option<Rgb444> {
+    any: &mut [Option<Rgb444>; SCREEN_WIDTH],
+    front: &mut [Option<Rgb444>; SCREEN_WIDTH],
+) {
     for sprite in line_sprites {
         // The line ∈ [y, y+8) test was already applied by `collect_line_sprites`.
         let mut ty = sprite_axis_delta(line, sprite.y);
@@ -788,44 +796,53 @@ fn sample_sprite_pixel<R: PaletteResolver>(
             ty = SPRITE_SIZE - 1 - ty;
         }
 
-        let dx = sprite_axis_delta(screen_x as u8, sprite.x);
-        if dx >= SPRITE_SIZE {
-            continue;
+        for dx in 0..SPRITE_SIZE {
+            let screen_x = sprite.x.wrapping_add(dx as u8) as usize;
+            if screen_x >= SCREEN_WIDTH {
+                continue;
+            }
+            let need_any = any[screen_x].is_none();
+            let need_front = sprite.priority && front[screen_x].is_none();
+            if !need_any && !need_front {
+                continue;
+            }
+            // A window-attributed sprite is hidden inside the sprite window and
+            // shown outside it. Golden Axe parks the sprite window off-screen while
+            // using bit 12 on character sprites, so the opposite interpretation
+            // removes the actors while leaving backgrounds/HUD.
+            if dc.sprite_window_enabled
+                && sprite.window
+                && in_window(
+                    ports,
+                    screen_x,
+                    line,
+                    SPR_WINDOW_X1,
+                    SPR_WINDOW_Y1,
+                    SPR_WINDOW_X2,
+                    SPR_WINDOW_Y2,
+                )
+            {
+                continue;
+            }
+            let tx = if sprite.hflip {
+                SPRITE_SIZE - 1 - dx
+            } else {
+                dx
+            };
+            // Sprite attributes are frame-latched; tile pixels are fetched from
+            // WRAM at draw time.
+            let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
+            let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
+            if resolver.transparent(palette, pixel) {
+                continue;
+            }
+            let color = resolver.resolve(ports, palette, pixel);
+            if need_any {
+                any[screen_x] = Some(color);
+            }
+            if need_front {
+                front[screen_x] = Some(color);
+            }
         }
-        // A window-attributed sprite is hidden inside the sprite window and
-        // shown outside it. Golden Axe parks the sprite window off-screen while
-        // using bit 12 on character sprites, so the opposite interpretation
-        // removes the actors while leaving backgrounds/HUD.
-        if dc.sprite_window_enabled
-            && sprite.window
-            && in_window(
-                ports,
-                screen_x,
-                line,
-                SPR_WINDOW_X1,
-                SPR_WINDOW_Y1,
-                SPR_WINDOW_X2,
-                SPR_WINDOW_Y2,
-            )
-        {
-            continue;
-        }
-        let tx = if sprite.hflip {
-            SPRITE_SIZE - 1 - dx
-        } else {
-            dx
-        };
-        // Sprite attributes are frame-latched; tile pixels are fetched from
-        // WRAM at draw time.
-        let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
-        let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
-        if resolver.transparent(palette, pixel) {
-            continue;
-        }
-        if !sprite.priority && scr2_opaque {
-            continue;
-        }
-        return Some(resolver.resolve(ports, palette, pixel));
     }
-    None
 }
