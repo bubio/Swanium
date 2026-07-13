@@ -104,6 +104,125 @@ debug build, and observed roughly 40 FPS in the GUI. Therefore the actionable
 problem is not “debug is slow”; it is “the full GUI path is below the audio
 cadence even when core-only release is near the target”.
 
+### GUI runtime sampling
+
+`perf` was not available in the agent environment (`perf_event_paranoid = 3`),
+so the CI-like release GUI binary was sampled with `gdb` while running the same
+ROM. This is coarse, but it is enough to distinguish “busy in core emulation”
+from “blocked in the window/rendering stack”.
+
+Default Slint backend samples showed the main thread mostly outside the emulator
+core:
+
+```text
+Thread 1 "frontend":
+  libc syscall
+  radeonsi_dri.so
+  libGLX_mesa.so
+  <...OpenGLContext as ...OpenGLInterface>::swap_buffers
+```
+
+Other samples repeatedly showed synchronous X11/winit property queries:
+
+```text
+Thread 1 "frontend":
+  poll
+  libxcb.so
+  xcb_wait_for_reply64
+  x11rb::connection::RequestConnection::wait_for_reply_or_error
+  winit::platform_impl::linux::x11::...get_motif_hints
+  winit::platform_impl::linux::x11::window::UnownedWindow::set_decorations_inner
+  i_slint_backend_winit::winitwindowadapter::WinitWindowAdapter::update_window_properties
+```
+
+One render sample showed the expected Slint/femtovg/OpenGL path:
+
+```text
+Thread 1 "frontend":
+  radeonsi_dri.so
+  femtovg::renderer::opengl::OpenGl::clear_rect
+  femtovg::Canvas<T>::flush_to_output
+  i_slint_renderer_femtovg::FemtoVGRenderer<B>::render
+  i_slint_backend_winit::winitwindowadapter::WinitWindowAdapter::draw
+```
+
+CPU usage for a 20 second default-backend GUI run was also low:
+
+```text
+real 20.11
+user 6.61
+sys  0.56
+```
+
+That is roughly 36% CPU, so the process is not simply saturating a CPU core with
+emulation work. The samples point at OpenGL/Mesa/X11 synchronization and window
+property work as major contributors in this environment.
+
+Running the same binary with Slint's software backend changed the sampled stack:
+
+```sh
+SLINT_BACKEND=winit-software ./target/release/frontend \
+  '/home/bubio/ROMs/WonderSwan/Wizardry_-_Scenario_1_-_Kyounou_no_Shiren_Jou_(J)_[M][!].wsc'
+```
+
+Software-backend samples no longer showed Mesa/radeonsi `swap_buffers` as the
+main-thread blocker. They instead landed in core and software image rendering:
+
+```text
+Thread 1 "frontend":
+  swanium_core::system::System::drive_frame
+  swanium_core::bus::Bus::render_scanline
+  swanium_core::ppu::sample_sprite_pixel
+```
+
+and:
+
+```text
+Thread 1 "frontend":
+  i_slint_renderer_software::RenderToBuffer<B>::foreach_ranges
+  i_slint_renderer_software::SceneBuilder<T>::draw_image_impl
+  i_slint_core::items::ImageItemVTable::render
+```
+
+CPU usage for a 20 second software-backend GUI run was similar:
+
+```text
+real 20.03
+user 6.98
+sys  0.40
+```
+
+This comparison strongly suggests the default Linux Slint backend path
+(femtovg/OpenGL on Mesa/radeonsi plus X11 property synchronization) is a major
+runtime factor on this PC. The software backend is not necessarily faster, but
+it removes one class of OpenGL/Mesa stalls and is a useful diagnostic/compatibility
+option.
+
+### Core hot-path issue found during sampling
+
+One software-backend sample landed in:
+
+```text
+std::env::_var_os
+<swanium_core::bus::Bus as swanium_core::cpu::bus::MemoryBus>::write_u8
+swanium_core::cpu::Cpu::execute
+swanium_core::system::System::drive_frame
+```
+
+The source is the Clock Tower debug trace gate:
+
+```rust
+fn clock_tower_trace_enabled() -> bool {
+    std::env::var_os("SWANIUM_CT_TRACE").is_some()
+}
+```
+
+This check is called from hot write paths (`trace_clock_tower_io_write` /
+`trace_clock_tower_wram_write`). Even when tracing is disabled, reading the
+process environment from emulated memory/I/O writes is avoidable overhead. Cache
+the result once (for example with `std::sync::OnceLock<bool>`) or compile-gate
+the trace helper so the normal emulator path does not call `std::env::var_os`.
+
 ## Interpretation
 
 WonderSwan runs at about 75 frames/s. In this frontend design, one emulated frame
@@ -117,9 +236,24 @@ additional GUI cost from Slint image upload, scaling, compositing, status update
 input polling, or window-system overhead can push total throughput below the
 required cadence.
 
+The GUI sampling makes this more specific for the tested Linux PC:
+
+- default backend: much of the sampled main-thread time is in Slint/femtovg,
+  Mesa/radeonsi, GLX buffer swap, or synchronous X11 property queries;
+- software backend: samples move to core PPU work and software image rendering;
+- process CPU usage is low enough that a pure CPU bottleneck is unlikely for the
+  default backend run;
+- there is also at least one clear core hot-path cleanup (`SWANIUM_CT_TRACE`
+  environment-variable polling).
+
 ## Recommended fix order
 
-### 1. Add frontend timing instrumentation
+### 1. Remove known core hot-path overhead
+
+Cache or compile-gate `SWANIUM_CT_TRACE` so normal memory/I/O writes do not read
+the environment. This is a low-risk cleanup independent of the GUI/backend work.
+
+### 2. Add frontend timing instrumentation
 
 Add a gated diagnostic mode that records, per rendered frame:
 
@@ -141,7 +275,26 @@ This will separate:
 - RGBA conversion + Slint image upload cost,
 - timer/event-loop pacing effects.
 
-### 2. Short-term mitigation: automatic frame skip
+### 3. Compare Linux Slint backends explicitly
+
+Test and document the FPS/audio behavior for:
+
+```sh
+SLINT_BACKEND=winit-femtovg ./target/release/frontend ...
+SLINT_BACKEND=winit-software ./target/release/frontend ...
+```
+
+If `winit-software` improves stability on low-end Mesa/radeonsi systems, expose
+it as a Linux troubleshooting option or consider a Linux-specific default only
+after testing on other machines. If the default backend remains preferable on
+modern GPUs, keep the backend selectable rather than hard-coding one path.
+
+Also investigate why `update_window_properties` / `set_decorations_inner` shows
+up repeatedly. If the frontend is pushing unchanged window properties every
+tick, avoid doing so; window property changes should only occur when fullscreen,
+scale, rotation, title, or related UI state actually changes.
+
+### 4. Short-term mitigation: automatic frame skip
 
 Implement an adaptive frame-skip path:
 
@@ -160,7 +313,7 @@ Important constraint: because core-only release measured ~74 FPS on the tested
 ROM, frame skip can only recover time spent outside the core frame. It will not
 fix titles where the core itself cannot reach real time.
 
-### 3. Medium-term fix: decouple emulation/audio from GUI rendering
+### 5. Medium-term fix: decouple emulation/audio from GUI rendering
 
 Move emulation and audio production off the Slint GUI callback:
 
@@ -186,7 +339,7 @@ need careful synchronization for:
 - save RAM flushes,
 - framebuffer ownership/copying.
 
-### 4. Performance work remains useful
+### 6. Performance work remains useful
 
 The headless release profile for this ROM is very close to the 75 FPS target, so
 optimization still matters. The profiler shows CPU and APU as the largest core
@@ -214,4 +367,3 @@ Potential frontend/audio-layer follow-ups:
 
 Do not conflate volume with underrun. The dropout symptom is explained by the
 frontend scheduling / FPS issue.
-
