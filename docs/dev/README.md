@@ -1,6 +1,6 @@
 # Development docs map
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-13.
 
 Start here when checking project progress.
 
@@ -22,6 +22,7 @@ Start here when checking project progress.
 - [`RemainingWork.md`](./RemainingWork.md): source of truth for open emulator work after Milestone 13.
 - [`CompatibilityMatrix.md`](./CompatibilityMatrix.md): license-clean evidence for public tests, synthetic tests, and manual smoke checks.
 - [`AudioAccuracy.md`](./AudioAccuracy.md): audio-specific validation notes and manual comparison plan.
+- [`FrontendAudioDropoutInvestigation.md`](./FrontendAudioDropoutInvestigation.md): Linux GUI audio dropout / low-FPS investigation and mitigation notes.
 - [`V30MZ-Timing.md`](./V30MZ-Timing.md): CPU timing ledger for Milestone 13 work.
 - [`Profiling.md`](./Profiling.md): performance measurements and profiling notes.
 - [`archive/`](./archive/): superseded planning documents kept for historical context.
