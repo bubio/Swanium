@@ -106,6 +106,10 @@ export component MainWindow inherits Window {
                 shortcut: @keys(Control + Comma);
                 activated => { root.open-settings(); }
             }
+            if !root.use-native-about: MenuItem {
+                title: "About Swanium…";
+                activated => { root.show-about(); }
+            }
             MenuSeparator {}
             MenuItem {
                 title: "Quit";
@@ -114,7 +118,7 @@ export component MainWindow inherits Window {
             }
         }
         Menu {
-            title: "Emulation";
+            title: "Emu";
             MenuItem {
                 // Checkmark via title prefix (see the View menu note below).
                 title: root.paused ? "✓ Pause" : "Pause";
@@ -193,13 +197,6 @@ export component MainWindow inherits Window {
                     title: root.renderer == Renderer.Linear ? "✓ Bilinear" : "Bilinear";
                     activated => { root.set-renderer(Renderer.Linear); }
                 }
-            }
-        }
-        if !root.use-native-about: Menu {
-            title: "Help";
-            MenuItem {
-                title: "About Swanium…";
-                activated => { root.show-about(); }
             }
         }
     }

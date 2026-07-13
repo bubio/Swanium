@@ -387,7 +387,7 @@ fn wire_input(window: &MainWindow, app: &App) {
     });
 }
 
-/// Wire the File/View/Emulation menu callbacks.
+/// Wire the File/Emu/View menu callbacks.
 fn wire_menu(window: &MainWindow, app: &App) {
     window.on_open_rom({
         let app = app.clone();
@@ -798,18 +798,11 @@ fn sync_fullscreen(app: &App, window: &MainWindow) {
 
 /// Apply the window's view-related state (size, fullscreen, renderer) from config.
 fn apply_view(window: &MainWindow, config: &Config) {
-    let scale = config.scale.max(1);
-    let (bw, bh) = if config.rotation.is_rotated() {
-        (video::SCREEN_HEIGHT as u32, video::SCREEN_WIDTH as u32)
-    } else {
-        (video::SCREEN_WIDTH as u32, video::SCREEN_HEIGHT as u32)
-    };
-    let view_w = (bw * scale) as f32;
-    let view_h = (bh * scale) as f32;
-    let window_h = view_h + STATUS_BAR_HEIGHT;
+    let (view_w, view_h) = view_size(config);
+    let (window_w, window_h) = window_size_for_view(view_w, view_h);
     window.set_view_width(view_w);
     window.set_view_height(view_h);
-    window.set_current_scale(scale as i32);
+    window.set_current_scale(config.scale.max(1) as i32);
     window.set_rotation(match config.rotation {
         RotationKind::None => 0,
         RotationKind::Right => 1,
@@ -820,8 +813,24 @@ fn apply_view(window: &MainWindow, config: &Config) {
     window.set_volume(config.volume.min(100) as i32);
     window.window().set_fullscreen(config.fullscreen);
     if !config.fullscreen {
-        window.window().set_size(LogicalSize::new(view_w, window_h));
+        window
+            .window()
+            .set_size(LogicalSize::new(window_w, window_h));
     }
+}
+
+fn view_size(config: &Config) -> (f32, f32) {
+    let scale = config.scale.max(1);
+    let (bw, bh) = if config.rotation.is_rotated() {
+        (video::SCREEN_HEIGHT as u32, video::SCREEN_WIDTH as u32)
+    } else {
+        (video::SCREEN_WIDTH as u32, video::SCREEN_HEIGHT as u32)
+    };
+    ((bw * scale) as f32, (bh * scale) as f32)
+}
+
+fn window_size_for_view(view_w: f32, view_h: f32) -> (f32, f32) {
+    (view_w, view_h + STATUS_BAR_HEIGHT)
 }
 
 /// Build the recent-ROM display model (file names, most-recent first).
@@ -1480,6 +1489,56 @@ mod tests {
         assert_eq!(
             input_rotation_from_config(&config),
             input::ButtonRotation::None
+        );
+    }
+
+    #[test]
+    fn portrait_1x_view_uses_rotated_framebuffer_dimensions() {
+        let config = Config {
+            scale: 1,
+            rotation: RotationKind::Left,
+            ..Config::default()
+        };
+
+        assert_eq!(
+            view_size(&config),
+            (video::SCREEN_HEIGHT as f32, video::SCREEN_WIDTH as f32)
+        );
+    }
+
+    #[test]
+    fn narrow_1x_window_uses_view_width() {
+        let config = Config {
+            scale: 1,
+            rotation: RotationKind::Left,
+            ..Config::default()
+        };
+        let (view_w, view_h) = view_size(&config);
+
+        assert_eq!(
+            window_size_for_view(view_w, view_h),
+            (
+                video::SCREEN_HEIGHT as f32,
+                video::SCREEN_WIDTH as f32 + STATUS_BAR_HEIGHT
+            )
+        );
+    }
+
+    #[test]
+    fn large_scaled_window_uses_view_width() {
+        let config = Config {
+            scale: 3,
+            rotation: RotationKind::None,
+            ..Config::default()
+        };
+        let (view_w, view_h) = view_size(&config);
+
+        assert_eq!(
+            window_size_for_view(view_w, view_h),
+            (
+                video::SCREEN_WIDTH as f32 * 3.0,
+                video::SCREEN_HEIGHT as f32 * 3.0 + STATUS_BAR_HEIGHT,
+            )
         );
     }
 }
