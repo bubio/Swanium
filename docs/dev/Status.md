@@ -148,9 +148,11 @@ sprite window). Palette resolution abstracted behind the `PaletteResolver` trait
 `MonoPaletteResolver` (2bpp → palette-pool → shade-pool chain). The mono palette-zero
 transparency rule was fixed in commit 10a8146. Rendering is optimised per scanline rather than
 per pixel with output unchanged (verified by framebuffer hash): sprites are decoded and
-Y-filtered once per line (`collect_line_sprites`), and each background layer is resolved once per
-line (`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel
-span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
+Y-filtered once per line (`collect_line_sprites`), the per-line scratch array is sized to the
+hardware limit of 32 entries, and each sprite's two/four tile-row bytes are read once before its
+eight pixels are decoded. Each background layer is likewise resolved once per line
+(`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel span.
+Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
 The scanline renderer now enforces the hardware's 32-sprites-per-scanline limit in OAM order:
 the first 32 sprites whose 8-pixel-tall box covers the line are considered, and later sprites on
 that line are ignored even if the earlier entries are transparent at the sampled pixel. Regression
@@ -431,11 +433,20 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
 - **Steady-state core hot paths (2026-07-14)** — the disabled Clock Tower trace flag is cached once;
-  full-path APU output-register readback is committed once per `Apu::tick` boundary instead of each
-  sound clock; background rows are processed in tile spans; and sprites are rasterized once into
-  OAM-order/priority-preserving scanline buffers. On macOS ARM64 with the local Wizardry WSC ROM,
-  normal release `run_frame` improved from about 1.0125 ms to 0.3680 ms (about 64% less time, 2.75x
-  throughput). CPU memory-map restructuring and event-driven APU work remain deferred as higher-risk.
+  background rows are processed in tile spans; and sprites are rasterized once into
+  OAM-order/priority-preserving scanline buffers. A follow-up sampling pass found that rebuilding the
+  CPU-visible APU mixer words (`0x96`–`0x9B`) at every `Apu::tick` boundary still consumed about 6%
+  of normal release frame time. Those read-only values are now derived from current channel state
+  only when the CPU reads them; audio sample generation and sound-clock advancement are unchanged,
+  and the public `mono/sound/quirks.ws` oracle passes. On macOS ARM64 with the local Wizardry WSC
+  ROM, this follow-up improved Criterion `run_frame` from 354.87 us to 341.13 us (Criterion change
+  estimate -4.28%). Across the full steady-state pass, normal release improved from about 1.0125 ms
+  to 0.3411 ms (about 66% less time, 2.97x throughput). CPU memory-map restructuring and event-driven
+  APU work remain deferred as higher-risk. A subsequent low-risk sprite pass reduced the
+  32-sprite scanline microbenchmark from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%)
+  by using a 32-entry scratch array and fetching each sprite tile row once. The Wizardry whole-frame
+  benchmark showed no statistically significant change (+0.01%, p=0.98), so this improves
+  sprite-heavy lines without a measured general-frame regression.
 
 ## Release tooling — macOS App Bundle
 

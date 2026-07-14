@@ -283,11 +283,10 @@ impl Ppu {
         // Decode the sprite attribute table once per scanline and keep only the
         // entries that cover this line (preserving table order, i.e. priority),
         // up to the hardware's 32-sprites-per-scanline limit.
-        // The per-pixel sprite sampler then walks this short list instead of
-        // re-decoding all 128 entries for every pixel — the dominant PPU cost
-        // (see docs/dev/Profiling.md). Zero-allocation: a stack-resident array
-        // sized to the full table, filled up to `sprite_count`.
-        let mut line_sprites = [SpriteEntry::default(); SPRITE_TABLE_LEN];
+        // The rasterizer then walks this short list instead of re-decoding all
+        // 128 entries for every pixel. Zero-allocation: the stack-resident
+        // scratch array is exactly the hardware's per-line maximum.
+        let mut line_sprites = [SpriteEntry::default(); SPRITES_PER_SCANLINE];
         let sprite_count = if dc.sprites_enabled {
             collect_line_sprites(
                 &self.latched_sprites[..self.latched_sprite_count],
@@ -758,7 +757,7 @@ fn scr2_visible_at(dc: &DisplayControl, ports: &[u8], x: usize, line: u8) -> boo
 fn collect_line_sprites(
     latched_sprites: &[SpriteEntry],
     line: u8,
-    out: &mut [SpriteEntry; SPRITE_TABLE_LEN],
+    out: &mut [SpriteEntry; SPRITES_PER_SCANLINE],
 ) -> usize {
     let mut n = 0;
     for &sprite in latched_sprites {
@@ -795,6 +794,9 @@ fn fill_sprite_lines<R: PaletteResolver>(
         if sprite.vflip {
             ty = SPRITE_SIZE - 1 - ty;
         }
+        // All eight pixels use the same tile row. Fetch its two/four WRAM
+        // bytes once, then decode each pixel from this local copy.
+        let row = mode.read_row(wram, sprite.tile_idx, ty);
 
         for dx in 0..SPRITE_SIZE {
             let screen_x = sprite.x.wrapping_add(dx as u8) as usize;
@@ -831,7 +833,7 @@ fn fill_sprite_lines<R: PaletteResolver>(
             };
             // Sprite attributes are frame-latched; tile pixels are fetched from
             // WRAM at draw time.
-            let pixel = mode.pixel(wram, sprite.tile_idx, tx, ty);
+            let pixel = mode.pixel_in_row(&row, tx);
             let palette = sprite.palette + SPRITE_PALETTE_OFFSET;
             if resolver.transparent(palette, pixel) {
                 continue;

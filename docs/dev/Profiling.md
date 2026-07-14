@@ -87,6 +87,21 @@ Use `--no-run` only as a tooling check after unrelated core changes. It proves
 the bench target still compiles under `[profile.bench]`; it does not produce
 performance numbers.
 
+Reference result from the 2026-07-14 continuation pass (macOS ARM64, local
+Wizardry WSC ROM): changing CPU-visible APU mixer ports `0x96`–`0x9B` from eager
+per-`Apu::tick` updates to on-demand reads moved `run_frame` from 354.87 us to
+341.13 us (Criterion change estimate -4.28%). The public ws-test-suite
+sound-quirks oracle was run alongside the benchmark to guard the readback
+semantics.
+
+The following low-risk PPU continuation changed the per-line sprite scratch
+array from 128 to the hardware maximum of 32 entries and fetched each sprite's
+tile-row bytes once before decoding its eight pixels. `render_sprite_scanline`
+improved from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%). The
+same paired Wizardry `run_frame` comparison found no statistically significant
+whole-frame change (+0.01%, p=0.98); the public ws-test-suite sprite scanline
+oracle remained passing.
+
 ## 3. External sampling profiler (function/line hotspots)
 
 Once the frame profiler says *which* subsystem is hot, a sampling profiler shows

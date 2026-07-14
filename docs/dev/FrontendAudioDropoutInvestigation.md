@@ -278,6 +278,18 @@ on the same macOS machine and ROM, about 64% less time than the 1.0125 ms baseli
 (about 2.75x throughput). This is a core-only result and does not remove the need
 to fix Linux GUI/audio scheduling.
 
+A continuation pass sampled the normal optimized Criterion executable rather
+than the instrumented profiler. `Apu::update_output_ports` accounted for about
+6% of samples because it rebuilt and stored all three CPU-visible digital mixer
+words after every CPU instruction even though software rarely reads them. The
+ports `0x96`–`0x9B` are now derived from current channel/noise/voice state only
+when the CPU reads one. This does not change APU clocks or host sample generation,
+and the ws-test-suite sound-quirks oracle still passes. Against the immediately
+preceding Criterion baseline, the same Wizardry ROM improved from 354.87 us/frame
+to 341.13 us/frame (Criterion change estimate -4.28%). Relative to the original
+1.0125 ms/frame release baseline, the complete pass now uses about 66% less time
+per frame (2.97x throughput).
+
 ## Interpretation
 
 WonderSwan runs at about 75 frames/s. In this frontend design, one emulated frame
@@ -309,8 +321,9 @@ The GUI sampling makes this more specific for the tested Linux PC:
 ### 1. Remove known core hot-path overhead (done 2026-07-14)
 
 `SWANIUM_CT_TRACE` is now cached once, so normal memory/I/O writes no longer read
-the environment repeatedly. The same core pass also batched APU output readback
-and PPU tile/sprite scanline work as described above.
+the environment repeatedly. The same core pass also optimized PPU tile/sprite
+scanline work, then moved the CPU-visible APU mixer readback from eager per-tick
+updates to on-demand reads as described above.
 
 ### 2. Add frontend timing instrumentation (optional follow-up)
 
@@ -402,8 +415,9 @@ The implementation provides explicit synchronization for:
 ### 6. Continue measurement-driven performance work
 
 The 2026-07-14 steady-state pass produced a large normal-release improvement.
-The enabled profiler previously identified CPU and APU as the largest core
-buckets for this ROM:
+An external sampling follow-up removed the remaining eager APU mixer-readback
+hotspot. The enabled profiler previously identified CPU and APU as the largest
+core buckets for this ROM:
 
 ```text
 CPU 53.9%, APU 29.5%, PPU 16.2%

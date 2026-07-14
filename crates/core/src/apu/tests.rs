@@ -163,8 +163,15 @@ fn one_sample_after_cycles_per_sample() {
     assert_eq!(apu.samples().len(), STEREO_CHANNELS);
 }
 
+fn output_word(apu: &Apu, ports: &[u8], port: usize) -> u16 {
+    u16::from_le_bytes([
+        apu.read_output_port(port as u8, ports),
+        apu.read_output_port((port + 1) as u8, ports),
+    ])
+}
+
 #[test]
-fn silent_fast_path_batches_samples_and_clears_output_ports() {
+fn silent_fast_path_batches_samples_and_reads_zero_output() {
     let (mut ports, wram) = blank();
     ports[SND_CH_OUT_R] = 7;
     ports[SND_CH_OUT_L] = 8;
@@ -174,9 +181,9 @@ fn silent_fast_path_batches_samples_and_clears_output_ports() {
     assert_eq!(
         (
             apu.samples(),
-            u16::from_le_bytes([ports[SND_CH_OUT_R], ports[SND_CH_OUT_R + 1]]),
-            u16::from_le_bytes([ports[SND_CH_OUT_L], ports[SND_CH_OUT_L + 1]]),
-            u16::from_le_bytes([ports[SND_CH_OUT_LR], ports[SND_CH_OUT_LR + 1]]),
+            output_word(&apu, &ports, SND_CH_OUT_R),
+            output_word(&apu, &ports, SND_CH_OUT_L),
+            output_word(&apu, &ports, SND_CH_OUT_LR),
         ),
         (&[0, 0, 0, 0][..], 0, 0, 0)
     );
@@ -260,16 +267,16 @@ fn output_ports_track_current_digital_mix() {
     apu.tick(1, &wram, &mut ports, false);
     assert_eq!(
         (
-            u16::from_le_bytes([ports[SND_CH_OUT_L], ports[SND_CH_OUT_L + 1]]),
-            u16::from_le_bytes([ports[SND_CH_OUT_R], ports[SND_CH_OUT_R + 1]]),
-            u16::from_le_bytes([ports[SND_CH_OUT_LR], ports[SND_CH_OUT_LR + 1]]),
+            output_word(&apu, &ports, SND_CH_OUT_L),
+            output_word(&apu, &ports, SND_CH_OUT_R),
+            output_word(&apu, &ports, SND_CH_OUT_LR),
         ),
         (5, 5, 10)
     );
 }
 
 #[test]
-fn batched_full_path_matches_single_cycle_output_ports() {
+fn batched_full_path_matches_single_cycle_output_readback() {
     let (mut batched_ports, mut wram) = blank();
     write_waveform(&mut wram, 0, [0x21; 16]);
     batched_ports[0x90] = CTRL_ENABLE[0] | CTRL_ENABLE[2] | CTRL_SWEEP;
@@ -287,8 +294,16 @@ fn batched_full_path_matches_single_cycle_output_ports() {
     }
 
     assert_eq!(
-        &batched_ports[SND_CH_OUT_R..SND_CH_OUT_LR + 2],
-        &stepped_ports[SND_CH_OUT_R..SND_CH_OUT_LR + 2]
+        (
+            output_word(&batched, &batched_ports, SND_CH_OUT_R),
+            output_word(&batched, &batched_ports, SND_CH_OUT_L),
+            output_word(&batched, &batched_ports, SND_CH_OUT_LR),
+        ),
+        (
+            output_word(&stepped, &stepped_ports, SND_CH_OUT_R),
+            output_word(&stepped, &stepped_ports, SND_CH_OUT_L),
+            output_word(&stepped, &stepped_ports, SND_CH_OUT_LR),
+        )
     );
 }
 

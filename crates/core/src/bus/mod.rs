@@ -978,6 +978,7 @@ impl MemoryBus for Bus {
             0x6B => self.ports[0x6B] & 0x6F,
             0x6C..=0x7F => 0,
             // APU register masks.
+            0x96..=0x9B => self.apu.read_output_port(port, &self.ports),
             0x81 | 0x83 | 0x85 | 0x87 => self.ports[port as usize] & 0x07,
             0x8D => self.ports[0x8D] & 0x1F,
             0x8E => self.ports[0x8E] & 0x17,
