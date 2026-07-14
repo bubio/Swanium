@@ -521,7 +521,12 @@ impl Bus {
     }
 
     fn clock_tower_trace_enabled() -> bool {
-        std::env::var_os("SWANIUM_CT_TRACE").is_some()
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+        // Environment access takes a process-global lock on some platforms.
+        // Tracing is a startup diagnostic, so resolve it once instead of on
+        // every emulated WRAM/I/O write.
+        *ENABLED.get_or_init(|| std::env::var_os("SWANIUM_CT_TRACE").is_some())
     }
 
     fn trace_clock_tower_io_write(&self, port: u8, value: u8) {
@@ -973,6 +978,7 @@ impl MemoryBus for Bus {
             0x6B => self.ports[0x6B] & 0x6F,
             0x6C..=0x7F => 0,
             // APU register masks.
+            0x96..=0x9B => self.apu.read_output_port(port, &self.ports),
             0x81 | 0x83 | 0x85 | 0x87 => self.ports[port as usize] & 0x07,
             0x8D => self.ports[0x8D] & 0x1F,
             0x8E => self.ports[0x8E] & 0x17,

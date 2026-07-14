@@ -496,10 +496,11 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
     メニュー/設定 UI が一式そろう **Slint** を採用（プロジェクト当初の想定とも一致）。Slint が内部に持つ
     レンダラ（femtovg/skia）が描画を担うため、Phase 7 段階では独自 wgpu パイプラインは作らない。
 -   **`crates/frontend`**: ヘッドレスランナーを最小 GUI に置換。`slint::slint!` マクロで `MainWindow`
-    （`Image` + `FocusScope`）を定義し、`Timer`（約 13.25ms ≒ 75.47Hz）で `System::run_frame` を駆動 →
-    `video::write_rgba` → `slint::Image`（`image-rendering: pixelated`）でウィンドウへ表示。整数スケーリングは
-    `Config::scale`（既定 3 倍）。ROM はコマンドライン引数で指定。ヘッドレスのフレーム実行スモークは
-    `crates/core/tests/system_frame.rs` で継続担保（GUI はヘッドレス CI で起動できないため）。
+    （`Image` + `FocusScope`）を定義。当初は `Timer`（約 13.25ms ≒ 75.47Hz）から
+    `System::run_frame` → `video::write_rgba` → `slint::Image` を直列実行していたが、現在は後述の専用
+    emulation/audio worker がコアを駆動し、Slint タイマーは入力・イベント・最新 framebuffer の表示だけを
+    ポーリングする。`image-rendering: pixelated`、整数スケーリングは `Config::scale`（既定 3 倍）。
+    ヘッドレスのフレーム実行スモークは `crates/core/tests/system_frame.rs` で継続担保する。
 -   **キーボード入力（`crates/frontend/src/keymap.rs`）**: Slint のキーイベント text を `slint::platform::Key`
     と照合して `input::Button` へ変換（矢印=X パッド、WASD=Y パッド、Z/X=B/A、Enter=Start）。押下中キー集合を
     `HashSet<Button>` で保持し、毎フレーム `input::keys_from` で `KeyState` に畳み込む。
@@ -507,7 +508,13 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
 ### Phase 7 後続課題（さらなる GUI 拡充; 別タスクで対応）
 
 -   ✅ **cpal 音声出力（実装済み）**: `crates/audio` に cpal ストリームを追加し、`RingBuffer` を出力
-    コールバックへ供給。音声-映像同期（リングバッファ水位に基づくフレームペーシング）も frontend に配線。
+    コールバックへ供給。`AudioStream::open` は platform stream と `AudioProducer` を分離して返し、後者を
+    emulation/audio worker が所有する。リングバッファ水位と実時間に基づくフレームペーシングも worker に配線。
+-   ✅ **GUI と emulation/audio のスレッド分離（実装済み）**: 専用 worker が `System` と
+    `AudioProducer` を所有し、各 emulated frame の音声を必ず enqueue して最新 framebuffer snapshot を公開する。
+    GUI は atomic な `KeyState`/volume を渡し、ROM/reset/pause/save RAM/save state/debug dump は FIFO command
+    channel 経由でフレーム境界に処理する。framebuffer lock はコピー中だけ保持し、RGBA 変換と Slint upload は
+    lock 外で行う。GUI が遅延・モーダル停止しても emulation/audio は継続し、表示だけが最新フレームへ追いつく。
 -   ✅ **gilrs ゲームパッド入力（実装済み）**: `crates/input::gamepad::Gamepad` が gilrs を `open`/`poll` し、
     パッド状態を毎フレーム `KeyState` に畳み込む。マッピング（水平向き）は D-pad/左スティック→X パッド、
     右スティック→Y パッド、下/右フェイスボタン→B/A、メニュー→Start。デジタルボタンはイベント駆動、
@@ -519,8 +526,9 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         XDG Desktop Portal + pollster（`default-features = false, features = ["xdg-portal","pollster"]`）
         を使い、Linux でも GTK 開発パッケージ無しでビルド可能（CI に apt 追加不要）。ROM 選択で
         ウィンドウタイトルを更新、ピッカーは前回ディレクトリを記憶。ネイティブダイアログは Slint タイマー外の
-        メニューコールバックで開き、モーダルループ中は emulation/audio/input を進めず、ROM 切替時に
-        `AudioStream::clear` で旧音声をフラッシュ。
+        メニューコールバックで開く。モーダルループ中も worker の emulation/audio は継続し、入力だけを neutral
+        snapshot にする。ROM 切替は旧 machine を一旦停止して最終 save snapshot を取得し、FIFO command で
+        machine を交換して音声 ring をフラッシュする。
     -   ✅ **メニューバー / ステータスバー（実装済み）**: Slint 組み込みの `MenuBar`（macOS は
         システムメニューバー、Windows/Linux はウィンドウ内描画。実装は `muda`）に `File ▸ Open ROM…` /
         `Quit` を配置し、`open-rom`/`quit` コールバックを既存のオープン処理・`slint::quit_event_loop`
@@ -532,11 +540,11 @@ Phase 7 は「コア駆動 + 依存ライブラリ無しの薄い変換層を先
         Rotate/Renderer も配線済み。
     -   ✅ **一時停止（実装済み）**: `Emulation ▸ Pause`（`Ctrl+P`）で実行時トグル。
         **永続化しない**（ランタイム状態。`Config::start_paused` は honor せず、起動時 pause も不採用）。
-        タイマーが `paused` 中はフレームを進めず、音声リングはサイレンスへドレインする（手動 `P` ダンプは
-        pause 中も可能）。
+        worker が `paused` 中はフレームを進めず、音声リングはサイレンスへドレインする（手動 `P` ダンプは
+        pause 中も command として実行可能）。
     -   ✅ **音量適用（実装済み）**: ステータスバーの音量スライダー（0–100）で `Config::volume` を編集し、
-        `crates/audio` の純粋関数 `scale_volume` をプロデューサ側（`AudioStream::push`）で適用。frontend は
-        毎フレーム `AudioStream::set_volume(config.volume)` を呼び、値は `config.toml` に永続化。
+        `crates/audio` の純粋関数 `scale_volume` を worker 側の `AudioProducer::push` で適用。frontend は
+        atomic volume snapshot を更新し、値は `config.toml` に永続化。
     -   基本設定画面（scale/renderer 等の値編集 UI 集約）は View メニュー、ステータスバー、
         BIOS/input の `SettingsWindow` で代替済み。さらなる集約は具体的な product/UI 要望が出た場合だけ扱う。
 -   ✅ **設定ファイル永続化（実装済み）**: `crates/common` の `Config` に serde/toml/directories を導入し、

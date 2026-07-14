@@ -2,8 +2,8 @@
 
 //! Swanium frontend: a Slint window that plays a WonderSwan ROM.
 //!
-//! Scope (see `docs/dev/DevelopmentPlan.md` Phase 7): open a window, run the
-//! core one frame at a time, show the framebuffer, play audio (cpal), and
+//! Scope (see `docs/dev/DevelopmentPlan.md` Phase 7): open a window, drive the
+//! core and audio on a dedicated worker, show its latest framebuffer, and
 //! accept keyboard and gamepad input. The menu bar exposes ROM history, window
 //! scale, fullscreen, vertical rotation, renderer choice, a settings window,
 //! and a non-macOS About window. Settings persist to `config.toml`.
@@ -12,20 +12,21 @@
 //! [`slint::include_modules!`] brings the generated `MainWindow`,
 //! `SettingsWindow`, `AboutWindow`, `BindingRow`, and `Renderer` into scope.
 //!
-//! Debug: pressing `P` prints the current frame's display registers and a
-//! coarse per-layer map to stderr — see [`dump_display_registers`].
+//! Debug: pressing `P` asks the emulator worker to print the current frame's
+//! display registers and a coarse per-layer map to stderr.
 
+mod emulation;
 mod keymap;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::config::{BiosRomKind, Config, RendererKind, RotationKind};
+use emulation::{EmulationEvent, EmulationWorker};
 use input::Button;
 use keymap::Keymap;
 use slint::{
@@ -38,22 +39,12 @@ use swanium_core::HardwareModel;
 
 slint::include_modules!();
 
-/// Polling interval for the frame-pacing timer.
-///
-/// We poll at ~4 ms rather than the WS frame period (~13.25 ms) so that the
-/// audio ring-buffer fill level — not a fixed wall-clock timer — governs when
-/// the next emulated frame runs.
+/// Polling interval for GUI input, worker events, and latest-frame display.
 const POLL_INTERVAL: Duration = Duration::from_millis(4);
-
-/// Ring-buffer fill fraction above which we hold off running another frame.
-const FILL_HOLD_NUM: usize = 3;
-const FILL_HOLD_DEN: usize = 4;
 
 /// Height of the bottom status bar, in logical pixels.
 const STATUS_BAR_HEIGHT: f32 = 22.0;
 
-/// How often the status bar's FPS readout is refreshed.
-const FPS_REFRESH: Duration = Duration::from_millis(500);
 const SAVE_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const BIOS_SETTINGS_START_FRAMES: u8 = 12;
 
@@ -71,7 +62,7 @@ enum Device {
 #[derive(Clone)]
 struct App {
     config: Rc<RefCell<Config>>,
-    system: Rc<RefCell<Option<System>>>,
+    worker: Rc<EmulationWorker>,
     last_dir: Rc<RefCell<Option<PathBuf>>>,
     rom_path: Rc<RefCell<Option<PathBuf>>>,
     rom_label: Rc<RefCell<String>>,
@@ -85,12 +76,9 @@ struct App {
     /// macOS animates; `None` means the OS state is the source of truth (so an
     /// external change via the title-bar button is adopted).
     pending_fullscreen: Rc<Cell<Option<bool>>>,
-    /// Master volume, 0–100, read by the frame timer and pushed to the audio
-    /// stream each frame. Persisted to config on change.
-    volume: Rc<Cell<u8>>,
     /// Whether emulation is paused. Runtime-only — never persisted.
     paused: Rc<Cell<bool>>,
-    dump_request: Rc<Cell<bool>>,
+    frame_redraw_request: Rc<Cell<bool>>,
     pending_open_path: Rc<RefCell<Option<PathBuf>>>,
     /// True while the native file dialog is running its modal event loop.
     open_dialog_active: Rc<Cell<bool>>,
@@ -128,9 +116,21 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 
     let window = MainWindow::new()?;
 
+    // Keep the platform stream on the GUI thread while moving only its
+    // producer endpoint to the emulator worker.
+    let (audio_stream, audio_producer) = match audio::AudioStream::open() {
+        Ok((stream, producer)) => (Some(stream), Some(producer)),
+        Err(e) => {
+            tracing::warn!("audio unavailable: {e}");
+            (None, None)
+        }
+    };
+    let worker = Rc::new(EmulationWorker::spawn(audio_producer)?);
+    worker.set_volume(initial_volume);
+
     let app = App {
         config: Rc::new(RefCell::new(config)),
-        system: Rc::new(RefCell::new(None)),
+        worker,
         last_dir: Rc::new(RefCell::new(None)),
         rom_path: Rc::new(RefCell::new(None)),
         rom_label: Rc::new(RefCell::new(String::new())),
@@ -139,9 +139,8 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         gamepad: Rc::new(RefCell::new(None)),
         capture: Rc::new(Cell::new(None)),
         pending_fullscreen: Rc::new(Cell::new(None)),
-        volume: Rc::new(Cell::new(initial_volume)),
         paused: Rc::new(Cell::new(false)),
-        dump_request: Rc::new(Cell::new(false)),
+        frame_redraw_request: Rc::new(Cell::new(false)),
         pending_open_path: Rc::new(RefCell::new(None)),
         open_dialog_active: Rc::new(Cell::new(false)),
         reset_request: Rc::new(Cell::new(false)),
@@ -172,17 +171,12 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         Err(e) => tracing::warn!("gamepad unavailable: {e}"),
     }
 
-    // Open the cpal output stream (non-fatal on failure).
-    let mut audio_stream = audio::AudioStream::open()
-        .inspect_err(|e| tracing::warn!("audio unavailable: {e}"))
-        .ok();
-
     let timer = Timer::default();
     let window_weak = window.as_weak();
     let app_timer = app.clone();
-    let mut frames_since_refresh: u32 = 0;
-    let mut fps_anchor = Instant::now();
     let mut save_anchor = Instant::now();
+    let mut frame_generation = 0;
+    let mut frame_pixels = Vec::new();
     timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
         let app = &app_timer;
 
@@ -193,8 +187,8 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
 
         // Some native file dialogs run a nested event loop. If this timer is
-        // re-entered while the dialog is open, keep emulation/audio/input idle
-        // until the original dialog call returns.
+        // re-entered while the dialog is open, skip GUI-side input/frame work;
+        // the independent emulation/audio worker keeps running.
         if app.open_dialog_active.get() {
             return;
         }
@@ -207,11 +201,7 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             if let Some(window) = window_weak.upgrade() {
                 load_into(&path, app, &window);
             }
-            if let Some(ref audio) = audio_stream {
-                audio.clear();
-            }
-            frames_since_refresh = 0;
-            fps_anchor = Instant::now();
+            frame_generation = 0;
             save_anchor = Instant::now();
             return;
         }
@@ -220,18 +210,15 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             if let Some(window) = window_weak.upgrade() {
                 reset_emulation(app, &window);
             }
-            if let Some(ref audio) = audio_stream {
-                audio.clear();
-            }
-            frames_since_refresh = 0;
-            fps_anchor = Instant::now();
+            frame_generation = 0;
             save_anchor = Instant::now();
             return;
         }
 
         // While a controller rebind is armed, poll for the captured button and
-        // do not run a frame (so the press never reaches the game).
+        // publish empty input so the press never reaches the game.
         if let Some((Device::Gamepad, ws_button)) = app.capture.get() {
+            app.worker.set_input(KeyState::NONE);
             if let Some(name) = app
                 .gamepad
                 .borrow_mut()
@@ -246,25 +233,6 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             return;
         }
 
-        let dump = app.dump_request.take();
-        // Paused: do not advance the machine (a manual `P` dump still runs). The
-        // audio ring simply drains to silence while nothing is pushed.
-        if app.paused.get() && !dump {
-            return;
-        }
-        let should_run = dump
-            || audio_stream
-                .as_ref()
-                .is_none_or(|a| a.ring_fill() * FILL_HOLD_DEN < a.ring_capacity() * FILL_HOLD_NUM);
-        if !should_run {
-            return;
-        }
-
-        let mut system_ref = app.system.borrow_mut();
-        let Some(system) = system_ref.as_mut() else {
-            return; // no ROM loaded yet — the placeholder overlay is shown
-        };
-
         let input_rotation = input_rotation_from_config(&app.config.borrow());
         let mut keys = input::rotate_key_state(
             input::keys_from(app.pressed.borrow().iter().copied()),
@@ -273,89 +241,48 @@ fn run(initial: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         if let Some(gp) = app.gamepad.borrow_mut().as_mut() {
             keys |= input::rotate_key_state(gp.poll(), input_rotation);
         }
-        let start_frames = app.bios_settings_start_frames.get();
-        if start_frames > 0 {
-            keys |= KeyState::START;
-            app.bios_settings_start_frames
-                .set(start_frames.saturating_sub(1));
-        }
-        let run_result = catch_unwind(AssertUnwindSafe(|| {
-            if dump {
-                dump_display_registers(system, keys);
-            } else {
-                system.run_frame(keys);
-            }
-        }));
-        if let Err(payload) = run_result {
-            let reason = panic_payload_message(payload.as_ref());
-            let context = cpu_context(system);
-            tracing::error!("emulation stopped after core panic: {reason}");
-            app.paused.set(true);
-            if let Some(window) = window_weak.upgrade() {
-                window.set_paused(true);
-                window.set_status_text(
-                    format!(
-                        "{} — stopped: {reason} at {context}",
-                        app.rom_label.borrow()
-                    )
-                    .into(),
-                );
-            }
-            return;
-        }
-        if let Some(fault) = system.cpu().fault {
-            let context = cpu_context(system);
-            tracing::error!(
-                opcode = format_args!("0x{:02X}", fault.opcode),
-                cs = format_args!("0x{:04X}", fault.cs),
-                ip = format_args!("0x{:04X}", fault.ip),
-                "emulation stopped on unsupported CPU opcode"
-            );
-            app.paused.set(true);
-            if let Some(window) = window_weak.upgrade() {
-                window.set_paused(true);
-                window.set_status_text(
-                    format!(
-                        "{} — stopped: unsupported opcode 0x{:02X} at {context}",
-                        app.rom_label.borrow(),
-                        fault.opcode
-                    )
-                    .into(),
-                );
-            }
-            return;
-        }
-        if let Some(ref mut audio) = audio_stream {
-            audio.set_volume(app.volume.get());
-            audio.push(system.audio_samples());
-        }
-        system.clear_audio_samples();
+        app.worker.set_input(keys);
 
-        if let Some(window) = window_weak.upgrade() {
-            update_window_frame(&window, system, app.config.borrow().rotation);
+        while let Some(event) = app.worker.try_event() {
+            if let Some(window) = window_weak.upgrade() {
+                match event {
+                    EmulationEvent::Fps(fps) if !app.paused.get() => window.set_status_text(
+                        format!("{} — {fps:.0} fps", app.rom_label.borrow()).into(),
+                    ),
+                    EmulationEvent::Fps(_) => {}
+                    EmulationEvent::Stopped(message) => {
+                        app.paused.set(true);
+                        window.set_paused(true);
+                        window.set_status_text(
+                            format!("{} — {message}", app.rom_label.borrow()).into(),
+                        );
+                    }
+                }
+            }
         }
-        drop(system_ref);
+
+        let force_redraw = app.frame_redraw_request.take();
+        if let Some(generation) =
+            app.worker
+                .copy_frame(frame_generation, force_redraw, &mut frame_pixels)
+        {
+            frame_generation = generation;
+            if let Some(window) = window_weak.upgrade() {
+                update_window_frame(&window, &frame_pixels, app.config.borrow().rotation);
+            }
+        }
 
         let now = Instant::now();
         if now.duration_since(save_anchor) >= SAVE_FLUSH_INTERVAL {
             save_current_cartridge(app);
             save_anchor = now;
         }
-
-        frames_since_refresh += 1;
-        let elapsed = now.duration_since(fps_anchor);
-        if elapsed >= FPS_REFRESH {
-            let fps = frames_since_refresh as f32 / elapsed.as_secs_f32();
-            frames_since_refresh = 0;
-            fps_anchor = now;
-            if let Some(window) = window_weak.upgrade() {
-                window.set_status_text(format!("{} — {fps:.0} fps", app.rom_label.borrow()).into());
-            }
-        }
     });
 
     window.run()?;
     save_current_cartridge(&app);
+    app.worker.shutdown();
+    drop(audio_stream);
     Ok(())
 }
 
@@ -367,7 +294,9 @@ fn wire_input(window: &MainWindow, app: &App) {
             // `text` is a `SharedString` that derefs to `str`; use it directly
             // rather than allocating a `String` on every key event.
             if is_down && text.eq_ignore_ascii_case("p") {
-                app.dump_request.set(true);
+                if let Err(e) = app.worker.request_dump() {
+                    tracing::warn!("could not request display dump: {e}");
+                }
             }
             if let Some(button) = app.keymap.borrow().resolve(&text) {
                 if is_down {
@@ -396,6 +325,7 @@ fn wire_menu(window: &MainWindow, app: &App) {
                 return;
             }
             app.pressed.borrow_mut().clear();
+            app.worker.set_input(KeyState::NONE);
             let start = app.last_dir.borrow().clone();
             let picked = pick_rom(start.as_deref());
             *app.pending_open_path.borrow_mut() = picked;
@@ -484,6 +414,7 @@ fn wire_menu(window: &MainWindow, app: &App) {
                 _ => RotationKind::None,
             };
             app.config.borrow_mut().rotation = requested;
+            app.frame_redraw_request.set(true);
             save(&app);
             if let Some(window) = weak.upgrade() {
                 apply_view(&window, &app.config.borrow());
@@ -507,7 +438,7 @@ fn wire_menu(window: &MainWindow, app: &App) {
         move |volume| {
             let volume = volume.clamp(0, 100) as u8;
             app.config.borrow_mut().volume = volume;
-            app.volume.set(volume);
+            app.worker.set_volume(volume);
             save(&app);
             if let Some(window) = weak.upgrade() {
                 window.set_volume(volume as i32);
@@ -520,6 +451,9 @@ fn wire_menu(window: &MainWindow, app: &App) {
         move || {
             let paused = !app.paused.get();
             app.paused.set(paused);
+            if let Err(e) = app.worker.set_paused(paused) {
+                tracing::warn!("could not update emulation pause state: {e}");
+            }
             if let Some(window) = weak.upgrade() {
                 window.set_paused(paused);
                 if paused {
@@ -980,25 +914,6 @@ fn load_bios_rom(kind: BiosRomKind) -> Option<(PathBuf, Vec<u8>)> {
     }
 }
 
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "core panic".to_string()
-    }
-}
-
-fn cpu_context(system: &System) -> String {
-    let cpu = system.cpu();
-    let opcode_ip = cpu.regs.ip.wrapping_sub(1);
-    format!(
-        "CS:IP={:04X}:{:04X} AX={:04X} BX={:04X} CX={:04X} DX={:04X} SP={:04X}",
-        cpu.regs.cs, opcode_ip, cpu.regs.ax, cpu.regs.bx, cpu.regs.cx, cpu.regs.dx, cpu.regs.sp
-    )
-}
-
 fn reset_emulation(app: &App, window: &MainWindow) {
     if app.bios_settings_start_frames.get() > 0 {
         start_bios_only(app, window);
@@ -1018,14 +933,18 @@ fn reset_emulation(app: &App, window: &MainWindow) {
 }
 
 fn start_bios_only(app: &App, window: &MainWindow) {
+    let resume_worker = pause_worker_for_system_change(app);
     save_current_cartridge(app);
     let bios_kind = app.config.borrow().bios_rom;
     let Some((bios_path, boot_rom)) = load_bios_rom(bios_kind) else {
-        *app.system.borrow_mut() = None;
+        if let Err(e) = app.worker.clear_system() {
+            tracing::warn!("could not clear emulation worker: {e}");
+        }
         app.rom_label.borrow_mut().clear();
         window.set_window_title("Swanium".into());
         window.set_status_text("No ROM loaded".into());
         window.set_has_rom(false);
+        resume_worker_after_system_change(app, resume_worker);
         return;
     };
 
@@ -1042,7 +961,19 @@ fn start_bios_only(app: &App, window: &MainWindow) {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_else(|| bios_rom_label(bios_kind));
-    *app.system.borrow_mut() = Some(sys);
+    if let Err(e) = app.worker.replace_system(sys) {
+        tracing::error!("could not start BIOS emulation: {e}");
+        window.set_status_text("Could not start emulation worker".into());
+        resume_worker_after_system_change(app, resume_worker);
+        return;
+    }
+    let start_frames = app.bios_settings_start_frames.replace(0);
+    if start_frames > 0 {
+        if let Err(e) = app.worker.hold_start(start_frames) {
+            tracing::warn!("could not request BIOS settings input: {e}");
+        }
+    }
+    resume_worker_after_system_change(app, resume_worker);
     *app.rom_label.borrow_mut() = bios_rom_label(bios_kind).to_string();
     window.set_window_title(format!("Swanium — {}", bios_rom_label(bios_kind)).into());
     window.set_status_text(
@@ -1096,6 +1027,7 @@ fn open_rom_directory() -> std::io::Result<PathBuf> {
 fn load_into(path: &Path, app: &App, window: &MainWindow) {
     match std::fs::read(path) {
         Ok(bytes) => {
+            let resume_worker = pause_worker_for_system_change(app);
             save_current_cartridge(app);
             tracing::info!(rom = %path.display(), bytes = bytes.len(), "loaded ROM");
             let bios_kind = app.config.borrow().bios_rom;
@@ -1130,7 +1062,13 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
             } else {
                 "Mono"
             };
-            *app.system.borrow_mut() = Some(sys);
+            if let Err(e) = app.worker.replace_system(sys) {
+                tracing::error!(rom = %path.display(), "could not start emulation worker: {e}");
+                window.set_status_text("Could not start emulation worker".into());
+                resume_worker_after_system_change(app, resume_worker);
+                return;
+            }
+            resume_worker_after_system_change(app, resume_worker);
             *app.last_dir.borrow_mut() = path.parent().map(Path::to_path_buf);
             *app.rom_path.borrow_mut() = Some(path.to_path_buf());
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("ROM");
@@ -1156,15 +1094,40 @@ fn load_into(path: &Path, app: &App, window: &MainWindow) {
     }
 }
 
+/// Freeze the old machine before taking its final save snapshot and queueing a
+/// replacement. Commands are FIFO, so the old system cannot advance between
+/// that snapshot and `ReplaceSystem`.
+fn pause_worker_for_system_change(app: &App) -> bool {
+    let resume_afterward = !app.paused.get();
+    if resume_afterward {
+        if let Err(e) = app.worker.set_paused(true) {
+            tracing::warn!("could not pause emulation worker for system change: {e}");
+            return false;
+        }
+    }
+    resume_afterward
+}
+
+fn resume_worker_after_system_change(app: &App, resume: bool) {
+    if resume {
+        if let Err(e) = app.worker.set_paused(false) {
+            tracing::warn!("could not resume emulation worker after system change: {e}");
+        }
+    }
+}
+
 fn save_current_cartridge(app: &App) {
     let Some(rom_path) = app.rom_path.borrow().clone() else {
         return;
     };
-    let system_ref = app.system.borrow();
-    let Some(system) = system_ref.as_ref() else {
-        return;
+    let data = match app.worker.save_data() {
+        Ok(Some(data)) => data,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(rom = %rom_path.display(), "could not read cartridge save: {e}");
+            return;
+        }
     };
-    let data = system.save_data();
     if data.is_empty() {
         return;
     }
@@ -1178,7 +1141,7 @@ fn save_current_cartridge(app: &App) {
             return;
         }
     }
-    if let Err(e) = std::fs::write(&save_path, data) {
+    if let Err(e) = std::fs::write(&save_path, &data) {
         tracing::warn!(save = %save_path.display(), "could not write cartridge save: {e}");
     }
 }
@@ -1209,10 +1172,6 @@ fn save_current_state(app: &App, window: &MainWindow) {
     let Some(rom_path) = app.rom_path.borrow().clone() else {
         return;
     };
-    let system_ref = app.system.borrow();
-    let Some(system) = system_ref.as_ref() else {
-        return;
-    };
     let path = match state_path_for_rom(&rom_path) {
         Ok(path) => path,
         Err(e) => {
@@ -1222,7 +1181,7 @@ fn save_current_state(app: &App, window: &MainWindow) {
             return;
         }
     };
-    let data = match system.save_state_bytes() {
+    let data = match app.worker.save_state() {
         Ok(data) => data,
         Err(e) => {
             tracing::warn!(state = %path.display(), "could not encode save state: {e}");
@@ -1281,14 +1240,11 @@ fn load_current_state(app: &App, window: &MainWindow) {
             return;
         }
     };
-    let mut system_ref = app.system.borrow_mut();
-    let Some(system) = system_ref.as_mut() else {
-        return;
-    };
-    match system.load_state_bytes(&data) {
+    let bytes = data.len();
+    match app.worker.load_state(data) {
         Ok(()) => {
-            update_window_frame(window, system, app.config.borrow().rotation);
-            tracing::info!(state = %path.display(), bytes = data.len(), "loaded state");
+            app.frame_redraw_request.set(true);
+            tracing::info!(state = %path.display(), bytes, "loaded state");
             window.set_status_text(
                 format!(
                     "{} — state loaded: {}",
@@ -1342,80 +1298,19 @@ fn file_name_for_rom(rom_path: &Path, suffix: &str) -> String {
     name
 }
 
-fn update_window_frame(window: &MainWindow, system: &System, rotation: RotationKind) {
+fn update_window_frame(window: &MainWindow, framebuffer: &[u16], rotation: RotationKind) {
     let (bw, bh) = if rotation.is_rotated() {
         (video::SCREEN_HEIGHT as u32, video::SCREEN_WIDTH as u32)
     } else {
         (video::SCREEN_WIDTH as u32, video::SCREEN_HEIGHT as u32)
     };
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(bw, bh);
-    let fb = system.framebuffer();
     match rotation {
-        RotationKind::None => video::write_rgba(fb, buffer.make_mut_bytes()),
-        RotationKind::Right => video::write_rgba_rotated_cw(fb, buffer.make_mut_bytes()),
-        RotationKind::Left => video::write_rgba_rotated_ccw(fb, buffer.make_mut_bytes()),
+        RotationKind::None => video::write_rgba(framebuffer, buffer.make_mut_bytes()),
+        RotationKind::Right => video::write_rgba_rotated_cw(framebuffer, buffer.make_mut_bytes()),
+        RotationKind::Left => video::write_rgba_rotated_ccw(framebuffer, buffer.make_mut_bytes()),
     }
     window.set_frame(Image::from_rgba8(buffer));
-}
-
-/// Run one frame with per-scanline tracing and print a compact report of the
-/// display registers, highlighting where they change down the frame (the
-/// signature of a raster split). Triggered by the `P` key.
-fn dump_display_registers(system: &mut System, keys: KeyState) {
-    let trace = system.run_frame_traced(keys);
-    let bus = system.bus_mut();
-    eprintln!("── display register dump ──────────────────────────────");
-    eprintln!(
-        "disp_ctrl=0b{:08b} int_enable=0b{:08b} hbl_ctrl=0b{:08b}",
-        bus.peek_io(0x00),
-        bus.peek_io(0xB2),
-        bus.peek_io(0xA2),
-    );
-    eprintln!(
-        "scr2_window (x1,y1,x2,y2)=({},{},{},{})",
-        bus.peek_io(0x08),
-        bus.peek_io(0x09),
-        bus.peek_io(0x0A),
-        bus.peek_io(0x0B),
-    );
-    eprintln!("per-scanline changes (line: disp_ctrl scr1_y scr2_y line_cmp):");
-    let mut prev: Option<swanium_core::system::ScanlineTrace> = None;
-    for t in &trace {
-        let changed = prev.is_none_or(|p| {
-            p.disp_ctrl != t.disp_ctrl
-                || p.scr1_scroll_y != t.scr1_scroll_y
-                || p.scr2_scroll_y != t.scr2_scroll_y
-                || p.line_compare != t.line_compare
-        });
-        if changed {
-            eprintln!(
-                "  {:3}: 0b{:08b} {:3} {:3} {:3}",
-                t.line, t.disp_ctrl, t.scr1_scroll_y, t.scr2_scroll_y, t.line_compare
-            );
-        }
-        prev = Some(*t);
-    }
-    let bus = system.bus_mut();
-    eprintln!(
-        "map_base=0x{:02X} scroll scr1=({},{}) scr2=({},{})",
-        bus.peek_io(0x07),
-        bus.peek_io(0x10),
-        bus.peek_io(0x11),
-        bus.peek_io(0x12),
-        bus.peek_io(0x13),
-    );
-    for (label, scr2) in [("SCR1 (back)", false), ("SCR2 (front)", true)] {
-        eprintln!("{label}:");
-        for y in (0..video::SCREEN_HEIGHT as u8).step_by(8) {
-            let mut row = String::new();
-            for x in (0..video::SCREEN_WIDTH).step_by(8) {
-                let (px, _) = bus.debug_bg_sample(scr2, x, y);
-                row.push(if px != 0 { 'X' } else { '.' });
-            }
-            eprintln!("  y={y:3} {row}");
-        }
-    }
-    eprintln!("───────────────────────────────────────────────────────");
 }
 
 #[cfg(test)]

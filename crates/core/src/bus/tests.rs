@@ -268,6 +268,29 @@ fn speaker_volume_register_survives_model_switch() {
 }
 
 #[test]
+fn sound_output_ports_are_derived_from_current_apu_state() {
+    let mut bus = Bus::new(vec![0u8; 0x10000]);
+    bus.wram[0] = 0x50; // channel 1's first tick outputs the high-nibble 5
+    bus.write_io(0x80, 0);
+    bus.write_io(0x81, 0);
+    bus.write_io(0x88, 0x11);
+    bus.write_io(0x90, 0x01);
+    bus.tick_apu(1);
+
+    // These ports are read-only mixer state; a write must not replace their
+    // dynamically derived values.
+    bus.write_io(0x96, 0xFF);
+    assert_eq!(
+        (
+            u16::from_le_bytes([bus.read_io(0x96), bus.read_io(0x97)]),
+            u16::from_le_bytes([bus.read_io(0x98), bus.read_io(0x99)]),
+            u16::from_le_bytes([bus.read_io(0x9A), bus.read_io(0x9B)]),
+        ),
+        (5, 5, 10)
+    );
+}
+
+#[test]
 fn noise_reset_write_self_clears_and_resets_random_port() {
     let mut bus = Bus::new(vec![0u8; 0x10000]);
     bus.write_io(0x90, 0x88);

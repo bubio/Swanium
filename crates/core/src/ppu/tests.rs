@@ -268,6 +268,22 @@ fn all_layers_disabled_fills_scanline_with_backdrop() {
 }
 
 #[test]
+fn every_nonempty_layer_combination_renders_the_requested_line() {
+    let wram = vec![0u8; 0x10000];
+    let mut ports = [0u8; 0x100];
+    let mut ppu = Ppu::new();
+    let rendered_lines: Vec<_> = (1u8..=7)
+        .map(|layer_mask| {
+            ports[0x00] = layer_mask;
+            ppu.render_scanline(layer_mask, &wram, &ports, &MonoPaletteResolver);
+            ppu.current_line()
+        })
+        .collect();
+
+    assert_eq!(rendered_lines, [1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
 fn scr1_scroll_x_shifts_sampled_column() {
     // Place a distinct tile at map column 1; scroll right by 8 so screen x=0
     // samples column 1.

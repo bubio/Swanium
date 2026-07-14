@@ -22,10 +22,13 @@ workspace `[profile.release]`/`[profile.bench]` use `lto = "thin"` and
 ## 1. In-core frame profiler (subsystem split)
 
 Gated behind the `profiling` feature so a normal build has **zero** overhead and
-stays fully deterministic (it reads wall-clock `Instant` only when the feature
-is on, and never influences emulated state — see `crates/core/src/profile.rs`).
-CPU/APU/PPU/DMA buckets are reported as exclusive wall-clock buckets; the small
-unattributed remainder is frame-driver overhead and measurement overhead.
+stays fully deterministic. When enabled it reads wall-clock `Instant` around
+fine-grained work, including CPU/APU work at instruction boundaries; this never
+influences emulated state, but the measurement cost can materially slow the
+workload and distort absolute frame time (see `crates/core/src/profile.rs`).
+Treat CPU/APU/PPU/DMA percentages as orientation, not as a normal-release timing
+baseline. Use Criterion without `profiling` for frame time and an external
+sampling profiler for function-level attribution.
 
 ```sh
 # Synthetic ROM:
@@ -51,7 +54,8 @@ To read the split programmatically, build with `--features profiling` and call
 
 > Note: the synthetic ROM's CPU is a trivial spin loop, so its CPU share is much
 > lower than a real game's. Use a real ROM via `SWANIUM_BENCH_ROM` for a
-> representative CPU/PPU/APU balance.
+> representative CPU/PPU/APU balance. Very fast synthetic workloads are also
+> the most distorted by the per-instruction timing probes.
 
 ## 2. Criterion benchmarks (regression tracking)
 
@@ -65,6 +69,7 @@ cargo bench -p swanium-core --bench frame --no-run        # build-check only
 
 - `run_frame` — a whole frame (the top-level number to watch),
 - `render_scanline` — the PPU renderer over 144 visible lines,
+- `render_background_scanline` — an SCR1-only PPU scanline,
 - `render_sprite_scanline` — a sprite-heavy PPU scanline,
 - `tick_apu_frame` — the APU over one frame's sound-clock ticks,
 - `tick_apu_wave_frame` — one wave channel over one frame's sound-clock ticks.
@@ -82,6 +87,84 @@ cargo bench -p swanium-core -- --baseline before
 Use `--no-run` only as a tooling check after unrelated core changes. It proves
 the bench target still compiles under `[profile.bench]`; it does not produce
 performance numbers.
+
+Reference result from the 2026-07-14 continuation pass (macOS ARM64, local
+Wizardry WSC ROM): changing CPU-visible APU mixer ports `0x96`–`0x9B` from eager
+per-`Apu::tick` updates to on-demand reads moved `run_frame` from 354.87 us to
+341.13 us (Criterion change estimate -4.28%). The public ws-test-suite
+sound-quirks oracle was run alongside the benchmark to guard the readback
+semantics.
+
+The following low-risk PPU continuation changed the per-line sprite scratch
+array from 128 to the hardware maximum of 32 entries and fetched each sprite's
+tile-row bytes once before decoding its eight pixels. `render_sprite_scanline`
+improved from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%). The
+same paired Wizardry `run_frame` comparison found no statistically significant
+whole-frame change (+0.01%, p=0.98); the public ws-test-suite sprite scanline
+oracle remained passing.
+
+The next low-risk PPU pass dispatches SCR1/SCR2/sprite enable combinations once
+per scanline into const-specialized render paths. This removes disabled-layer
+scratch-buffer generation and per-pixel enable branches after optimization.
+`render_background_scanline` improved from 533.34 ns to 435.55 ns (-18.11%),
+while the sprite-only `render_sprite_scanline` improved from 229.21 ns to
+79.794 ns (-64.21%). The paired Wizardry `run_frame` median moved from 329.09 us
+to 326.15 us (-0.49% central estimate); Criterion classified that whole-frame
+change within its noise threshold, so this pass records no general-frame
+regression.
+
+### 2026-07-14 optimization checkpoint and remaining headroom
+
+After the scanline specialization in commit `31182f1`, two unsampled normal
+Criterion runs of the local Wizardry WSC ROM reported `run_frame` medians of
+324.60 us and 331.16 us. The immediately preceding 326.15 us result is within
+that same observed run-to-run range; do not interpret a few microseconds of
+unpaired movement as a code regression or improvement.
+
+A 10-second macOS `sample` run against the optimized Criterion binary grouped
+top-of-stack samples approximately as follows. Sampling slows the process, so
+these are hotspot orientation percentages rather than absolute timings:
+
+| Area | Approximate samples | Main remaining work |
+| --- | ---: | --- |
+| APU | 30% | Full-path per-cycle stepping and instruction-boundary calls |
+| PPU | 25% | Background-line fill and enabled-layer composition |
+| MemoryBus | 20% | Address dispatch plus WRAM/ROM reads and writes |
+| CPU execute/decode | 18% | Opcode execution, ModRM decode, and operand helpers |
+| Frame-driver remainder | 6% | Scheduling and other frame-pipeline work |
+
+The observer-affected in-core profiler gave CPU 46.1%, APU 36.7%, PPU 16.3%,
+and DMA 0.0%; its subsystem ordering broadly supports the external sample, but
+its percentages must not be combined with the table above. The isolated
+`tick_apu_frame` benchmark was 45.15 us when advancing the APU in 159 chunks of
+256 cycles. A real frame calls it in much smaller CPU-instruction-sized chunks,
+which makes call/state-check granularity part of the APU opportunity.
+
+The same source-line sample revised the ROM-bank-cache expectation downward.
+`MemoryBus::read_u8` was a significant aggregate hotspot, but the selected ROM
+bank-0 calculation itself accounted for only about 2% of total samples in this
+title. It still performs a runtime remainder operation (`% rom.len()`) on each
+ROM read, so caching is a reasonable isolated low-to-medium-risk experiment,
+but it should now be expected to save roughly a few percent at most rather than
+produce a medium-to-large whole-frame improvement. Broader ROM/WRAM dispatch
+specialization has more headroom but also more memory-map correctness risk.
+
+The remaining changes should not be planned around a guaranteed further 2x
+speedup. A realistic combined expectation is about 1.3x-1.6x; an unusually
+successful set may approach 1.7x. Even halving each of the four major measured
+areas independently yields only about 1.9x overall before accounting for
+overlap and irreducible work. Reaching 2x would therefore require successful
+architectural work in both event-driven APU scheduling and CPU execution/fetch,
+not just the lower-risk local optimizations, and would carry substantially more
+cycle-accuracy risk.
+
+Core performance work is paused at this checkpoint in favor of release work.
+If it resumes, measure from this normal-release baseline and treat the remaining
+order as: event-driven APU (largest potential, high risk), broad MemoryBus
+specialization (medium potential, medium-high risk), further PPU background
+work (medium potential/risk), isolated ROM-bank caching (small-to-medium
+potential, low-to-medium risk), and CPU decode/fetch redesign (large potential,
+high risk).
 
 ## 3. External sampling profiler (function/line hotspots)
 

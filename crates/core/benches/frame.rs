@@ -99,6 +99,31 @@ fn warm_sprite_system() -> System {
     system
 }
 
+/// A warmed synthetic system with only SCR1 enabled. This isolates the common
+/// one-background-layer path and makes disabled-layer buffer work visible.
+fn warm_background_system() -> System {
+    let mut system = warm_system();
+    let bus = system.bus_mut();
+
+    bus.write_io(0x00, 0x01); // SCR1 enabled only
+    bus.write_io(0x07, 0x00); // SCR1 map base = 0
+    bus.write_io(0x20, 0x10); // palette 0: pixel 1 -> shade-pool entry 1
+    bus.write_io(0x21, 0x32);
+    bus.write_io(0x1C, 0x10); // identity shade pool
+    bus.write_io(0x1D, 0x32);
+
+    let [lo, hi] = 1u16.to_le_bytes(); // map (0, 0) -> tile 1
+    bus.write_u8(0, lo);
+    bus.write_u8(1, hi);
+    for row in 0..8u32 {
+        let addr = 0x2000 + 16 + row * 2;
+        bus.write_u8(addr, 0xAA);
+        bus.write_u8(addr + 1, 0x55);
+    }
+
+    system
+}
+
 fn bench_frame(c: &mut Criterion) {
     c.bench_function("run_frame", |b| {
         let mut system = warm_system();
@@ -120,6 +145,13 @@ fn bench_render_scanline(c: &mut Criterion) {
 fn bench_render_sprite_scanline(c: &mut Criterion) {
     c.bench_function("render_sprite_scanline", |b| {
         let mut system = warm_sprite_system();
+        b.iter(|| system.bus_mut().render_scanline(black_box(0)));
+    });
+}
+
+fn bench_render_background_scanline(c: &mut Criterion) {
+    c.bench_function("render_background_scanline", |b| {
+        let mut system = warm_background_system();
         b.iter(|| system.bus_mut().render_scanline(black_box(0)));
     });
 }
@@ -152,6 +184,7 @@ criterion_group!(
     bench_frame,
     bench_render_scanline,
     bench_render_sprite_scanline,
+    bench_render_background_scanline,
     bench_tick_apu,
     bench_tick_apu_wave
 );

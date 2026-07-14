@@ -5,14 +5,43 @@ Date: 2026-07-13
 ## Summary
 
 Linux audio output is available and `cpal` can open the stream, but the Slint GUI
-path can run substantially below the WonderSwan frame cadence. Because the
-current frontend advances emulation, pushes audio, and uploads the framebuffer
-from the same GUI timer callback, low GUI FPS directly starves the audio ring
-buffer and produces audible dropouts.
+path can run substantially below the WonderSwan frame cadence. The original
+frontend advanced emulation, pushed audio, and uploaded the framebuffer from the
+same GUI timer callback, so low GUI FPS directly starved the audio ring buffer
+and produced audible dropouts.
 
-This is not primarily an APU-silence issue. The user later confirmed audio was
-present but quiet; the remaining observed problem is crackling / frequent
-dropout.
+This was not primarily an APU-silence issue. The user later confirmed audio was
+present but quiet; the remaining observed problem at investigation time was
+crackling / frequent dropout.
+
+## Resolution (implemented 2026-07-14)
+
+Emulation and audio production are now independent of the Slint event loop:
+
+```text
+swanium-emulation worker
+  -> run System frames from real-time/audio-ring pacing
+  -> enqueue audio for every emulated frame
+  -> publish the latest RGB444 framebuffer snapshot
+
+Slint GUI thread
+  -> publish input/volume snapshots and FIFO commands
+  -> copy and display only the latest completed framebuffer
+```
+
+`AudioStream::open()` now separates the platform `cpal::Stream` lifetime from a
+movable `AudioProducer`. The stream remains on the GUI/platform thread, while
+the worker owns `System`, the resampler, and the producer half of the shared
+ring. ROM/reset/pause/save RAM/save-state/debug operations use a command channel;
+input and volume use atomics; framebuffer locking is limited to copying a
+preallocated snapshot. Native file dialogs publish neutral input but no longer
+stop emulation or audio production.
+
+Automated tests verify that the producer is `Send`, ring enqueue/clear behavior,
+initial/latest framebuffer publication, and that the worker advances even when
+the GUI never polls a frame. This removes GUI rendering cadence from the audio
+production critical path. Runtime validation on the originally affected Linux
+host remains useful to confirm the end-user symptom is gone.
 
 ## Observed facts
 
@@ -32,10 +61,10 @@ audio stream opened device_rate=44100
 
 So `AudioStream::open()` succeeds on Linux in this environment.
 
-## Current frontend scheduling shape
+## Original frontend scheduling shape
 
-The frontend timer currently does one emulated frame and one UI upload in the
-same callback:
+Before the resolution above, the frontend timer did one emulated frame and one
+UI upload in the same callback:
 
 ```text
 Slint timer tick
@@ -45,7 +74,7 @@ Slint timer tick
   -> update_window_frame(...)
 ```
 
-Relevant implementation points:
+Relevant implementation points at the time of investigation:
 
 - `crates/frontend/src/main.rs`
   - `POLL_INTERVAL = 4 ms`
@@ -57,8 +86,8 @@ Relevant implementation points:
   - `AudioStream` uses a fixed-size ring buffer.
   - cpal underruns are padded with silence.
 
-This means rendering throughput controls audio production throughput. If the GUI
-only reaches ~40 frames/s, the core only produces ~40 frames/s worth of audio.
+This meant rendering throughput controlled audio production throughput. If the
+GUI only reaches ~40 frames/s, the core only produces ~40 frames/s worth of audio.
 The output device continues consuming at 44.1/48 kHz, so the ring repeatedly
 drains to silence.
 
@@ -217,11 +246,49 @@ fn clock_tower_trace_enabled() -> bool {
 }
 ```
 
-This check is called from hot write paths (`trace_clock_tower_io_write` /
-`trace_clock_tower_wram_write`). Even when tracing is disabled, reading the
-process environment from emulated memory/I/O writes is avoidable overhead. Cache
-the result once (for example with `std::sync::OnceLock<bool>`) or compile-gate
-the trace helper so the normal emulator path does not call `std::env::var_os`.
+This check was called from hot write paths (`trace_clock_tower_io_write` /
+`trace_clock_tower_wram_write`). Even when tracing was disabled, reading the
+process environment from emulated memory/I/O writes added avoidable overhead.
+As of 2026-07-14 the result is cached with `std::sync::OnceLock<bool>`, so the
+environment is read only on the first trace check.
+
+### Core optimization follow-up (2026-07-14)
+
+The original Linux number above came from the in-core `profiling` feature. A
+follow-up on macOS ARM64 showed that the profiler's per-instruction `Instant`
+measurements materially perturb this workload: with the same local Wizardry ROM,
+normal release Criterion measured about 1.0125 ms/frame before the changes while
+the profiler-enabled example measured about 1.243 ms/frame. The synthetic ROM
+was affected much more strongly. Consequently the profiler remains useful for
+subsystem orientation, but its frame time must not be treated as normal release
+throughput.
+
+Four low-risk steady-state changes were then applied:
+
+- cache the Clock Tower trace environment flag once;
+- update APU output-register readback once at each `Apu::tick` boundary instead
+  of every sound clock (sample generation and `tick(1)` SDMA behavior remain
+  unchanged);
+- process background scanlines by at-most-eight-pixel tile spans;
+- rasterize sprites once per scanline into buffers that preserve OAM order and
+  front/behind-SCR2 priority.
+
+Normal release Criterion after all four changes measured 367.24–368.68 us/frame
+on the same macOS machine and ROM, about 64% less time than the 1.0125 ms baseline
+(about 2.75x throughput). This is a core-only result and does not remove the need
+to fix Linux GUI/audio scheduling.
+
+A continuation pass sampled the normal optimized Criterion executable rather
+than the instrumented profiler. `Apu::update_output_ports` accounted for about
+6% of samples because it rebuilt and stored all three CPU-visible digital mixer
+words after every CPU instruction even though software rarely reads them. The
+ports `0x96`–`0x9B` are now derived from current channel/noise/voice state only
+when the CPU reads one. This does not change APU clocks or host sample generation,
+and the ws-test-suite sound-quirks oracle still passes. Against the immediately
+preceding Criterion baseline, the same Wizardry ROM improved from 354.87 us/frame
+to 341.13 us/frame (Criterion change estimate -4.28%). Relative to the original
+1.0125 ms/frame release baseline, the complete pass now uses about 66% less time
+per frame (2.97x throughput).
 
 ## Interpretation
 
@@ -231,10 +298,13 @@ At ~40 GUI FPS, only about 53% of the required audio batches are generated per
 second. The ring buffer cannot compensate for sustained underproduction; it can
 only absorb short jitter.
 
-Core-only release is already near the target, but with little margin. Any
-additional GUI cost from Slint image upload, scaling, compositing, status updates,
-input polling, or window-system overhead can push total throughput below the
-required cadence.
+The follow-up macOS Criterion result shows that the normal core has substantial
+headroom on that machine after the steady-state fixes. The original Linux
+profiler result is not a reliable absolute release baseline because the timing
+probes perturb the workload. Linux GUI cost from Slint image upload, scaling,
+compositing, status updates, input polling, or window-system synchronization can
+still push total throughput below the required cadence and must be measured
+separately on the affected host.
 
 The GUI sampling makes this more specific for the tested Linux PC:
 
@@ -243,22 +313,24 @@ The GUI sampling makes this more specific for the tested Linux PC:
 - software backend: samples move to core PPU work and software image rendering;
 - process CPU usage is low enough that a pure CPU bottleneck is unlikely for the
   default backend run;
-- there is also at least one clear core hot-path cleanup (`SWANIUM_CT_TRACE`
-  environment-variable polling).
+- the clear core hot-path cleanup (`SWANIUM_CT_TRACE` environment-variable
+  polling) has since been completed along with the follow-up optimizations above.
 
 ## Recommended fix order
 
-### 1. Remove known core hot-path overhead
+### 1. Remove known core hot-path overhead (done 2026-07-14)
 
-Cache or compile-gate `SWANIUM_CT_TRACE` so normal memory/I/O writes do not read
-the environment. This is a low-risk cleanup independent of the GUI/backend work.
+`SWANIUM_CT_TRACE` is now cached once, so normal memory/I/O writes no longer read
+the environment repeatedly. The same core pass also optimized PPU tile/sprite
+scanline work, then moved the CPU-visible APU mixer readback from eager per-tick
+updates to on-demand reads as described above.
 
-### 2. Add frontend timing instrumentation
+### 2. Add frontend timing instrumentation (optional follow-up)
 
 Add a gated diagnostic mode that records, per rendered frame:
 
-- `System::run_frame` duration
-- `AudioStream::push` duration
+- worker `System::run_frame` duration
+- `AudioProducer::push` duration
 - `update_window_frame` duration
 - produced sample count
 - non-zero sample count
@@ -294,7 +366,7 @@ up repeatedly. If the frontend is pushing unchanged window properties every
 tick, avoid doing so; window property changes should only occur when fullscreen,
 scale, rotation, title, or related UI state actually changes.
 
-### 4. Short-term mitigation: automatic frame skip
+### 4. Short-term mitigation: automatic frame skip (superseded)
 
 Implement an adaptive frame-skip path:
 
@@ -305,17 +377,18 @@ if emulation/audio is behind:
   upload only the final framebuffer
 ```
 
-This preserves audio production better than the current “one run = one draw”
-path. The visual result may skip frames under load, but audio should crackle
-less because sound generation is prioritized over drawing every frame.
+This would have preserved audio production better than the original “one run =
+one draw” path. It was not needed after implementing the stronger thread
+separation below: the GUI now naturally skips intermediate snapshots while the
+worker still generates every frame's audio.
 
-Important constraint: because core-only release measured ~74 FPS on the tested
-ROM, frame skip can only recover time spent outside the core frame. It will not
-fix titles where the core itself cannot reach real time.
+Important constraint: frame skip can only recover time spent outside skipped
+draws. It will not fix titles or hosts where normal (non-profiled) core execution
+itself cannot reach real time.
 
-### 5. Medium-term fix: decouple emulation/audio from GUI rendering
+### 5. Decouple emulation/audio from GUI rendering (done 2026-07-14)
 
-Move emulation and audio production off the Slint GUI callback:
+Emulation and audio production were moved off the Slint GUI callback:
 
 ```text
 emulation/audio thread
@@ -327,30 +400,40 @@ GUI thread
   -> draw latest available framebuffer at whatever rate the UI can sustain
 ```
 
-This is the standard emulator architecture. It allows audio to remain stable
+This architecture allows audio to remain stable
 when GUI rendering is slower than the emulated display cadence.
 
-The core API is already compatible with this direction, but the frontend will
-need careful synchronization for:
+The implementation provides explicit synchronization for:
 
-- input state snapshots,
-- ROM reset/load lifecycle,
-- save-state operations,
-- save RAM flushes,
-- framebuffer ownership/copying.
+- atomic input and volume snapshots;
+- FIFO ROM reset/load/pause/debug commands;
+- synchronous save-state and save-RAM requests at worker frame boundaries;
+- a short-held mutex around the latest framebuffer copy;
+- ordered pause/save/replace/resume during ROM changes, so the old machine
+  cannot advance after its final save snapshot.
 
-### 6. Performance work remains useful
+### 6. Continue measurement-driven performance work
 
-The headless release profile for this ROM is very close to the 75 FPS target, so
-optimization still matters. The profiler shows CPU and APU as the largest core
-buckets for this ROM:
+The 2026-07-14 steady-state pass produced a large normal-release improvement.
+An external sampling follow-up removed the remaining eager APU mixer-readback
+hotspot. The enabled profiler previously identified CPU and APU as the largest
+core buckets for this ROM:
 
 ```text
 CPU 53.9%, APU 29.5%, PPU 16.2%
 ```
 
-Future optimization should use `docs/dev/Profiling.md` and measure before/after
-with the same ROM or a license-clean equivalent.
+These percentages are observer-affected and should only guide the next external
+profile. Future optimization should use `docs/dev/Profiling.md` and measure
+before/after with normal release Criterion on the same ROM or a license-clean
+equivalent. CPU memory-map restructuring and event-driven APU scheduling were
+deliberately deferred because they carry more cycle-accuracy risk.
+
+The 2026-07-14 checkpoint in `docs/dev/Profiling.md` records the final
+remeasurement, remaining 1.3x-1.6x realistic headroom, and why another 2x is not
+an expected outcome without those higher-risk architectural changes. Core
+performance work is paused at that checkpoint while release preparation takes
+priority.
 
 ## Related but separate issue: perceived volume
 

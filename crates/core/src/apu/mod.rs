@@ -278,6 +278,47 @@ impl Apu {
         self.samples.clear();
     }
 
+    /// Read one byte of the CPU-visible current digital mixer level
+    /// (`0x96`–`0x9B`).
+    ///
+    /// These read-only ports are queried far less often than the APU is
+    /// clocked, so derive them from the current channel state on demand instead
+    /// of rebuilding and storing all three words after every CPU instruction.
+    pub(crate) fn read_output_port(&self, port: u8, ports: &[u8]) -> u8 {
+        debug_assert!((SND_CH_OUT_R..=SND_CH_OUT_LR + 1).contains(&(port as usize)));
+
+        let ctrl = ports[0x90];
+        let mut left = 0u16;
+        let mut right = 0u16;
+        for (ch, channel) in self.channels.iter().enumerate() {
+            if ctrl & CTRL_ENABLE[ch] == 0 || (ch == VOICE_CHANNEL && ctrl & CTRL_VOICE != 0) {
+                continue;
+            }
+
+            let sample = if ch == 3 && ctrl & CTRL_NOISE != 0 && self.noise_active {
+                self.noise_output
+            } else {
+                channel.sample
+            };
+            let volume = ports[SND_CH_VOL + ch];
+            left += sample as u16 * (volume >> 4) as u16;
+            right += sample as u16 * (volume & 0x0F) as u16;
+        }
+        if ctrl & CTRL_VOICE != 0 {
+            let voice = ports[SND_CH_VOL + VOICE_CHANNEL] as u16;
+            left += voice;
+            right += voice;
+        }
+
+        let value = match port as usize & !1 {
+            SND_CH_OUT_R => right,
+            SND_CH_OUT_L => left,
+            SND_CH_OUT_LR => left + right,
+            _ => unreachable!("output-port range was checked above"),
+        };
+        value.to_le_bytes()[port as usize & 1]
+    }
+
     /// Advance the APU by `cycles` sound-clock ticks, reading waveform data from
     /// `wram` and channel registers from `ports`. Sweep and noise feed their
     /// results back into the register-visible `ports` (frequency `0x84`/`0x85`,
@@ -294,7 +335,7 @@ impl Apu {
     /// The real 16 KiB WRAM and 256-entry port file always satisfy this.
     pub fn tick(&mut self, cycles: u32, wram: &[u8], ports: &mut [u8], color: bool) {
         if silent_fast_path(ports, color) {
-            self.tick_silence(cycles, ports);
+            self.tick_silence(cycles);
             return;
         }
         if wave_only_fast_path(ports, color) {
@@ -306,13 +347,10 @@ impl Apu {
         }
     }
 
-    fn tick_silence(&mut self, cycles: u32, ports: &mut [u8]) {
+    fn tick_silence(&mut self, cycles: u32) {
         self.fast_sweep_primed = false;
         self.voice_lp.reset();
         self.voice_level = 0;
-        write_port_word(ports, SND_CH_OUT_R, 0);
-        write_port_word(ports, SND_CH_OUT_L, 0);
-        write_port_word(ports, SND_CH_OUT_LR, 0);
 
         let total = self.sample_accum + cycles;
         let sample_count = total / Self::CYCLES_PER_SAMPLE;
@@ -366,8 +404,6 @@ impl Apu {
                 self.samples.push(right);
             }
         }
-
-        self.update_output_ports(&samples, ctrl, ports);
     }
 
     /// Advance the APU by a single sound-clock tick.
@@ -390,8 +426,6 @@ impl Apu {
         if self.noise_active {
             samples[3] = self.noise_output;
         }
-        self.update_output_ports(&samples, ctrl, ports);
-
         self.sample_accum += 1;
         if self.sample_accum >= Self::CYCLES_PER_SAMPLE {
             self.sample_accum = 0;
@@ -425,34 +459,6 @@ impl Apu {
         }
         let (l, r) = voice_route(self.voice_level, ports[SND_VOICE_VOL]);
         (l * MIX_SCALE * VOICE_GAIN, r * MIX_SCALE * VOICE_GAIN)
-    }
-
-    /// Update the CPU-visible sound-output readback ports.
-    ///
-    /// These ports expose the current digital mixer level, not the host audio
-    /// sample stream. Keep them in the small hardware-domain values used by the
-    /// test ROMs: one 4-bit wave/noise sample times the 4-bit volume nibble, or
-    /// the raw channel-2 voice latch when voice mode is selected.
-    fn update_output_ports(&self, samples: &[u8; 4], ctrl: u8, ports: &mut [u8]) {
-        let mut left = 0u16;
-        let mut right = 0u16;
-        for (ch, &sample) in samples.iter().enumerate() {
-            if ch == VOICE_CHANNEL && ctrl & CTRL_VOICE != 0 {
-                continue;
-            }
-            let vol = ports[SND_CH_VOL + ch];
-            left += sample as u16 * (vol >> 4) as u16;
-            right += sample as u16 * (vol & 0x0F) as u16;
-        }
-        if ctrl & CTRL_VOICE != 0 {
-            let voice = ports[SND_CH_VOL + VOICE_CHANNEL] as u16;
-            left += voice;
-            right += voice;
-        }
-        let lr = left + right;
-        write_port_word(ports, SND_CH_OUT_R, right);
-        write_port_word(ports, SND_CH_OUT_L, left);
-        write_port_word(ports, SND_CH_OUT_LR, lr);
     }
 
     /// Tick the channel-3 frequency sweep (port 0x8C/0x8D), writing the adjusted
@@ -561,12 +567,6 @@ fn pitch_of(ports: &[u8], ch: usize) -> u16 {
     let lo = ports[SND_CH_PITCH + ch * 2];
     let hi = ports[SND_CH_PITCH + ch * 2 + 1];
     u16::from_le_bytes([lo, hi]) & PITCH_MASK
-}
-
-fn write_port_word(ports: &mut [u8], port: usize, value: u16) {
-    let [lo, hi] = value.to_le_bytes();
-    ports[port] = lo;
-    ports[port + 1] = hi;
 }
 
 fn silent_fast_path(ports: &[u8], color: bool) -> bool {

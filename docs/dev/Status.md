@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-11. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-14. Update this file (not AGENTS.md) when implementation progress changes.
 
 This is the source of truth for current progress. For the broader document map,
 start with `docs/dev/README.md`.
@@ -13,6 +13,7 @@ start with `docs/dev/README.md`.
 | Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
 | Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
 | Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest pages 0-28 and WSHWTest `Test All` public oracles pass; further precision work is evidence-driven follow-up. |
+| Current delivery focus | Release preparation | The steady-state core performance pass is paused at commit `31182f1`; remaining higher-risk optimization is deferred until after release work. |
 | Remaining emulator work | Tracked in `docs/dev/RemainingWork.md` | Public-ROM oracle, PPU, timing, and audio follow-ups are now evidence-driven; self-built PCM sample-sequence coverage exists for `0x89`, SDMA, and HyperVoice. |
 | Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
 | Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
@@ -148,9 +149,15 @@ sprite window). Palette resolution abstracted behind the `PaletteResolver` trait
 `MonoPaletteResolver` (2bpp → palette-pool → shade-pool chain). The mono palette-zero
 transparency rule was fixed in commit 10a8146. Rendering is optimised per scanline rather than
 per pixel with output unchanged (verified by framebuffer hash): sprites are decoded and
-Y-filtered once per line (`collect_line_sprites`), and each background layer is resolved once per
-line (`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel
-span. Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
+Y-filtered once per line (`collect_line_sprites`), the per-line scratch array is sized to the
+hardware limit of 32 entries, and each sprite's two/four tile-row bytes are read once before its
+eight pixels are decoded. Each background layer is likewise resolved once per line
+(`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel span.
+The renderer dispatches the seven non-empty SCR1/SCR2/sprite layer combinations once per
+scanline into const-specialized paths. This lets the compiler remove scratch-buffer generation
+and per-pixel enable branches for disabled layers; when SCR2 is disabled, the sprite-front buffer
+is omitted as well.
+Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
 The scanline renderer now enforces the hardware's 32-sprites-per-scanline limit in OAM order:
 the first 32 sprites whose 8-pixel-tall box covers the line are considered, and later sprites on
 that line are ignored even if the earlier entries are transparent at the sampled pixel. Regression
@@ -256,9 +263,12 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
 - `crates/video`: shade-index (0–15) → RGBA8 conversion (`shade_to_rgba` / `framebuffer_to_rgba`);
   90° clockwise/counter-clockwise rotation for vertical games (`write_rgba_rotated_cw` /
   `write_rgba_rotated_ccw`).
-- `crates/audio`: cpal output stream + fixed-capacity `RingBuffer`; linear 24 kHz→device-rate
+- `crates/audio`: cpal output stream + movable producer endpoint + fixed-capacity `RingBuffer`;
+  linear 24 kHz→device-rate
   resampler (replacing the earlier zero-order hold, which made channel-2 PCM streams such as
-  *Last Alive* sound harsh on 48 kHz devices); audio–video sync via buffer-level frame pacing.
+  *Last Alive* sound harsh on 48 kHz devices). `AudioStream::open` returns the platform stream and
+  `AudioProducer` separately: the frontend keeps the stream lifetime on the GUI/platform thread and
+  moves the producer/resampler to the emulation worker. Audio sync uses ring-level frame pacing.
 - `crates/input`: backend-agnostic `Button` enum (11 keys, stable `name`/`from_name`/`label`)
   + `keys_from`; directional X/Y-pad rotation helpers let the frontend rotate only
   orientation-dependent inputs with the screen while preserving A/B/Start. gilrs gamepad
@@ -282,8 +292,13 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   Cartridge SRAM/EEPROM saves are stored in `saves/` under the same platform config
   directory, one raw `.sav` file per ROM file name.
 - `crates/frontend`: Slint UI compiled from `ui/*.slint` via `build.rs` + `include_modules!`
-  (`MainWindow`, `SettingsWindow`, `AboutWindow`). Audio-paced timer drives
-  `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
+  (`MainWindow`, `SettingsWindow`, `AboutWindow`). A dedicated `swanium-emulation` thread owns
+  `System` and `AudioProducer`, runs frames from real-time/ring-level pacing, enqueues every frame's
+  audio, and publishes the latest RGB444 framebuffer. The Slint timer only polls host input, worker
+  events, and the newest snapshot before `video::write_rgba[_rotated_cw]` → Slint image. Mutable core
+  state never crosses the thread boundary; ROM/reset/pause/save RAM/save state/debug commands are
+  FIFO messages, input and volume are atomic snapshots, and framebuffer locking covers only its copy.
+  Menu bar:
   File ▸ Open ROM… / Open Recent (dynamic history) / Clear History / Settings… / Quit;
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
   Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`). ROM load automatically
@@ -292,8 +307,8 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
   About is platform-aware: macOS uses the OS-standard application-menu About item, while
   Windows/Linux keep the Slint Help ▸ About dialog.
-  Native Open ROM dialogs are opened outside the Slint frame timer, and
-  emulation/audio/input stays idle while the picker is open.
+  Native Open ROM dialogs are opened outside the Slint frame timer. Emulation/audio continues while
+  the picker is open; neutral input is published so the dialog cannot leave a game key held.
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted) / Reset (Ctrl+R, reloads
   the current ROM and clears transient audio/input state) / BIOS Settings… (when a BIOS mode is
   selected, resets while holding Start for the first few frames, matching the real BIOS setup-menu
@@ -307,12 +322,13 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   mode immediately resets/reloads the current emulation so the setting is visible without a manual
   reset. When a BIOS mode is selected, the frontend reads the corresponding fixed-name BIOS file and
   installs it into the core before reset; missing BIOS files fall back to direct boot with a status/log
-  warning. Core panics while running BIOS/game code are caught at the frontend frame boundary,
+  warning. Core panics while running BIOS/game code are caught at the worker frame boundary,
   logged, and converted to a paused/stopped status instead of crashing the app. Reset is always
   enabled: with a loaded ROM it reloads the current ROM, and without one it starts the selected
-  BIOS alone if available. Status bar (ROM name + FPS + master-volume slider,
-  0–100, applied to the cpal output via `AudioStream::set_volume` / `audio::scale_volume` and
-  persisted). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
+  BIOS alone if available. Status bar (ROM name + FPS + master-volume slider, 0–100, published as an
+  atomic setting and applied by `AudioProducer` via `audio::scale_volume`, then persisted). Worker
+  tests verify initial/latest frame publication and that emulation advances without GUI frame polling;
+  the headless core frame smoke remains in `crates/core/tests/system_frame.rs`.
 
 Remaining Phase 7 UI polish (deferred, non-blocking): Bicubic renderer (needs a future wgpu
 upscaling pipeline — Slint's image path exposes only nearest/bilinear).
@@ -413,12 +429,45 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   fully deterministic) accumulates exclusive per-subsystem wall-clock time (CPU / PPU / APU / DMA)
   inside `System::drive_frame`; read it via `System::profile_snapshot()` (`crates/core/src/profile.rs`).
   The `profile` example (`cargo run -p swanium-core --features profiling --example profile --release`)
-  prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM.
+  prints the split for a synthetic or real (`SWANIUM_BENCH_ROM`) ROM. The enabled profiler's
+  per-instruction timing materially perturbs fast workloads, so use its percentages only for
+  subsystem orientation and use Criterion/external sampling for absolute frame time.
 - **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`
-  plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
+  plus background/sprite `render_*_scanline` and `tick_apu_*` micro-benchmarks, on a
+  self-contained synthetic ROM.
   Use `cargo bench -p swanium-core --bench frame --no-run` for a build-only tooling check.
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
+- **Steady-state core hot paths (2026-07-14)** — the disabled Clock Tower trace flag is cached once;
+  background rows are processed in tile spans; and sprites are rasterized once into
+  OAM-order/priority-preserving scanline buffers. A follow-up sampling pass found that rebuilding the
+  CPU-visible APU mixer words (`0x96`–`0x9B`) at every `Apu::tick` boundary still consumed about 6%
+  of normal release frame time. Those read-only values are now derived from current channel state
+  only when the CPU reads them; audio sample generation and sound-clock advancement are unchanged,
+  and the public `mono/sound/quirks.ws` oracle passes. On macOS ARM64 with the local Wizardry WSC
+  ROM, this follow-up improved Criterion `run_frame` from 354.87 us to 341.13 us (Criterion change
+  estimate -4.28%). Across the full steady-state pass, normal release improved from about 1.0125 ms
+  to 0.3411 ms (about 66% less time, 2.97x throughput). CPU memory-map restructuring and event-driven
+  APU work remain deferred as higher-risk. A subsequent low-risk sprite pass reduced the
+  32-sprite scanline microbenchmark from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%)
+  by using a 32-entry scratch array and fetching each sprite tile row once. The Wizardry whole-frame
+  benchmark showed no statistically significant change (+0.01%, p=0.98), so this improves
+  sprite-heavy lines without a measured general-frame regression. A further scanline-level layer
+  specialization reduced the SCR1-only microbenchmark from 533.34 ns to 435.55 ns (-18.11%) and
+  the sprite-only microbenchmark from 229.21 ns to 79.794 ns (-64.21%). The paired Wizardry
+  `run_frame` median moved from 329.09 us to 326.15 us (-0.49% central estimate), which Criterion
+  classified within its noise threshold; no whole-frame regression was measured.
+- **Performance checkpoint / release priority (2026-07-14)** — two subsequent unsampled Wizardry
+  Criterion runs at `31182f1` measured 324.60 us and 331.16 us medians, consistent with the existing
+  ~326 us baseline after normal run-to-run variation. External sampling placed the remaining work
+  at roughly APU 30%, PPU 25%, MemoryBus 20%, CPU execution/decode 18%, and frame-driver remainder
+  6%. The ROM bank-0 calculation alone represented only about 2% of total samples, so its expected
+  whole-frame effect is now small-to-medium rather than medium-to-large. A realistic combined
+  outlook for all remaining candidates is about 1.3x-1.6x, with ~1.7x an optimistic result; a
+  further 2x would require high-risk event-driven APU and CPU execution/fetch redesign to succeed
+  together. Core performance work is therefore paused at this checkpoint and release preparation
+  takes priority. Detailed methodology and the deferred-candidate order are in
+  `docs/dev/Profiling.md`.
 
 ## Release tooling — macOS App Bundle
 

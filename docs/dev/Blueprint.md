@@ -42,36 +42,36 @@ architecture.
 
 # Architecture
 
-    +--------------------+
-    |      Slint GUI     |
+    +--------------------+       +-------------+
+    |      Slint GUI     |<------| Input/gilrs |
+    | commands + display |       +-------------+
     +---------+----------+
-              |
-    +---------v----------+
-    |    Frontend App    |
-    +---+------------+---+
-        |            |
-        |            +----------------+
-        |                             |
-    +---v----+                  +-----v------+
-    |  Audio |                  |   Input    |
-    |  cpal  |                  |   gilrs    |
-    +--------+                  +------------+
-    
-                 |
-                 v
-    
-    +----------------------------+
-    |      Emulator Core         |
-    |----------------------------|
-    | CPU                        |
-    | Memory                     |
-    | Video                      |
-    | Audio (APU)                |
-    | Cartridge                  |
-    | RTC                        |
-    +----------------------------+
+              | input/commands       latest framebuffer
+              v                              ^
+    +---------+------------------------------+--+
+    |       Frontend emulation/audio worker     |
+    | real-time + audio-ring pacing             |
+    +---------+-------------------------+--------+
+              |                         |
+              v                         v
+    +----------------------------+   +------------------+
+    |      Emulator Core         |   | Audio producer   |
+    |----------------------------|   | resampler + ring |
+    | CPU / Memory / PPU / APU   |   +--------+---------+
+    | Cartridge / RTC            |            |
+    +----------------------------+            v
+                                      +-------+-------+
+                                      | cpal callback |
+                                      +---------------+
 
-The emulator core should have no dependency on GUI libraries.
+The Slint event loop never owns or advances mutable emulator state. A dedicated
+frontend worker owns `System` and the producer half of the audio path, while the
+GUI publishes atomic input snapshots and displays the newest completed frame.
+The cpal stream/callback lifetime remains on the platform thread and consumes a
+shared ring buffer. Slow or temporarily blocked GUI rendering can therefore
+skip visual frames without starving audio generation.
+
+The emulator core should have no dependency on GUI or host-audio libraries.
 
 ------------------------------------------------------------------------
 
@@ -114,6 +114,7 @@ swanium/
 ### frontend
 
 -   Slint UI
+-   Emulation/audio worker and command/snapshot boundary
 -   Menus
 -   Settings
 -   ROM management
