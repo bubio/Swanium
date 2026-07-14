@@ -152,6 +152,10 @@ Y-filtered once per line (`collect_line_sprites`), the per-line scratch array is
 hardware limit of 32 entries, and each sprite's two/four tile-row bytes are read once before its
 eight pixels are decoded. Each background layer is likewise resolved once per line
 (`fill_background_line`), decoding the tile-map entry and tile row bytes once per 8-pixel span.
+The renderer dispatches the seven non-empty SCR1/SCR2/sprite layer combinations once per
+scanline into const-specialized paths. This lets the compiler remove scratch-buffer generation
+and per-pixel enable branches for disabled layers; when SCR2 is disabled, the sprite-front buffer
+is omitted as well.
 Together ~7× faster PPU / ~5× faster frame on a real WSC ROM; see `docs/dev/Profiling.md`.
 The scanline renderer now enforces the hardware's 32-sprites-per-scanline limit in OAM order:
 the first 32 sprites whose 8-pixel-tall box covers the line are considered, and later sprites on
@@ -428,7 +432,8 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   per-instruction timing materially perturbs fast workloads, so use its percentages only for
   subsystem orientation and use Criterion/external sampling for absolute frame time.
 - **Criterion benches** — `crates/core/benches/frame.rs` (`cargo bench -p swanium-core`): `run_frame`
-  plus `render_scanline` / `tick_apu_frame` micro-benchmarks, on a self-contained synthetic ROM.
+  plus background/sprite `render_*_scanline` and `tick_apu_*` micro-benchmarks, on a
+  self-contained synthetic ROM.
   Use `cargo bench -p swanium-core --bench frame --no-run` for a build-only tooling check.
 - **Release/bench profiles** — root `Cargo.toml` sets `lto = "thin"`, `codegen-units = 1` for
   `[profile.release]` and `[profile.bench]`.
@@ -446,7 +451,11 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   32-sprite scanline microbenchmark from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%)
   by using a 32-entry scratch array and fetching each sprite tile row once. The Wizardry whole-frame
   benchmark showed no statistically significant change (+0.01%, p=0.98), so this improves
-  sprite-heavy lines without a measured general-frame regression.
+  sprite-heavy lines without a measured general-frame regression. A further scanline-level layer
+  specialization reduced the SCR1-only microbenchmark from 533.34 ns to 435.55 ns (-18.11%) and
+  the sprite-only microbenchmark from 229.21 ns to 79.794 ns (-64.21%). The paired Wizardry
+  `run_frame` median moved from 329.09 us to 326.15 us (-0.49% central estimate), which Criterion
+  classified within its noise threshold; no whole-frame regression was measured.
 
 ## Release tooling — macOS App Bundle
 

@@ -69,6 +69,7 @@ cargo bench -p swanium-core --bench frame --no-run        # build-check only
 
 - `run_frame` — a whole frame (the top-level number to watch),
 - `render_scanline` — the PPU renderer over 144 visible lines,
+- `render_background_scanline` — an SCR1-only PPU scanline,
 - `render_sprite_scanline` — a sprite-heavy PPU scanline,
 - `tick_apu_frame` — the APU over one frame's sound-clock ticks,
 - `tick_apu_wave_frame` — one wave channel over one frame's sound-clock ticks.
@@ -101,6 +102,16 @@ improved from 248.94 ns to 227.72 ns (Criterion change estimate -8.57%). The
 same paired Wizardry `run_frame` comparison found no statistically significant
 whole-frame change (+0.01%, p=0.98); the public ws-test-suite sprite scanline
 oracle remained passing.
+
+The next low-risk PPU pass dispatches SCR1/SCR2/sprite enable combinations once
+per scanline into const-specialized render paths. This removes disabled-layer
+scratch-buffer generation and per-pixel enable branches after optimization.
+`render_background_scanline` improved from 533.34 ns to 435.55 ns (-18.11%),
+while the sprite-only `render_sprite_scanline` improved from 229.21 ns to
+79.794 ns (-64.21%). The paired Wizardry `run_frame` median moved from 329.09 us
+to 326.15 us (-0.49% central estimate); Criterion classified that whole-frame
+change within its noise threshold, so this pass records no general-frame
+regression.
 
 ## 3. External sampling profiler (function/line hotspots)
 

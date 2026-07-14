@@ -132,6 +132,13 @@ impl DisplayControl {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ScanlineConfig {
+    display: DisplayControl,
+    mode: TileMode,
+    backdrop: Rgb444,
+}
+
 /// PPU state: the rendered framebuffer plus the current scanline position.
 ///
 /// The framebuffer stores one resolved [`Rgb444`] color per pixel, row-major,
@@ -280,6 +287,54 @@ impl Ppu {
             return;
         }
 
+        let config = ScanlineConfig {
+            display: dc,
+            mode,
+            backdrop,
+        };
+        match (dc.scr1_enabled, dc.scr2_enabled, dc.sprites_enabled) {
+            (true, false, false) => self.render_enabled_layers::<true, false, false, R>(
+                line, wram, ports, resolver, config,
+            ),
+            (false, true, false) => self.render_enabled_layers::<false, true, false, R>(
+                line, wram, ports, resolver, config,
+            ),
+            (false, false, true) => self.render_enabled_layers::<false, false, true, R>(
+                line, wram, ports, resolver, config,
+            ),
+            (true, true, false) => self
+                .render_enabled_layers::<true, true, false, R>(line, wram, ports, resolver, config),
+            (true, false, true) => self
+                .render_enabled_layers::<true, false, true, R>(line, wram, ports, resolver, config),
+            (false, true, true) => self
+                .render_enabled_layers::<false, true, true, R>(line, wram, ports, resolver, config),
+            (true, true, true) => self
+                .render_enabled_layers::<true, true, true, R>(line, wram, ports, resolver, config),
+            (false, false, false) => unreachable!("empty layer set returned above"),
+        }
+        self.current_line = line;
+    }
+
+    /// Render one non-empty layer combination. The const parameters let the
+    /// compiler remove disabled line buffers and per-pixel layer branches after
+    /// the scanline-level dispatch in [`Ppu::render_scanline`].
+    fn render_enabled_layers<
+        const SCR1: bool,
+        const SCR2: bool,
+        const SPRITES: bool,
+        R: PaletteResolver,
+    >(
+        &mut self,
+        line: u8,
+        wram: &[u8],
+        ports: &[u8],
+        resolver: &R,
+        config: ScanlineConfig,
+    ) {
+        let dc = config.display;
+        let mode = config.mode;
+        let row = line as usize * SCREEN_WIDTH;
+
         // Decode the sprite attribute table once per scanline and keep only the
         // entries that cover this line (preserving table order, i.e. priority),
         // up to the hardware's 32-sprites-per-scanline limit.
@@ -287,7 +342,7 @@ impl Ppu {
         // 128 entries for every pixel. Zero-allocation: the stack-resident
         // scratch array is exactly the hardware's per-line maximum.
         let mut line_sprites = [SpriteEntry::default(); SPRITES_PER_SCANLINE];
-        let sprite_count = if dc.sprites_enabled {
+        let sprite_count = if SPRITES {
             collect_line_sprites(
                 &self.latched_sprites[..self.latched_sprite_count],
                 line,
@@ -302,17 +357,17 @@ impl Ppu {
         // decoding tile-map entries and tile rows once per 8-pixel span instead
         // of per pixel (see fill_background_line).
         let mut scr1_line = [BgSample::default(); SCREEN_WIDTH];
-        if dc.scr1_enabled {
+        if SCR1 {
             fill_background_line(wram, ports, BgLayer::Scr1, line, mode, &mut scr1_line);
         }
         let mut scr2_line = [BgSample::default(); SCREEN_WIDTH];
-        if dc.scr2_enabled {
+        if SCR2 {
             fill_background_line(wram, ports, BgLayer::Scr2, line, mode, &mut scr2_line);
         }
         let mut sprite_any_line = [None; SCREEN_WIDTH];
         let mut sprite_front_line = [None; SCREEN_WIDTH];
-        if dc.sprites_enabled {
-            fill_sprite_lines(
+        if SPRITES {
+            fill_sprite_lines::<SCR2, R>(
                 ports,
                 wram,
                 &dc,
@@ -325,34 +380,37 @@ impl Ppu {
             );
         }
         for x in 0..SCREEN_WIDTH {
-            let mut color = backdrop;
-            if dc.scr1_enabled {
+            let mut color = config.backdrop;
+            if SCR1 {
                 let s = scr1_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
                     color = resolver.resolve(ports, s.palette, s.pixel);
                 }
             }
             let mut scr2_color = None;
-            if dc.scr2_enabled && scr2_visible_at(&dc, ports, x, line) {
+            if SCR2 && scr2_visible_at(&dc, ports, x, line) {
                 let s = scr2_line[x];
                 if !resolver.transparent(s.palette, s.pixel) {
                     scr2_color = Some(resolver.resolve(ports, s.palette, s.pixel));
                 }
             }
 
-            let sprite_color = if scr2_color.is_some() {
-                sprite_front_line[x]
-            } else {
-                sprite_any_line[x]
-            };
-            if let Some(px) = sprite_color {
-                color = px;
+            if SPRITES {
+                let sprite_color = if SCR2 && scr2_color.is_some() {
+                    sprite_front_line[x]
+                } else {
+                    sprite_any_line[x]
+                };
+                if let Some(px) = sprite_color {
+                    color = px;
+                } else if let Some(px) = scr2_color {
+                    color = px;
+                }
             } else if let Some(px) = scr2_color {
                 color = px;
             }
             self.framebuffer[row + x] = color;
         }
-        self.current_line = line;
     }
 }
 
@@ -776,8 +834,11 @@ fn sprite_axis_delta(screen: u8, origin: u8) -> usize {
     screen.wrapping_sub(origin) as usize
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fill_sprite_lines<R: PaletteResolver>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "hot-path buffers stay explicit so const layer specialization can remove them"
+)]
+fn fill_sprite_lines<const NEED_FRONT: bool, R: PaletteResolver>(
     ports: &[u8],
     wram: &[u8],
     dc: &DisplayControl,
@@ -804,7 +865,7 @@ fn fill_sprite_lines<R: PaletteResolver>(
                 continue;
             }
             let need_any = any[screen_x].is_none();
-            let need_front = sprite.priority && front[screen_x].is_none();
+            let need_front = NEED_FRONT && sprite.priority && front[screen_x].is_none();
             if !need_any && !need_front {
                 continue;
             }
