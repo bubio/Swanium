@@ -429,6 +429,12 @@ before/after with normal release Criterion on the same ROM or a license-clean
 equivalent. CPU memory-map restructuring and event-driven APU scheduling were
 deliberately deferred because they carry more cycle-accuracy risk.
 
+The 2026-07-14 checkpoint in `docs/dev/Profiling.md` records the final
+remeasurement, remaining 1.3x-1.6x realistic headroom, and why another 2x is not
+an expected outcome without those higher-risk architectural changes. Core
+performance work is paused at that checkpoint while release preparation takes
+priority.
+
 ## Related but separate issue: perceived volume
 
 The user initially thought audio was absent, then confirmed it was audible but

@@ -113,6 +113,59 @@ to 326.15 us (-0.49% central estimate); Criterion classified that whole-frame
 change within its noise threshold, so this pass records no general-frame
 regression.
 
+### 2026-07-14 optimization checkpoint and remaining headroom
+
+After the scanline specialization in commit `31182f1`, two unsampled normal
+Criterion runs of the local Wizardry WSC ROM reported `run_frame` medians of
+324.60 us and 331.16 us. The immediately preceding 326.15 us result is within
+that same observed run-to-run range; do not interpret a few microseconds of
+unpaired movement as a code regression or improvement.
+
+A 10-second macOS `sample` run against the optimized Criterion binary grouped
+top-of-stack samples approximately as follows. Sampling slows the process, so
+these are hotspot orientation percentages rather than absolute timings:
+
+| Area | Approximate samples | Main remaining work |
+| --- | ---: | --- |
+| APU | 30% | Full-path per-cycle stepping and instruction-boundary calls |
+| PPU | 25% | Background-line fill and enabled-layer composition |
+| MemoryBus | 20% | Address dispatch plus WRAM/ROM reads and writes |
+| CPU execute/decode | 18% | Opcode execution, ModRM decode, and operand helpers |
+| Frame-driver remainder | 6% | Scheduling and other frame-pipeline work |
+
+The observer-affected in-core profiler gave CPU 46.1%, APU 36.7%, PPU 16.3%,
+and DMA 0.0%; its subsystem ordering broadly supports the external sample, but
+its percentages must not be combined with the table above. The isolated
+`tick_apu_frame` benchmark was 45.15 us when advancing the APU in 159 chunks of
+256 cycles. A real frame calls it in much smaller CPU-instruction-sized chunks,
+which makes call/state-check granularity part of the APU opportunity.
+
+The same source-line sample revised the ROM-bank-cache expectation downward.
+`MemoryBus::read_u8` was a significant aggregate hotspot, but the selected ROM
+bank-0 calculation itself accounted for only about 2% of total samples in this
+title. It still performs a runtime remainder operation (`% rom.len()`) on each
+ROM read, so caching is a reasonable isolated low-to-medium-risk experiment,
+but it should now be expected to save roughly a few percent at most rather than
+produce a medium-to-large whole-frame improvement. Broader ROM/WRAM dispatch
+specialization has more headroom but also more memory-map correctness risk.
+
+The remaining changes should not be planned around a guaranteed further 2x
+speedup. A realistic combined expectation is about 1.3x-1.6x; an unusually
+successful set may approach 1.7x. Even halving each of the four major measured
+areas independently yields only about 1.9x overall before accounting for
+overlap and irreducible work. Reaching 2x would therefore require successful
+architectural work in both event-driven APU scheduling and CPU execution/fetch,
+not just the lower-risk local optimizations, and would carry substantially more
+cycle-accuracy risk.
+
+Core performance work is paused at this checkpoint in favor of release work.
+If it resumes, measure from this normal-release baseline and treat the remaining
+order as: event-driven APU (largest potential, high risk), broad MemoryBus
+specialization (medium potential, medium-high risk), further PPU background
+work (medium potential/risk), isolated ROM-bank caching (small-to-medium
+potential, low-to-medium risk), and CPU decode/fetch redesign (large potential,
+high risk).
+
 ## 3. External sampling profiler (function/line hotspots)
 
 Once the frame profiler says *which* subsystem is hot, a sampling profiler shows

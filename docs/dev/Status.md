@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-11. Update this file (not AGENTS.md) when implementation progress changes.
+Last updated: 2026-07-14. Update this file (not AGENTS.md) when implementation progress changes.
 
 This is the source of truth for current progress. For the broader document map,
 start with `docs/dev/README.md`.
@@ -13,6 +13,7 @@ start with `docs/dev/README.md`.
 | Core emulator phases | Phases 1-8 complete/substantially complete | Phase 8 WonderSwan Color is complete, including 8a-8g and the HW_FLAGS 0xA0 boot-state fix. |
 | Emulator execution milestones | Milestones 9-12 complete | SDMA, public-ROM oracle seed, compatibility matrix seed, PPU correctness pass, WSC audio pass, RTC/save persistence pass. |
 | Current emulator focus | Milestone 13 | Timing/register precision: WSTimingTest pages 0-28 and WSHWTest `Test All` public oracles pass; further precision work is evidence-driven follow-up. |
+| Current delivery focus | Release preparation | The steady-state core performance pass is paused at commit `31182f1`; remaining higher-risk optimization is deferred until after release work. |
 | Remaining emulator work | Tracked in `docs/dev/RemainingWork.md` | Public-ROM oracle, PPU, timing, and audio follow-ups are now evidence-driven; self-built PCM sample-sequence coverage exists for `0x89`, SDMA, and HyperVoice. |
 | Compatibility evidence | Tracked in `docs/dev/CompatibilityMatrix.md` | Automated/synthetic rows cover CPU, SDMA, PPU, WSC audio, RTC, and mapper/save classes. |
 | Frontend | Phase 7 usable; polish deferred | Remaining listed UI polish is non-blocking. |
@@ -456,6 +457,17 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   the sprite-only microbenchmark from 229.21 ns to 79.794 ns (-64.21%). The paired Wizardry
   `run_frame` median moved from 329.09 us to 326.15 us (-0.49% central estimate), which Criterion
   classified within its noise threshold; no whole-frame regression was measured.
+- **Performance checkpoint / release priority (2026-07-14)** — two subsequent unsampled Wizardry
+  Criterion runs at `31182f1` measured 324.60 us and 331.16 us medians, consistent with the existing
+  ~326 us baseline after normal run-to-run variation. External sampling placed the remaining work
+  at roughly APU 30%, PPU 25%, MemoryBus 20%, CPU execution/decode 18%, and frame-driver remainder
+  6%. The ROM bank-0 calculation alone represented only about 2% of total samples, so its expected
+  whole-frame effect is now small-to-medium rather than medium-to-large. A realistic combined
+  outlook for all remaining candidates is about 1.3x-1.6x, with ~1.7x an optimistic result; a
+  further 2x would require high-risk event-driven APU and CPU execution/fetch redesign to succeed
+  together. Core performance work is therefore paused at this checkpoint and release preparation
+  takes priority. Detailed methodology and the deferred-candidate order are in
+  `docs/dev/Profiling.md`.
 
 ## Release tooling — macOS App Bundle
 
