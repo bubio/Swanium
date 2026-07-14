@@ -256,9 +256,12 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
 - `crates/video`: shade-index (0–15) → RGBA8 conversion (`shade_to_rgba` / `framebuffer_to_rgba`);
   90° clockwise/counter-clockwise rotation for vertical games (`write_rgba_rotated_cw` /
   `write_rgba_rotated_ccw`).
-- `crates/audio`: cpal output stream + fixed-capacity `RingBuffer`; linear 24 kHz→device-rate
+- `crates/audio`: cpal output stream + movable producer endpoint + fixed-capacity `RingBuffer`;
+  linear 24 kHz→device-rate
   resampler (replacing the earlier zero-order hold, which made channel-2 PCM streams such as
-  *Last Alive* sound harsh on 48 kHz devices); audio–video sync via buffer-level frame pacing.
+  *Last Alive* sound harsh on 48 kHz devices). `AudioStream::open` returns the platform stream and
+  `AudioProducer` separately: the frontend keeps the stream lifetime on the GUI/platform thread and
+  moves the producer/resampler to the emulation worker. Audio sync uses ring-level frame pacing.
 - `crates/input`: backend-agnostic `Button` enum (11 keys, stable `name`/`from_name`/`label`)
   + `keys_from`; directional X/Y-pad rotation helpers let the frontend rotate only
   orientation-dependent inputs with the screen while preserving A/B/Start. gilrs gamepad
@@ -282,8 +285,13 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   Cartridge SRAM/EEPROM saves are stored in `saves/` under the same platform config
   directory, one raw `.sav` file per ROM file name.
 - `crates/frontend`: Slint UI compiled from `ui/*.slint` via `build.rs` + `include_modules!`
-  (`MainWindow`, `SettingsWindow`, `AboutWindow`). Audio-paced timer drives
-  `System::run_frame` → `video::write_rgba[_rotated_cw]` → Slint image. Menu bar:
+  (`MainWindow`, `SettingsWindow`, `AboutWindow`). A dedicated `swanium-emulation` thread owns
+  `System` and `AudioProducer`, runs frames from real-time/ring-level pacing, enqueues every frame's
+  audio, and publishes the latest RGB444 framebuffer. The Slint timer only polls host input, worker
+  events, and the newest snapshot before `video::write_rgba[_rotated_cw]` → Slint image. Mutable core
+  state never crosses the thread boundary; ROM/reset/pause/save RAM/save state/debug commands are
+  FIFO messages, input and volume are atomic snapshots, and framebuffer locking covers only its copy.
+  Menu bar:
   File ▸ Open ROM… / Open Recent (dynamic history) / Clear History / Settings… / Quit;
   View ▸ Scale 1–4× / Fullscreen (aspect-preserving `image-fit: contain`) / Rotate Left /
   Rotate Right / Renderer (Nearest ↔ Bilinear via `image-rendering`). ROM load automatically
@@ -292,8 +300,8 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   checkmarks are title-prefix driven by state (not `checkable`, which toggles on activate).
   About is platform-aware: macOS uses the OS-standard application-menu About item, while
   Windows/Linux keep the Slint Help ▸ About dialog.
-  Native Open ROM dialogs are opened outside the Slint frame timer, and
-  emulation/audio/input stays idle while the picker is open.
+  Native Open ROM dialogs are opened outside the Slint frame timer. Emulation/audio continues while
+  the picker is open; neutral input is published so the dialog cannot leave a game key held.
   Emulation ▸ Pause (Ctrl+P, runtime-only toggle — not persisted) / Reset (Ctrl+R, reloads
   the current ROM and clears transient audio/input state) / BIOS Settings… (when a BIOS mode is
   selected, resets while holding Start for the first few frames, matching the real BIOS setup-menu
@@ -307,12 +315,13 @@ RA-friendly, side-effect-free `read_memory_at(addr)`. 11 physical keys are model
   mode immediately resets/reloads the current emulation so the setting is visible without a manual
   reset. When a BIOS mode is selected, the frontend reads the corresponding fixed-name BIOS file and
   installs it into the core before reset; missing BIOS files fall back to direct boot with a status/log
-  warning. Core panics while running BIOS/game code are caught at the frontend frame boundary,
+  warning. Core panics while running BIOS/game code are caught at the worker frame boundary,
   logged, and converted to a paused/stopped status instead of crashing the app. Reset is always
   enabled: with a loaded ROM it reloads the current ROM, and without one it starts the selected
-  BIOS alone if available. Status bar (ROM name + FPS + master-volume slider,
-  0–100, applied to the cpal output via `AudioStream::set_volume` / `audio::scale_volume` and
-  persisted). Headless frame smoke test in `crates/core/tests/system_frame.rs`.
+  BIOS alone if available. Status bar (ROM name + FPS + master-volume slider, 0–100, published as an
+  atomic setting and applied by `AudioProducer` via `audio::scale_volume`, then persisted). Worker
+  tests verify initial/latest frame publication and that emulation advances without GUI frame polling;
+  the headless core frame smoke remains in `crates/core/tests/system_frame.rs`.
 
 Remaining Phase 7 UI polish (deferred, non-blocking): Bicubic renderer (needs a future wgpu
 upscaling pipeline — Slint's image path exposes only nearest/bilinear).

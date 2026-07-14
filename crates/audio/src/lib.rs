@@ -8,19 +8,19 @@
 //! newest samples; underruns are padded with silence).
 //!
 //! [`AudioStream`] opens the host output device and wires the ring buffer to
-//! it, resampling from the APU's 24 kHz output to whatever rate the device
-//! reports.  The frontend calls [`AudioStream::push`] once per frame and the
-//! cpal thread drains the buffer automatically.
+//! it. Its companion [`AudioProducer`] is owned by the emulator thread,
+//! resamples from the APU's 24 kHz output to the device rate, and queues each
+//! frame while the cpal thread drains the buffer independently.
 
 mod resample;
 pub mod stream;
 
-pub use stream::AudioStream;
+pub use stream::{AudioProducer, AudioStream};
 
 /// Scale one sample by a 0–100 master volume (100 = unchanged, 0 = silence).
 ///
 /// Values above 100 are clamped to 100 (never amplifies past unity, so the
-/// APU's headroom is preserved). Applied producer-side in [`AudioStream::push`].
+/// APU's headroom is preserved). Applied producer-side in [`AudioProducer::push`].
 pub fn scale_volume(sample: i16, volume: u8) -> i16 {
     (sample as i32 * volume.min(100) as i32 / 100) as i16
 }

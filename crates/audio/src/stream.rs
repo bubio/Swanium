@@ -1,9 +1,10 @@
 //! cpal output stream wired to the emulator's [`RingBuffer`].
 //!
-//! [`AudioStream::open`] opens the default host output device and spawns a
-//! cpal audio thread.  The emulator pushes interleaved stereo `i16` samples
-//! each frame via [`AudioStream::push`]; the cpal callback drains the
-//! [`RingBuffer`] on its own thread at the device's native sample rate.
+//! [`AudioStream::open`] opens the default host output device and returns both
+//! the cpal stream lifetime guard and an [`AudioProducer`]. The emulator moves
+//! the producer to its worker thread and pushes interleaved stereo `i16`
+//! samples each frame; the cpal callback drains the [`RingBuffer`] on its own
+//! thread at the device's native sample rate.
 //!
 //! The emulator's APU produces samples at 24 kHz ([`APU_SAMPLE_RATE`]).  If
 //! the device uses a different rate the samples are first passed through a
@@ -32,13 +33,20 @@ const RING_CAPACITY: usize = 16_384;
 /// allocation in the hot audio path).
 const SCRATCH_SIZE: usize = 8_192;
 
-/// Connects the emulator's APU output to a host audio device via cpal.
+/// Keeps the host cpal output stream alive.
 ///
-/// Call [`AudioStream::push`] once per emulated frame to supply new samples.
-/// The cpal output thread drains the internal [`RingBuffer`] independently.
-///
-/// Dropping this value stops the audio stream.
+/// [`AudioStream::open`] also returns an [`AudioProducer`] that can be moved to
+/// the emulator thread. Dropping this value stops host audio output.
 pub struct AudioStream {
+    /// Keeps the cpal stream alive for the lifetime of this struct.
+    _stream: Stream,
+}
+
+/// Producer-side audio state owned by the emulator worker thread.
+///
+/// Resamples one emulated frame at a time and queues it for the independent
+/// cpal callback. This type contains no platform stream handle and is `Send`.
+pub struct AudioProducer {
     ring: Arc<Mutex<RingBuffer>>,
     /// Cached capacity so callers can read it without locking.
     ring_capacity: usize,
@@ -47,16 +55,14 @@ pub struct AudioStream {
     resampled: Vec<i16>,
     /// Master volume, 0 (mute) – 100 (full), applied in [`push`](Self::push).
     volume: u8,
-    /// Keeps the cpal stream alive for the lifetime of this struct.
-    _stream: Stream,
 }
 
 impl AudioStream {
-    /// Open the default host output device and start the audio stream.
+    /// Open the default host output device and create its producer endpoint.
     ///
     /// Returns an error when no output device is available or the stream
     /// cannot be created (e.g. in a headless CI environment).
-    pub fn open() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn open() -> Result<(Self, AudioProducer), Box<dyn std::error::Error>> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -76,14 +82,20 @@ impl AudioStream {
 
         tracing::info!(device_rate, "audio stream opened");
 
-        Ok(Self {
+        let producer = AudioProducer::new(ring, device_rate);
+        Ok((Self { _stream: stream }, producer))
+    }
+}
+
+impl AudioProducer {
+    fn new(ring: Arc<Mutex<RingBuffer>>, device_rate: u32) -> Self {
+        Self {
             ring,
             ring_capacity: RING_CAPACITY,
             resampler: Resampler::new(APU_SAMPLE_RATE, device_rate),
             resampled: Vec::new(),
             volume: 100,
-            _stream: stream,
-        })
+        }
     }
 
     /// Set the master volume, 0 (mute) – 100 (full). Values above 100 are
@@ -104,7 +116,11 @@ impl AudioStream {
                 *s = scale_volume(*s, self.volume);
             }
         }
-        let _ = self.ring.lock().unwrap().push(&self.resampled);
+        let _ = self
+            .ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(&self.resampled);
     }
 
     /// Number of samples currently queued (lock-based snapshot).
@@ -112,7 +128,10 @@ impl AudioStream {
     /// Used by the frontend to decide whether to run another emulated frame
     /// before the ring buffer empties and an underrun occurs.
     pub fn ring_fill(&self) -> usize {
-        self.ring.lock().unwrap().len()
+        self.ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Total ring buffer capacity in samples (constant after construction).
@@ -126,7 +145,10 @@ impl AudioStream {
     /// bleed into the next one; the cpal thread then underruns to silence until
     /// the new ROM fills the buffer again.
     pub fn clear(&self) {
-        self.ring.lock().unwrap().clear();
+        self.ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -185,7 +207,9 @@ fn build_stream(
 fn drain_f32(output: &mut [f32], ring: &Arc<Mutex<RingBuffer>>, scratch: &mut Vec<i16>) {
     let n = output.len();
     ensure_scratch(scratch, n);
-    ring.lock().unwrap().pop_into(&mut scratch[..n]);
+    ring.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop_into(&mut scratch[..n]);
     for (out, &s) in output.iter_mut().zip(&scratch[..n]) {
         *out = s as f32 / 32_768.0;
     }
@@ -194,14 +218,18 @@ fn drain_f32(output: &mut [f32], ring: &Arc<Mutex<RingBuffer>>, scratch: &mut Ve
 fn drain_i16(output: &mut [i16], ring: &Arc<Mutex<RingBuffer>>, scratch: &mut Vec<i16>) {
     let n = output.len();
     ensure_scratch(scratch, n);
-    ring.lock().unwrap().pop_into(&mut scratch[..n]);
+    ring.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop_into(&mut scratch[..n]);
     output.copy_from_slice(&scratch[..n]);
 }
 
 fn drain_u16(output: &mut [u16], ring: &Arc<Mutex<RingBuffer>>, scratch: &mut Vec<i16>) {
     let n = output.len();
     ensure_scratch(scratch, n);
-    ring.lock().unwrap().pop_into(&mut scratch[..n]);
+    ring.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop_into(&mut scratch[..n]);
     for (out, &s) in output.iter_mut().zip(&scratch[..n]) {
         // i16 → u16: shift origin from −32768..32767 to 0..65535
         *out = (s as i32 + 32_768) as u16;
@@ -213,5 +241,41 @@ fn drain_u16(output: &mut [u16], ring: &Arc<Mutex<RingBuffer>>, scratch: &mut Ve
 fn ensure_scratch(scratch: &mut Vec<i16>, n: usize) {
     if scratch.len() < n {
         scratch.resize(n, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn producer_at_native_rate() -> (AudioProducer, Arc<Mutex<RingBuffer>>) {
+        let ring = Arc::new(Mutex::new(RingBuffer::new(RING_CAPACITY)));
+        (AudioProducer::new(ring.clone(), APU_SAMPLE_RATE), ring)
+    }
+
+    #[test]
+    fn audio_producer_can_move_to_emulation_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<AudioProducer>();
+    }
+
+    #[test]
+    fn producer_push_queues_samples_for_callback() {
+        let (mut producer, ring) = producer_at_native_rate();
+        producer.push(&[10, 20, 30, 40]);
+        assert_eq!(
+            ring.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn producer_clear_drops_queued_samples() {
+        let (mut producer, _) = producer_at_native_rate();
+        producer.push(&[10, 20]);
+        producer.clear();
+        assert_eq!(producer.ring_fill(), 0);
     }
 }

@@ -5,14 +5,43 @@ Date: 2026-07-13
 ## Summary
 
 Linux audio output is available and `cpal` can open the stream, but the Slint GUI
-path can run substantially below the WonderSwan frame cadence. Because the
-current frontend advances emulation, pushes audio, and uploads the framebuffer
-from the same GUI timer callback, low GUI FPS directly starves the audio ring
-buffer and produces audible dropouts.
+path can run substantially below the WonderSwan frame cadence. The original
+frontend advanced emulation, pushed audio, and uploaded the framebuffer from the
+same GUI timer callback, so low GUI FPS directly starved the audio ring buffer
+and produced audible dropouts.
 
-This is not primarily an APU-silence issue. The user later confirmed audio was
-present but quiet; the remaining observed problem is crackling / frequent
-dropout.
+This was not primarily an APU-silence issue. The user later confirmed audio was
+present but quiet; the remaining observed problem at investigation time was
+crackling / frequent dropout.
+
+## Resolution (implemented 2026-07-14)
+
+Emulation and audio production are now independent of the Slint event loop:
+
+```text
+swanium-emulation worker
+  -> run System frames from real-time/audio-ring pacing
+  -> enqueue audio for every emulated frame
+  -> publish the latest RGB444 framebuffer snapshot
+
+Slint GUI thread
+  -> publish input/volume snapshots and FIFO commands
+  -> copy and display only the latest completed framebuffer
+```
+
+`AudioStream::open()` now separates the platform `cpal::Stream` lifetime from a
+movable `AudioProducer`. The stream remains on the GUI/platform thread, while
+the worker owns `System`, the resampler, and the producer half of the shared
+ring. ROM/reset/pause/save RAM/save-state/debug operations use a command channel;
+input and volume use atomics; framebuffer locking is limited to copying a
+preallocated snapshot. Native file dialogs publish neutral input but no longer
+stop emulation or audio production.
+
+Automated tests verify that the producer is `Send`, ring enqueue/clear behavior,
+initial/latest framebuffer publication, and that the worker advances even when
+the GUI never polls a frame. This removes GUI rendering cadence from the audio
+production critical path. Runtime validation on the originally affected Linux
+host remains useful to confirm the end-user symptom is gone.
 
 ## Observed facts
 
@@ -32,10 +61,10 @@ audio stream opened device_rate=44100
 
 So `AudioStream::open()` succeeds on Linux in this environment.
 
-## Current frontend scheduling shape
+## Original frontend scheduling shape
 
-The frontend timer currently does one emulated frame and one UI upload in the
-same callback:
+Before the resolution above, the frontend timer did one emulated frame and one
+UI upload in the same callback:
 
 ```text
 Slint timer tick
@@ -45,7 +74,7 @@ Slint timer tick
   -> update_window_frame(...)
 ```
 
-Relevant implementation points:
+Relevant implementation points at the time of investigation:
 
 - `crates/frontend/src/main.rs`
   - `POLL_INTERVAL = 4 ms`
@@ -57,8 +86,8 @@ Relevant implementation points:
   - `AudioStream` uses a fixed-size ring buffer.
   - cpal underruns are padded with silence.
 
-This means rendering throughput controls audio production throughput. If the GUI
-only reaches ~40 frames/s, the core only produces ~40 frames/s worth of audio.
+This meant rendering throughput controlled audio production throughput. If the
+GUI only reaches ~40 frames/s, the core only produces ~40 frames/s worth of audio.
 The output device continues consuming at 44.1/48 kHz, so the ring repeatedly
 drains to silence.
 
@@ -283,12 +312,12 @@ The GUI sampling makes this more specific for the tested Linux PC:
 the environment repeatedly. The same core pass also batched APU output readback
 and PPU tile/sprite scanline work as described above.
 
-### 2. Add frontend timing instrumentation
+### 2. Add frontend timing instrumentation (optional follow-up)
 
 Add a gated diagnostic mode that records, per rendered frame:
 
-- `System::run_frame` duration
-- `AudioStream::push` duration
+- worker `System::run_frame` duration
+- `AudioProducer::push` duration
 - `update_window_frame` duration
 - produced sample count
 - non-zero sample count
@@ -324,7 +353,7 @@ up repeatedly. If the frontend is pushing unchanged window properties every
 tick, avoid doing so; window property changes should only occur when fullscreen,
 scale, rotation, title, or related UI state actually changes.
 
-### 4. Short-term mitigation: automatic frame skip
+### 4. Short-term mitigation: automatic frame skip (superseded)
 
 Implement an adaptive frame-skip path:
 
@@ -335,17 +364,18 @@ if emulation/audio is behind:
   upload only the final framebuffer
 ```
 
-This preserves audio production better than the current “one run = one draw”
-path. The visual result may skip frames under load, but audio should crackle
-less because sound generation is prioritized over drawing every frame.
+This would have preserved audio production better than the original “one run =
+one draw” path. It was not needed after implementing the stronger thread
+separation below: the GUI now naturally skips intermediate snapshots while the
+worker still generates every frame's audio.
 
 Important constraint: frame skip can only recover time spent outside skipped
 draws. It will not fix titles or hosts where normal (non-profiled) core execution
 itself cannot reach real time.
 
-### 5. Medium-term fix: decouple emulation/audio from GUI rendering
+### 5. Decouple emulation/audio from GUI rendering (done 2026-07-14)
 
-Move emulation and audio production off the Slint GUI callback:
+Emulation and audio production were moved off the Slint GUI callback:
 
 ```text
 emulation/audio thread
@@ -357,17 +387,17 @@ GUI thread
   -> draw latest available framebuffer at whatever rate the UI can sustain
 ```
 
-This is the standard emulator architecture. It allows audio to remain stable
+This architecture allows audio to remain stable
 when GUI rendering is slower than the emulated display cadence.
 
-The core API is already compatible with this direction, but the frontend will
-need careful synchronization for:
+The implementation provides explicit synchronization for:
 
-- input state snapshots,
-- ROM reset/load lifecycle,
-- save-state operations,
-- save RAM flushes,
-- framebuffer ownership/copying.
+- atomic input and volume snapshots;
+- FIFO ROM reset/load/pause/debug commands;
+- synchronous save-state and save-RAM requests at worker frame boundaries;
+- a short-held mutex around the latest framebuffer copy;
+- ordered pause/save/replace/resume during ROM changes, so the old machine
+  cannot advance after its final save snapshot.
 
 ### 6. Continue measurement-driven performance work
 
