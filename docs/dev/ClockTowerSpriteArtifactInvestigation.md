@@ -31,6 +31,9 @@ Confirmed fix:
 - Target ROM:
   `/Volumes/CrucialX6/roms/WonderSwan/wonderswan-japan/Clock Tower (J) [M][!].ws`
 - The title screen and menu render correctly.
+- On 2026-07-14, the user reported that the earlier black-screen symptom
+  reappeared: after starting the game from the menu, the screen stayed black.
+  This is separate from the walking sprite artifact fixed on 2026-07-12.
 - Reproduction from fresh start:
   1. At the title screen, press `START`.
   2. At the menu, press Down once to select `QUICK START`.
@@ -43,8 +46,9 @@ Confirmed fix:
   at the wrong horizontal position, similar to an afterimage.
 - The user pointed out that choosing `GAME START` or another item instead of
   `QUICK START` can start a demo, so menu selection must be exact.
-- The original black-screen issue was no longer the main symptom by the time of
-  this investigation. The fixed problem was the walking sprite artifact.
+- The walking sprite artifact and the QUICK START black screen had different
+  causes. The former was sprite evaluation timing; the latter was APU noise LFSR
+  readback behavior.
 
 ## User-Provided Evidence
 
@@ -144,6 +148,65 @@ After the line-142 OAM capture change:
 - Frames 96..130 and 140..220 were regenerated.
 - No obvious displaced next-motion piece was visible in the generated sheets.
 - The user confirmed that the frontend gameplay path is fixed.
+
+### QUICK START Black-Screen Recurrence
+
+On 2026-07-14, the black-screen symptom was reproduced headlessly from a clean
+boot path with `ct_probe`:
+
+```sh
+CT_PROBE_NO_SAVE=1 cargo run -p swanium-core --example ct_probe
+```
+
+The probe script was adjusted so the automated inputs happen after the relevant
+screens appear:
+
+- Wait for the title screen.
+- Press `START`.
+- Wait for the menu.
+- Press Down once to select `QUICK START`.
+- Press `A`.
+
+Before the APU LFSR fix:
+
+- `/tmp/ct_probe_quickstart_after_menu_sheet.png` showed the menu at frames
+  around 870..930, then a sustained black screen from about frame 960 onward.
+- Frame logs showed `disp=00`, `spr_count=0`, and the CPU still running, so this
+  was not a frontend display freeze or unsupported-opcode stop.
+- During the black screen the CPU repeatedly executed code around `4000:d0xx`.
+  Logged instruction bytes included `e5 92` (`IN AX, 0x92`), showing the game was
+  reading the sound noise LFSR register while display was disabled.
+
+StoicGoose comparison:
+
+- StoicGoose's channel-4 noise LFSR advances when the `SND_NOISE` gate is open.
+- CH4 enable / noise mode controls audible output, not whether the CPU-visible
+  random register can change.
+
+Swanium's previous behavior:
+
+- `Apu::step_noise` advanced the LFSR only when all of these were true:
+  `SND_NOISE` gate open, `CTRL_NOISE` set, and CH4 enabled.
+- Clock Tower used port `0x92` as a randomness source during QUICK START loading
+  while CH4 audible output was not fully enabled, causing the readback to stay
+  stuck and the game to remain in its black loading state.
+
+Fix:
+
+- Advance the CPU-visible `0x92`/`0x93` LFSR whenever the `SND_NOISE` gate is
+  open.
+- Keep `CTRL_NOISE | CH4_ENABLE` as the condition for audible channel-4 noise
+  output.
+- Added/updated the APU regression test:
+  `noise_lfsr_readback_advances_when_gate_open_without_channel_output`.
+
+After the fix:
+
+- `/tmp/ct_probe_lfsr_gate_only_sheet.png` showed the temporary loading black
+  screen ending around frame 1230 and the gameplay scene appearing from about
+  frame 1260.
+- Frame logs showed `disp=0f` and `spr_count=128` after the load, confirming the
+  game resumed normal rendering.
 
 ### User Video Frames
 

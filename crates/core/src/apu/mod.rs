@@ -507,11 +507,11 @@ impl Apu {
     fn step_noise(&mut self, ctrl: u8, ports: &mut [u8]) {
         let output_enabled = ctrl & CTRL_NOISE != 0 && ctrl & CTRL_ENABLE[3] != 0;
         let noise_ctrl = ports[SND_NOISE];
-        if noise_ctrl & NOISE_GATE == 0 || !output_enabled {
+        if noise_ctrl & NOISE_GATE == 0 {
             self.noise_active = false;
             return; // noise gate closed: hold previous state
         }
-        self.noise_active = true;
+        self.noise_active = output_enabled;
         if self.noise_counter != 0 {
             self.noise_counter -= 1;
             return;
@@ -558,7 +558,7 @@ impl Apu {
         // shifted in), kept in the 4-bit domain like the wave channels — exactly
         // StoicGoose's `(NoiseLfsr & 1) * 0x0F`.
         self.noise_output = if self.lfsr & 1 != 0 { 0x0F } else { 0x00 };
-        self.noise_active = true;
+        self.noise_active = output_enabled;
     }
 }
 

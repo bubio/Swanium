@@ -472,21 +472,28 @@ fn noise_gate_closed_holds_lfsr() {
 }
 
 #[test]
-fn noise_lfsr_requires_channel4_and_noise_mode() {
-    // ws-test-suite `mono/sound/quirks.ws` verifies that the CPU-visible LFSR
-    // readback is held unless both CH4_ENABLE and CH4_NOISE are set.
+fn noise_lfsr_readback_advances_when_gate_open_without_channel_output() {
+    // Clock Tower uses the CPU-visible LFSR readback as a randomness source
+    // during QUICK START loading. StoicGoose advances this register from the
+    // noise gate itself; CH4_ENABLE/CH4_NOISE only control audible output.
     let (mut ports, wram) = blank();
     ports[SND_NOISE] = NOISE_GATE;
     let mut apu = Apu::new();
 
     ports[0x90] = CTRL_ENABLE[3];
     apu.tick(1, &wram, &mut ports, false);
-    assert_eq!(ports[SND_RANDOM], 0);
+    assert_eq!(ports[SND_RANDOM], 1);
 
+    let (mut ports, wram) = blank();
+    ports[SND_NOISE] = NOISE_GATE;
+    let mut apu = Apu::new();
     ports[0x90] = CTRL_NOISE;
     apu.tick(1, &wram, &mut ports, false);
-    assert_eq!(ports[SND_RANDOM], 0);
+    assert_eq!(ports[SND_RANDOM], 1);
 
+    let (mut ports, wram) = blank();
+    ports[SND_NOISE] = NOISE_GATE;
+    let mut apu = Apu::new();
     ports[0x90] = CTRL_ENABLE[3] | CTRL_NOISE;
     apu.tick(1, &wram, &mut ports, false);
     assert_eq!(ports[SND_RANDOM], 1);

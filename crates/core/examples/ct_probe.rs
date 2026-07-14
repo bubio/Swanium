@@ -48,9 +48,12 @@ fn main() {
         }
         return;
     }
-    if let Some(save_path) = default_save_path() {
-        if let Ok(save) = std::fs::read(save_path) {
-            system.load_save_data(&save);
+    let skip_save = std::env::var_os("CT_PROBE_NO_SAVE").is_some();
+    if !skip_save {
+        if let Some(save_path) = default_save_path() {
+            if let Ok(save) = std::fs::read(save_path) {
+                system.load_save_data(&save);
+            }
         }
     }
 
@@ -58,16 +61,13 @@ fn main() {
     let script = [
         // Logo/title need more time in headless direct boot than the earlier
         // quick probe allowed.
-        (220, KeyState::NONE),
+        (700, KeyState::NONE),
         (8, KeyState::START),
-        (60, KeyState::NONE),
+        (180, KeyState::NONE),
         (8, KeyState::X3),
         (20, KeyState::NONE),
         (8, KeyState::A),
-        (240, KeyState::NONE),
-        (20, KeyState::X2),
-        (8, KeyState::A),
-        (420, KeyState::NONE),
+        (900, KeyState::NONE),
     ];
 
     for (frames, keys) in script {
@@ -89,6 +89,21 @@ fn default_save_path() -> Option<PathBuf> {
 }
 
 fn dump_oam(system: &mut System, frame: usize, phase: &str) {
+    let cpu = system.cpu();
+    let cpu_context = format!(
+        "cs:ip={:04x}:{:04x} op={} ax={:04x} bx={:04x} cx={:04x} dx={:04x} sp={:04x} flags={:04x} halted={} fault={:?}",
+        cpu.regs.cs,
+        cpu.regs.ip,
+        opcode_bytes(system, cpu.regs.cs, cpu.regs.ip).join(""),
+        cpu.regs.ax,
+        cpu.regs.bx,
+        cpu.regs.cx,
+        cpu.regs.dx,
+        cpu.regs.sp,
+        cpu.flags.to_u16(),
+        cpu.halted,
+        cpu.fault
+    );
     let bus = system.bus_mut();
     let disp = bus.peek_io(0x00);
     let spr_base = bus.peek_io(0x04);
@@ -100,6 +115,12 @@ fn dump_oam(system: &mut System, frame: usize, phase: &str) {
         bus.peek_io(0x0E),
         bus.peek_io(0x0F),
     ];
+    let int_base = bus.peek_io(0xB0);
+    let int_enable = bus.peek_io(0xB2);
+    let int_cause = bus.peek_io(0xB4);
+    let timer_ctrl = bus.peek_io(0xA2);
+    let hblank_counter = u16::from_le_bytes([bus.peek_io(0xA8), bus.peek_io(0xA9)]);
+    let vblank_counter = u16::from_le_bytes([bus.peek_io(0xAA), bus.peek_io(0xAB)]);
     let oam = ((spr_base as u32) & 0x3F) << 9;
     let mut enabled = 0usize;
     let mut window = 0usize;
@@ -147,7 +168,7 @@ fn dump_oam(system: &mut System, frame: usize, phase: &str) {
         }
     }
     eprintln!(
-        "frame={frame} phase={phase} disp={disp:02x} spr_base={spr_base:02x} first={spr_first} count={spr_count} win={win:?} enabled={enabled} window={window} priority={priority} near_player={}",
+        "frame={frame} phase={phase} {cpu_context} disp={disp:02x} spr_base={spr_base:02x} first={spr_first} count={spr_count} win={win:?} int_base={int_base:02x} int_en={int_enable:02x} int_cause={int_cause:02x} timer={timer_ctrl:02x} hcnt={hblank_counter} vcnt={vblank_counter} enabled={enabled} window={window} priority={priority} near_player={}",
         near_player.join(" | ")
     );
     if !full_tail.is_empty() {
@@ -156,6 +177,13 @@ fn dump_oam(system: &mut System, frame: usize, phase: &str) {
             full_tail.join(" | ")
         );
     }
+}
+
+fn opcode_bytes(system: &System, cs: u16, ip: u16) -> Vec<String> {
+    let base = (((cs as u32) << 4).wrapping_add(ip as u32)) & 0xF_FFFF;
+    (0..8)
+        .map(|offset| format!("{:02x}", system.read_memory_at(base + offset)))
+        .collect()
 }
 
 fn axis_delta(screen: u8, origin: u8) -> usize {

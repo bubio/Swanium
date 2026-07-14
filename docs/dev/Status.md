@@ -131,9 +131,11 @@ masking unused bit 5.
 The mono sound quirks oracle pins CPU-visible APU output readback ports
 `0x96`/`0x98`/`0x9A`, LFSR readback through `0x92`/`0x93`, voice readback while
 the channel enable bit is clear, channel counter behavior across alternate
-voice/sweep/noise modes, the rule that the noise LFSR advances only when
-`CH4_ENABLE` and `CH4_NOISE` are both set, and immediate `0x8E` noise-reset
-self-clear.
+voice/sweep/noise modes, and immediate `0x8E` noise-reset self-clear. Clock
+Tower (J) also pins that CPU-visible noise LFSR readback advances when the
+`SND_NOISE` gate is open even if CH4 audible output is not enabled; CH4 enable
+and noise mode control DAC output, not whether port `0x92`/`0x93` can be used as
+a randomness source.
 The ws-test-suite RTC mapper oracle pins the generated RTC footer signal
 (`0x0C` bit 2 / flags value `0x04` together with non-zero byte `0x0D`), status-port
 ready/busy bits, command payload lengths for `0x10`-`0x1B`, unsupported-command
@@ -186,6 +188,10 @@ i16 @ 24 kHz via `Bus::audio_samples()` / `clear_audio_samples()`. **Voice (ch2 
 treated as **signed** (silence `0x80` → 0, per Mednafen `wswan/sound.c`) and reconstructed
 through a per-write 2-tap moving-average (`VoiceLowPass`, fed by `Apu::write_voice` from
 `Bus::write_io` on every `0x89` write while voice mode is on) with a compensating `VOICE_GAIN`.
+The CPU-visible channel-4 LFSR registers (`0x92`/`0x93`) advance from the noise gate
+(`0x8E` bit 4) independently of audible CH4 output; this matches the MIT StoicGoose
+behavior and fixes Clock Tower (J)'s QUICK START black-screen hang, where the game uses
+the readback as a randomness source while display is temporarily disabled.
 The frame driver now advances the APU after each CPU instruction (with scanline cycle carry)
 instead of batching a whole scanline after the CPU, so HBlank-ISR PCM writes land at the right
 point in the audio timeline. It also runs the HBlank timer across all 159 scanlines (144 visible
