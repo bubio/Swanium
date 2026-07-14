@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="Swanium"
 BUNDLE_ID="bubio.swanium"
-VERSION="1.0.0"
+VERSION="$(sed -n '/^\[workspace\.package\]/,/^\[/ { s/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p; }' Cargo.toml | head -n 1)"
 MIN_MACOS_VERSION="13.5"
 DESCRIPTION="A cross-platform WonderSwan / WonderSwan Color emulator written in Rust."
 COPYRIGHT="Copyright © 2026 Bubio"
@@ -16,7 +16,7 @@ PROFILE="release"
 PROFILE_FLAG="--release"
 TARGET_DIR="target"
 APP_DIR="${TARGET_DIR}/${PROFILE}/${APP_NAME}.app"
-ZIP_PATH="${TARGET_DIR}/${PROFILE}/${APP_NAME}-macos-universal.zip"
+ZIP_PATH="${TARGET_DIR}/${PROFILE}/${APP_NAME}-${VERSION}-macos-universal.zip"
 ASSET_CATALOG_DIR="${TARGET_DIR}/${PROFILE}/${APP_NAME}.xcassets"
 APPICONSET_DIR="${ASSET_CATALOG_DIR}/AppIcon.appiconset"
 ACTOOL_PARTIAL_PLIST="${TARGET_DIR}/${PROFILE}/${APP_NAME}-asset-info.plist"
@@ -64,6 +64,11 @@ done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "error: macOS App Bundle builds must run on macOS" >&2
+  exit 1
+fi
+
+if [[ -z "${VERSION}" ]]; then
+  echo "error: workspace version not found in Cargo.toml" >&2
   exit 1
 fi
 

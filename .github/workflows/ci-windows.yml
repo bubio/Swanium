@@ -53,21 +53,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - arch: x64
             target: x86_64-pc-windows-msvc
             artifact: swanium-windows-x86_64
-            zip_name: swanium-windows-x86_64.zip
           - arch: arm64
             target: aarch64-pc-windows-msvc
             artifact: swanium-windows-arm64
-            zip_name: swanium-windows-arm64.zip
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $Version = ($Metadata.packages | Where-Object { $_.name -eq "frontend" }).version
+          if (-not $Version) {
+            throw "frontend package version was not found"
+          }
+          "value=$Version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - name: Build and package
         shell: pwsh
         run: |
-          ./scripts/build-windows-app.ps1 --target "${{ matrix.target }}" --zip-path "dist/${{ matrix.zip_name }}"
+          ./scripts/build-windows-app.ps1 --target "${{ matrix.target }}" --zip-path "dist/Swanium-${{ steps.version.outputs.value }}-windows-${{ matrix.arch }}.zip"
       - name: Prepare unpacked artifact
         if: github.event_name != 'release'
         shell: pwsh
@@ -77,7 +85,7 @@ jobs:
             Remove-Item $UnpackedDir -Recurse -Force
           }
           New-Item -ItemType Directory -Path $UnpackedDir -Force | Out-Null
-          Expand-Archive -Path "dist/${{ matrix.zip_name }}" -DestinationPath $UnpackedDir
+          Expand-Archive -Path "dist/Swanium-${{ steps.version.outputs.value }}-windows-${{ matrix.arch }}.zip" -DestinationPath $UnpackedDir
       - name: Upload unpacked artifact
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
@@ -90,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.zip_name }}
+          path: dist/Swanium-${{ steps.version.outputs.value }}-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
 
   publish-release:

@@ -72,10 +72,12 @@ jobs:
       matrix:
         include:
           - arch: amd64
+            release-arch: x64
             runs-on: ubuntu-22.04
             deb-artifact: swanium-linux-amd64-deb
             rpm-artifact: swanium-linux-amd64-rpm
           - arch: arm64
+            release-arch: arm64
             runs-on: ubuntu-22.04-arm
             deb-artifact: swanium-linux-arm64-deb
             rpm-artifact: swanium-linux-arm64-rpm
@@ -107,7 +109,7 @@ jobs:
       - name: Build and package
         run: |
           chmod +x scripts/build-linux-app.sh
-          ./scripts/build-linux-app.sh --dist-dir dist
+          ./scripts/build-linux-app.sh --architecture "${{ matrix.release-arch }}" --dist-dir dist
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v4
         with:

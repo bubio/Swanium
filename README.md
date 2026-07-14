@@ -47,9 +47,9 @@ Prebuilt binaries are available on the [**Releases**](https://github.com/bubio/S
 
 | Platform | Artifact format | Typical asset names |
 |----------|-----------------|---------------------|
-| macOS | `.zip` (unsigned universal app bundle) | `Swanium-macos-universal.zip` |
-| Linux | `.deb`, `.rpm` | package files generated from `cargo deb` / `cargo generate-rpm` |
-| Windows | `.zip` | `swanium-windows-x86_64.zip`, `swanium-windows-arm64.zip` |
+| macOS | `.zip` (unsigned universal app bundle) | `Swanium-{version}-macos-universal.zip` |
+| Linux | `.deb`, `.rpm` | `Swanium-{version}-linux-{x64,arm64}.{deb,rpm}` |
+| Windows | `.zip` | `Swanium-{version}-windows-{x64,arm64}.zip` |
 
 > Note for macOS: Since this app has not been notarized by Apple, it may be blocked by Gatekeeper when launched for the first time.
 > You can resolve this using one of the following methods:
@@ -85,28 +85,30 @@ scripts/build-macos-app.sh
 Outputs:
 
 - `target/release/Swanium.app`
-- `target/release/Swanium-macos-universal.zip`
+- `target/release/Swanium-{version}-macos-universal.zip`
 
 ### Linux Packages
 
 Build `.deb` and `.rpm` packages on Linux (requires `cargo-deb` and `cargo-generate-rpm`):
 
 ```bash
-scripts/build-linux-app.sh --dist-dir dist
+scripts/build-linux-app.sh --architecture x64 --dist-dir dist
 ```
 
 Outputs:
 
-- `dist/deb/*.deb`
-- `dist/rpm/*.rpm`
+- `dist/deb/Swanium-{version}-linux-x64.deb`
+- `dist/rpm/Swanium-{version}-linux-x64.rpm`
 
 ### Windows Package
 
 Build and package on Windows (PowerShell):
 
 ```powershell
-./scripts/build-windows-app.ps1 --target x86_64-pc-windows-msvc --zip-path dist/swanium-windows-x86_64.zip
+./scripts/build-windows-app.ps1 --target x86_64-pc-windows-msvc
 ```
+
+Output: `dist/Swanium-{version}-windows-x64.zip`
 
 ## Usage
 

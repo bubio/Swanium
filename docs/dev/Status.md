@@ -482,7 +482,7 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   `MACOSX_DEPLOYMENT_TARGET=13.5`, combines the two release binaries via `lipo`, generates
   `Contents/Resources/Assets.car` from `assets/icons/AppIcon.png`, fills the
   `Info.plist` metadata used by macOS's standard About panel, and emits `target/release/Swanium.app`
-  plus `target/release/Swanium-macos-universal.zip`.
+  plus `target/release/Swanium-{version}-macos-universal.zip`.
   The bundle intentionally performs no code signing.
 - **Platform-split CI** — GitHub Actions workflows are split into
   `.github/workflows/ci-linux.yml`, `.github/workflows/ci-macos.yml`, and
@@ -491,3 +491,7 @@ Performance measurement infrastructure (see `docs/dev/Profiling.md`):
   locally, uploads the `.app` directory as the normal workflow artifact (avoiding zip-in-zip), and
   publishes the generated unsigned universal zip only for GitHub Releases via
   `.github/workflows/publish-release-assets.yml`.
+- **Unified release asset names** — all published files use
+  `Swanium-{version}-{platform}-{architecture}.{format}`. The platform workflows normalize Linux
+  package-manager filenames and Windows/macOS archives to `x64`, `arm64`, or `universal`, while
+  the shared publishing workflow rejects any filename outside the supported naming set.

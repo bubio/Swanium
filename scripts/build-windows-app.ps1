@@ -7,7 +7,7 @@ $OutputBinaryName = "Swanium.exe"
 $Target = "x86_64-pc-windows-msvc"
 $DistDir = "dist"
 $PackageDir = Join-Path $DistDir "package"
-$ZipPath = Join-Path $DistDir "swanium-windows.zip"
+$ZipPath = $null
 
 for ($i = 0; $i -lt $args.Count; $i++) {
     switch ($args[$i]) {
@@ -25,6 +25,22 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         "--help" { Write-Output "Usage: ./scripts/build-windows-app.ps1 [--target TARGET] [--zip-path PATH]"; exit 0 }
         default { throw "unknown argument: $($args[$i])" }
     }
+}
+
+$Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+$Version = ($Metadata.packages | Where-Object { $_.name -eq $Package }).version
+if (-not $Version) {
+    throw "$Package package version was not found"
+}
+
+$Architecture = switch ($Target) {
+    "x86_64-pc-windows-msvc" { "x64" }
+    "aarch64-pc-windows-msvc" { "arm64" }
+    default { throw "unsupported release target: $Target" }
+}
+
+if (-not $ZipPath) {
+    $ZipPath = Join-Path $DistDir "Swanium-$Version-windows-$Architecture.zip"
 }
 
 rustup target add $Target

@@ -21,6 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="$(sed -n '/^\[workspace\.package\]/,/^\[/ { s/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p; }' Cargo.toml | head -n 1)"
+          if [ -z "$VERSION" ]; then
+            echo "Workspace version was not found."
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -32,6 +42,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           ASSET_PATTERNS: ${{ inputs.asset-patterns }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
           if [ -z "$RELEASE_TAG" ]; then
             echo "Release tag is not available."
@@ -56,5 +67,22 @@ jobs:
             echo "No release assets found."
             exit 1
           fi
+
+          for asset in "${assets[@]}"; do
+            filename="$(basename "$asset")"
+            case "$filename" in
+              "Swanium-${VERSION}-macos-universal.zip" | \
+              "Swanium-${VERSION}-windows-x64.zip" | \
+              "Swanium-${VERSION}-windows-arm64.zip" | \
+              "Swanium-${VERSION}-linux-x64.deb" | \
+              "Swanium-${VERSION}-linux-x64.rpm" | \
+              "Swanium-${VERSION}-linux-arm64.deb" | \
+              "Swanium-${VERSION}-linux-arm64.rpm") ;;
+              *)
+                echo "Unexpected release asset name: $filename"
+                exit 1
+                ;;
+            esac
+          done
 
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
