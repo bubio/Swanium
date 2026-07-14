@@ -51,7 +51,17 @@ Prebuilt binaries are available on the [**Releases**](https://github.com/bubio/S
 | Linux | `.deb`, `.rpm` | package files generated from `cargo deb` / `cargo generate-rpm` |
 | Windows | `.zip` | `swanium-windows-x86_64.zip`, `swanium-windows-arm64.zip` |
 
-> Public ROM/test ROM binaries are never distributed in this repository. See [`tests/README.md`](tests/README.md).
+> Note for macOS: Since this app has not been notarized by Apple, it may be blocked by Gatekeeper when launched for the first time.
+> You can resolve this using one of the following methods:
+> **Method 1: Remove the quarantine flag via Terminal**
+> ```bash
+> xattr -cr /Applications/Swanium.app
+> ```
+>
+> **Method 2: Allow via System Settings**
+> 1. Attempt to open the app and let it get blocked
+> 2. Open **System Settings** → **Privacy & Security**
+> 3. Click **"Open Anyway"** next to the message about Swanium being blocked
 
 ## Building
 
@@ -100,7 +110,9 @@ Build and package on Windows (PowerShell):
 
 ## Usage
 
-Run with an optional ROM path:
+Launch the packaged app and open a ROM from **File > Open ROM…** (`Ctrl+O`).
+
+From source, you can also run with an optional ROM path:
 
 ```bash
 cargo run -p frontend -- path/to/game.ws
@@ -113,7 +125,6 @@ Default controls:
 - `W A S D` = Y-pad
 - `X` = A, `Z` = B
 - `Enter` = Start
-- `O` = Open ROM picker
 
 ## Accuracy References
 
